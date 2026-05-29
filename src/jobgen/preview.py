@@ -72,10 +72,11 @@ def build_map_preview(
         colour = _RED if b.kohdeluokka in keepout_codes else _YELLOW
         label = _building_label(b.kohdeluokka)
         pins.append({
-            "lat":    c.y,
-            "lon":    c.x,
-            "colour": colour,
-            "label":  f"{label} (mtk_id {b.mtk_id})",
+            "lat":      c.y,
+            "lon":      c.x,
+            "colour":   colour,
+            "label":    f"{label} (mtk_id {b.mtk_id})",
+            "keepout":  b.kohdeluokka in keepout_codes,
         })
 
     pins_json = json.dumps(pins)
@@ -111,7 +112,11 @@ def build_map_preview(
         status_colour = "#d97706"
         status_text   = "⚠ NEEDS REVIEW"
 
+    hs = manifest.get("home_safety", {})
+    sub = hs.get("operating_subcategory", "A3")
+    buf = hs.get("home_buffer_m", 150)
     summary_rows = [
+        ("Subcategory",  f"{sub}  ({buf:.0f} m buffer)"),
         ("Area",        f"{g.get('original_area_ha', 0):.2f} ha → {g.get('final_area_ha', 0):.2f} ha"),
         ("Keep-out",    f"{g.get('area_lost_pct', 0):.1f}% removed"),
         ("Height",      f"{f.get('derived_height_m', 0):.0f} m AGL"),
@@ -224,6 +229,9 @@ def _render(
   .legend-item {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; }}
   .dot {{ width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }}
   .swatch {{ width: 20px; height: 12px; flex-shrink: 0; border-radius: 2px; }}
+  .toggles {{ margin-top: 14px; border-top: 1px solid #e5e7eb; padding-top: 10px; font-size: .82rem; }}
+  .toggles label {{ display: flex; align-items: center; gap: 8px; margin: 5px 0; cursor: pointer; }}
+  .toggles input[type=checkbox] {{ width: 15px; height: 15px; cursor: pointer; }}
   .reasons {{ background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px;
               padding: 8px; font-size: .8rem; margin-top: 10px; }}
   .reasons ul {{ margin: 4px 0 0; padding-left: 16px; }}
@@ -263,6 +271,11 @@ def _render(
     </div>
   </div>
   {reasons_html}
+  <div class="toggles">
+    <label><input type="checkbox" id="tog-parcel" checked> Original parcel outline</label>
+    <label><input type="checkbox" id="tog-survey" checked> Survey polygon</label>
+    <label><input type="checkbox" id="tog-circles" checked> Distance circles</label>
+  </div>
 </div>
 <script>
 var surveyData = {survey_geojson};
@@ -278,48 +291,84 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
 
 map.invalidateSize();
 
-// Original parcel outlines — dashed grey, drawn first so survey sits on top
-parcels.forEach(function(f) {{
-  L.geoJSON(f, {{
-    style: {{ color: '#6b7280', weight: 1.5, dashArray: '5 5', fill: false }}
-  }}).addTo(map);
-}});
+// Drawing order (bottom to top):
+//   1. survey polygon
+//   2. yellow 100 m circles (all buildings)
+//   3. red keep-out circles (all buildings)
+//   4. original parcel outline
+//   5. pin markers
 
-// Survey polygon
+var surveyGroup  = L.layerGroup().addTo(map);
+var yellowGroup  = L.layerGroup().addTo(map);
+var redGroup     = L.layerGroup().addTo(map);
+var circleGroup  = L.layerGroup();  // virtual group for the toggle (controls both)
+var parcelGroup  = L.layerGroup().addTo(map);
+
+// 1. Survey polygon
 var surveyLayer = L.geoJSON(surveyData, {{
   style: {{ color: '#16a34a', weight: 2, fillColor: '#4ade80', fillOpacity: 0.35 }}
-}}).addTo(map);
+}}).addTo(surveyGroup);
 
-// Fit to polygon bounds
 if (surveyLayer.getLayers().length > 0) {{
   map.fitBounds(surveyLayer.getBounds().pad(0.15));
 }}
 
-// Distance rings + pins (rings drawn first so they sit under the pin dots)
+// 2. Yellow 100 m circles — keep-out buildings only
 pins.forEach(function(p) {{
-  // 100 m ring — light yellow, informational
+  if (!p.keepout) return;
   L.circle([p.lat, p.lon], {{
     radius: 100, color: '#ca8a04', weight: 1,
     fillColor: '#fef08a', fillOpacity: 0.25, dashArray: '4 4'
-  }}).addTo(map);
-  // keep-out ring (home_buffer_m) — light red, marks the no-fly boundary
+  }}).addTo(yellowGroup);
+}});
+
+// 3. Red keep-out circles — only for keep-out buildings (red pins)
+pins.forEach(function(p) {{
+  if (!p.keepout) return;
   L.circle([p.lat, p.lon], {{
     radius: {home_buffer_m}, color: '#dc2626', weight: 1,
     fillColor: '#fca5a5', fillOpacity: 0.20, dashArray: '4 4'
-  }}).addTo(map);
-  // Pin dot on top
+  }}).addTo(redGroup);
+}});
+
+// 4. Original parcel outlines
+parcels.forEach(function(f) {{
+  L.geoJSON(f, {{
+    style: {{ color: '#374151', weight: 1.5, dashArray: '5 5', fill: false }}
+  }}).addTo(parcelGroup);
+}});
+
+// 5. Pin markers — always on top, added directly to map
+pins.forEach(function(p) {{
   L.circleMarker([p.lat, p.lon], {{
     radius: 7, color: '#fff', weight: 1.5,
     fillColor: p.colour, fillOpacity: 0.9
   }}).bindPopup(p.label).addTo(map);
 }});
 
-// Zone overlays
+// Zone overlays (above everything except pins)
 zones.forEach(function(z) {{
   L.geoJSON(JSON.parse(z.geojson), {{
     style: {{ color: '#f97316', weight: 2, fillColor: '#fed7aa', fillOpacity: 0.4 }}
   }}).bindPopup('<b>' + z.name + '</b><br>' + z.type).addTo(map);
 }});
+
+// Toggle checkboxes — circles toggle controls both yellow and red groups
+function tog(id, onFn, offFn) {{
+  document.getElementById(id).addEventListener('change', function() {{
+    this.checked ? onFn() : offFn();
+  }});
+}}
+tog('tog-survey',
+  function() {{ surveyGroup.addTo(map); }},
+  function() {{ map.removeLayer(surveyGroup); }});
+tog('tog-circles',
+  function() {{ yellowGroup.addTo(map); redGroup.addTo(map); }},
+  function() {{ map.removeLayer(yellowGroup); map.removeLayer(redGroup); }});
+tog('tog-parcel',
+  function() {{ parcelGroup.addTo(map); }},
+  function() {{ map.removeLayer(parcelGroup); }});
+
 </script>
 </body>
 </html>

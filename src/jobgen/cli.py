@@ -50,6 +50,10 @@ def run_job_cmd(
         "config.toml", "--config", "-c",
         help="Path to config.toml.",
     ),
+    height: Optional[float] = typer.Option(
+        None, "--height",
+        help="Override flight height in metres AGL (back-calculates GSD from M3E sensor constants).",
+    ),
     subcategory: Optional[str] = typer.Option(
         None, "--subcategory",
         help="Override operating subcategory: A2 or A3 (default from config).",
@@ -128,6 +132,15 @@ def run_job_cmd(
 
     if offline:
         cfg.cache.offline = True
+
+    if height is not None:
+        from jobgen.config import M3E_FOCAL_LENGTH_MM, M3E_PIXEL_PITCH_UM
+        # Inverse of: height = (gsd_cm/100) * focal_mm / (pitch_um/1000)
+        # → gsd_cm = height * pitch_um / (focal_mm * 10)
+        gsd = height * M3E_PIXEL_PITCH_UM / (M3E_FOCAL_LENGTH_MM * 10)
+        cfg.flight.target_gsd_cm = gsd
+        cfg.flight.max_height_agl_m = max(cfg.flight.max_height_agl_m, height + 1)
+        typer.echo(f"Height override: {height:.0f} m AGL  (GSD {gsd:.2f} cm/px)")
 
     if subcategory:
         sub = subcategory.upper()
