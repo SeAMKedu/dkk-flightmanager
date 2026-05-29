@@ -194,7 +194,8 @@ def run_job(
             suffix = f"-{i+1}" if pieces_count > 1 else ""
             kmz_path = job_dir / f"{job_name}{suffix}.kmz"
             try:
-                result = build_kmz(piece_4326, config.flight, kmz_path, terrain_follow=True)
+                result = build_kmz(piece_4326, config.flight, kmz_path,
+                                   dsm_path=dsm_path if not dry_run else None)
                 kmz_results.append(result)
                 if result.over_one_battery:
                     reason = (

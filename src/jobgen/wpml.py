@@ -81,7 +81,7 @@ def build_kmz(
     flight_config: FlightConfig,
     output_path: Path,
     *,
-    terrain_follow: bool = True,
+    dsm_path: Path | None = None,
 ) -> KmzResult:
     """Build a .kmz mapping route from a survey polygon and flight config.
 
@@ -96,14 +96,11 @@ def build_kmz(
     require_4326(survey_4326)
     _validate_polygon(survey_4326)
 
-    height_m  = flight_config.derived_flight_height_m
-    gsd_cm    = flight_config.target_gsd_cm
-    height_mode = "followTerrain" if terrain_follow else "relativeToStartPoint"
+    height_m = flight_config.derived_flight_height_m
+    gsd_cm   = flight_config.target_gsd_cm
 
-    log.info(
-        "Building KMZ: height=%.1f m, GSD=%.1f cm, heightMode=%s",
-        height_m, gsd_cm, height_mode,
-    )
+    log.info("Building KMZ: height=%.1f m, GSD=%.1f cm, terrain_follow=%s",
+             height_m, gsd_cm, dsm_path is not None)
 
     # Battery budget estimate
     budget = _estimate_budget(survey_4326, flight_config)
@@ -115,13 +112,21 @@ def build_kmz(
             budget["flight_time_min"], ONE_BATTERY_MINUTES,
         )
 
-    template_xml = _build_template_kml(survey_4326, flight_config, height_mode)
+    # DSM filename inside the KMZ — confirmed path from fixture
+    dsm_kmz_name = None
+    if dsm_path is not None and dsm_path.exists():
+        dsm_kmz_name = f"wpmz/res/dsm/{dsm_path.name}"
+
+    template_xml = _build_template_kml(survey_4326, flight_config, dsm_kmz_name)
     waylines_xml = _build_waylines_stub(flight_config)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("wpmz/template.kml", template_xml)
         zf.writestr("wpmz/waylines.wpml", waylines_xml)
+        if dsm_path is not None and dsm_path.exists():
+            zf.write(dsm_path, dsm_kmz_name)
+            log.info("DSM embedded in KMZ: %s", dsm_kmz_name)
 
     log.info("KMZ written: %s", output_path)
 
@@ -140,7 +145,7 @@ def build_kmz(
 def _build_template_kml(
     survey_4326: BaseGeometry,
     cfg: FlightConfig,
-    height_mode: str,
+    dsm_kmz_name: str | None,
 ) -> str:
     height   = cfg.derived_flight_height_m
     height_s = f"{height:.15g}"   # enough precision, no trailing zeros
@@ -175,9 +180,15 @@ def _build_template_kml(
     _tx(folder, f"{_WPML}templateId",   "0")
 
     wc = etree.SubElement(folder, f"{_WPML}waylineCoordinateSysParam")
-    _tx(wc, f"{_WPML}coordinateMode",  "WGS84")
-    _tx(wc, f"{_WPML}heightMode",      height_mode)
+    _tx(wc, f"{_WPML}coordinateMode",    "WGS84")
+    _tx(wc, f"{_WPML}heightMode",        "relativeToStartPoint")
     _tx(wc, f"{_WPML}globalShootHeight", height_s)
+    if dsm_kmz_name:
+        # Terrain-follow via DSM — confirmed field names from fixture (2026-05-30)
+        _tx(wc, f"{_WPML}surfaceFollowModeEnable",  "1")
+        _tx(wc, f"{_WPML}isRealtimeSurfaceFollow",  "0")
+        _tx(wc, f"{_WPML}surfaceRelativeHeight",     height_s)
+        _tx(wc, f"{_WPML}dsmFile",                  dsm_kmz_name)
 
     _tx(folder, f"{_WPML}autoFlightSpeed", f"{cfg.auto_flight_speed_ms:.15g}")
 

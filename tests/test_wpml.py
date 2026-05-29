@@ -187,15 +187,33 @@ class TestGeneratedKMZ:
         h = float(root.find(f".//{WPML}globalShootHeight").text)
         assert abs(h - _FLIGHT.derived_flight_height_m) < 0.01
 
-    def test_terrain_follow_height_mode(self, generated_kmz):
+    def test_height_mode_is_relative_to_start_point(self, generated_kmz):
+        # Confirmed from fixture: heightMode is always relativeToStartPoint.
+        # Terrain follow is controlled by surfaceFollowModeEnable, not heightMode.
         root = parse_template_from_kmz(generated_kmz)
-        assert root.find(f".//{WPML}heightMode").text == "followTerrain"
-
-    def test_flat_height_mode_option(self, tmp_path):
-        result = build_kmz(_SURVEY, _FLIGHT, tmp_path / "flat.kmz",
-                           terrain_follow=False)
-        root = parse_template_from_kmz(result.kmz_path)
         assert root.find(f".//{WPML}heightMode").text == "relativeToStartPoint"
+
+    def test_no_dsm_no_surface_follow_elements(self, generated_kmz):
+        root = parse_template_from_kmz(generated_kmz)
+        assert root.find(f".//{WPML}surfaceFollowModeEnable") is None
+
+    def test_dsm_enables_surface_follow_elements(self, tmp_path):
+        dsm = tmp_path / "test_dsm.tif"
+        dsm.write_bytes(b"fake")
+        result = build_kmz(_SURVEY, _FLIGHT, tmp_path / "terrain.kmz", dsm_path=dsm)
+        root = parse_template_from_kmz(result.kmz_path)
+        assert root.find(f".//{WPML}surfaceFollowModeEnable").text == "1"
+        assert root.find(f".//{WPML}isRealtimeSurfaceFollow").text == "0"
+        assert root.find(f".//{WPML}dsmFile") is not None
+
+    def test_dsm_embedded_in_kmz(self, tmp_path):
+        import zipfile
+        dsm = tmp_path / "myfield_dsm.tif"
+        dsm.write_bytes(b"fake tif content")
+        result = build_kmz(_SURVEY, _FLIGHT, tmp_path / "out.kmz", dsm_path=dsm)
+        with zipfile.ZipFile(result.kmz_path) as zf:
+            names = zf.namelist()
+        assert any("res/dsm" in n for n in names)
 
     def test_overlap_values_written(self, generated_kmz):
         root = parse_template_from_kmz(generated_kmz)
