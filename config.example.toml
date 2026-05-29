@@ -13,6 +13,8 @@ takeoff_security_height_m = 50
 transitional_speed_ms = 15    # m/s transit between waylines
 overlap_front_pct = 80
 overlap_side_pct = 70
+# Speed along mapping strips (m/s). Default matches the reference fixture (8.9 m/s).
+auto_flight_speed_ms = 8.9
 finish_action = "goHome"      # goHome | hover | autoLand
 rc_lost_action = "goBack"
 

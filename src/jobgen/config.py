@@ -26,6 +26,10 @@ class FlightConfig(BaseModel):
     transitional_speed_ms: float = Field(default=15.0)
     overlap_front_pct: int = Field(default=80, ge=0, le=100)
     overlap_side_pct: int = Field(default=70, ge=0, le=100)
+    # Speed along mapping strips (m/s). Default matches the reference fixture.
+    # DJI Pilot 2 derives this from sensor shutter speed + GSD; 8.9 m/s is
+    # appropriate for 80% front overlap at ~100 m AGL on the M3E.
+    auto_flight_speed_ms: float = Field(default=8.9, gt=0)
     finish_action: str = Field(default="goHome")
     rc_lost_action: str = Field(default="goBack")
 
