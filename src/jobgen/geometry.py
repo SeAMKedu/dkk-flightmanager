@@ -370,6 +370,10 @@ def _fix_winding(geom: BaseGeometry) -> BaseGeometry:
     return geom
 
 
-def _reproject(geom: BaseGeometry) -> BaseGeometry:
+def reproject_to_4326(geom: BaseGeometry) -> BaseGeometry:
     """Reproject a geometry from EPSG:3067 to EPSG:4326 (lon, lat ordering)."""
     return transform(_T_3067_4326.transform, geom)
+
+
+# Internal alias kept for use within this module
+_reproject = reproject_to_4326
