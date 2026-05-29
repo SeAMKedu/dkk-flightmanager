@@ -1,0 +1,46 @@
+# Secrets and local config
+config.toml
+.env
+
+# Output and cache
+cache/
+output/
+
+# Raster artifacts
+*.tif
+*.tiff
+*.kmz
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# SQLite
+*.sqlite
+*.sqlite3
+*.db
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
