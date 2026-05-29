@@ -33,6 +33,7 @@ from jobgen.geometry import process_survey, reproject_to_4326
 from jobgen.logging_setup import setup_logging
 from jobgen.parcels import fetch_parcels
 from jobgen.raster import build_site_dsm
+from jobgen.preview import build_map_preview
 from jobgen.wpml import build_homes_kml, build_kmz
 from jobgen.zones import check_zones
 
@@ -343,6 +344,18 @@ def run_job(
     }
 
     if not dry_run:
+        parcels_4326 = [reproject_to_4326(p.geometry) for p in parcels]
+        build_map_preview(
+            survey_geom.survey_4326,
+            buildings_4326,
+            job_dir / f"{job_name}_map.html",
+            job_name=job_name,
+            home_safety=config.home_safety,
+            manifest=manifest,
+            parcels_4326=parcels_4326,
+            zone_hits=zone_result.intersecting_zones,
+        )
+
         manifest_path = job_dir / "manifest.json"
         manifest_path.write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False),

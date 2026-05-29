@@ -50,6 +50,18 @@ def run_job_cmd(
         "config.toml", "--config", "-c",
         help="Path to config.toml.",
     ),
+    subcategory: Optional[str] = typer.Option(
+        None, "--subcategory",
+        help="Override operating subcategory: A2 or A3 (default from config).",
+    ),
+    buffer: Optional[float] = typer.Option(
+        None, "--buffer",
+        help=(
+            "Override home keep-out buffer in metres. "
+            "For A2 defaults to derived flight height (≈ flight height from people). "
+            "For A3 defaults to 150 m."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run",
         help="Fetch and validate only — skip writing output files.",
@@ -116,6 +128,25 @@ def run_job_cmd(
 
     if offline:
         cfg.cache.offline = True
+
+    if subcategory:
+        sub = subcategory.upper()
+        if sub not in ("A2", "A3"):
+            typer.echo("Error: --subcategory must be A2 or A3.", err=True)
+            raise typer.Exit(1)
+        cfg.home_safety.operating_subcategory = sub
+        # A2: buffer ≈ flight height (EU reg: ≥ flight height from people).
+        # Apply automatically unless the operator overrides with --buffer.
+        if sub == "A2" and buffer is None:
+            cfg.home_safety.home_buffer_m = cfg.flight.derived_flight_height_m
+        typer.echo(
+            f"Subcategory override: {sub}  "
+            f"(buffer {cfg.home_safety.home_buffer_m:.0f} m)"
+        )
+
+    if buffer is not None:
+        cfg.home_safety.home_buffer_m = buffer
+        typer.echo(f"Buffer override: {buffer:.0f} m")
 
     # --- run ---
     typer.echo(f"Starting job '{name}' …")
