@@ -6,6 +6,11 @@ config.toml
 cache/
 output/
 
+# Fixture and reference mission data (kept local only)
+fixtures/*.md
+fixtures/*.kml
+fixtures/*.wpml
+
 # Raster artifacts
 *.tif
 *.tiff
