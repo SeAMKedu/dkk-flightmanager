@@ -61,6 +61,20 @@ offline = false               # true = cache-only; fail cleanly on cache miss
 [output]
 output_dir = "output"
 
+[zones]
+# Traficom publishes Finnish UAS zones at a confirmed open endpoint (no auth).
+# The tool fetches and caches this automatically — no manual download needed.
+# api_url is the default; override only if Traficom changes the URL.
+# api_url = "https://eservices.traficom.fi/Ilmatilasovellus/api/uas-reservations/json?lang=fi"
+#
+# Optional: point to a local file instead of the API (offline / custom zones).
+# zones_file = "data/uas_zones_override.geojson"
+#
+# Re-fetch if the local copy is older than this many days.
+# The source is a periodic static dump of permanent zones — 7–30 days is fine.
+# Temporary restrictions (NOTAMs) are not in this dataset; check those manually.
+max_age_days = 14
+
 [parcels]
 # Year of the Ruokavirasto LPIS layer to query (inspire:LC.LandCoverSurfaces.LPIS.<year>).
 # Defaults to current_year - 1 (the most recently completed and published season).

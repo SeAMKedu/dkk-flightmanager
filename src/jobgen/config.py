@@ -85,6 +85,22 @@ class OutputConfig(BaseModel):
     output_dir: str = "output"
 
 
+class ZonesConfig(BaseModel):
+    # Confirmed open API (no auth): Traficom UAS zones for Finland.
+    # Fetched automatically and cached locally; no manual download needed.
+    api_url: str = (
+        "https://eservices.traficom.fi/Ilmatilasovellus/api/uas-reservations/json?lang=fi"
+    )
+    # Optional path to a local override file (offline use / custom zones).
+    # If set, the API is not called and this file is used instead.
+    zones_file: str = ""
+    # Re-fetch the dump if the cached copy is older than this many days.
+    # The source is a periodic static export of permanent zones (not live),
+    # so 7–30 days is appropriate.  Temporary restrictions are not in this
+    # dataset — those require a manual NOTAM check on the day.
+    max_age_days: int = Field(default=14, gt=0)
+
+
 class ParcelsConfig(BaseModel):
     # Year of the LPIS layer to use. Defaults to current_year - 1 because LPIS
     # data covers completed agricultural seasons: in any given year N the most
@@ -104,6 +120,7 @@ class AppConfig(BaseModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     parcels: ParcelsConfig = Field(default_factory=ParcelsConfig)
+    zones: ZonesConfig = Field(default_factory=ZonesConfig)
 
 
 def load_config(path: Path | str = "config.toml") -> AppConfig:
