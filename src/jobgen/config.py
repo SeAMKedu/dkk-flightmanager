@@ -48,8 +48,15 @@ class FlightConfig(BaseModel):
 class HomeSafetyConfig(BaseModel):
     operating_subcategory: Literal["A2", "A3"] = "A3"
     home_buffer_m: float = Field(default=150.0, ge=0)
-    residential_use_codes: list[str] = Field(default_factory=list)
-    a3_additional_use_codes: list[str] = Field(default_factory=list)
+    # MML Maastotietokanta kohdeluokka codes treated as residential for keep-out.
+    # Confirmed codes: 42210=asuinrakennus (point), 42211 (1-2 krs), 42212 (3+ krs).
+    residential_kohdeluokka: list[int] = Field(default_factory=lambda: [42210, 42211, 42212])
+    # For A3 subcategory: also keep 150 m from commercial, holiday, and industrial buildings.
+    # 42220-42222=liike-/julkinen, 42230-42232=lomarakennus, 42240-42242=teollinen.
+    # Agricultural/storage (42260-42262) are excluded — they are part of the farm operation.
+    a3_additional_kohdeluokka: list[int] = Field(
+        default_factory=lambda: [42220, 42221, 42222, 42230, 42231, 42232, 42240, 42241, 42242]
+    )
     offset_enabled: bool = True
     max_area_loss_pct: float = Field(default=30.0, ge=0, le=100)
 

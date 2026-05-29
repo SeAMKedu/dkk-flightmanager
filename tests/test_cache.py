@@ -241,12 +241,12 @@ class TestGetTiles:
         assert records[0].path.exists()
         assert records[0].path.suffix == ".tif"
 
-    def test_buildings_tile_has_gpkg_extension(self, tmp_path):
+    def test_buildings_tile_has_geojson_extension(self, tmp_path):
         config = make_config(tmp_path)
         fetcher = fake_fetcher()
         bbox = (300_000.0, 6_900_000.0, 301_000.0, 6_901_000.0)
         records = get_tiles("buildings", bbox, fetcher, config)
-        assert records[0].path.suffix == ".gpkg"
+        assert records[0].path.suffix == ".geojson"
 
     def test_unknown_dataset_raises(self, tmp_path):
         config = make_config(tmp_path)

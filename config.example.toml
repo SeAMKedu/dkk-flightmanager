@@ -23,12 +23,13 @@ rc_lost_action = "goBack"
 # Confirm against the drone's actual C-label marking and current Traficom guidance.
 operating_subcategory = "A3"  # conservative default
 home_buffer_m = 150
-# MML kayttotarkoitus codes for residential dwellings (confirmed via MML feature catalogue).
-# TODO: fill in actual codes after Phase 2b GetCapabilities confirmation.
-residential_use_codes = []
-# For A3: also include commercial/industrial/recreational codes (150 m rule covers them).
-# TODO: fill in after Phase 2b confirmation.
-a3_additional_use_codes = []
+# MML Maastotietokanta kohdeluokka codes for residential buildings (keep-out for A2 + A3).
+# Confirmed: 42210=asuinrakennus (point repr.), 42211 (1-2 floors), 42212 (3+ floors).
+residential_kohdeluokka = [42210, 42211, 42212]
+# For A3: also keep 150 m from commercial, holiday, and industrial buildings.
+# 42220-42222=liike-/julkinen, 42230-42232=lomarakennus, 42240-42242=teollinen.
+# Agricultural/storage (42260-42262) excluded — they are part of the farm operation.
+a3_additional_kohdeluokka = [42220, 42221, 42222, 42230, 42231, 42232, 42240, 42241, 42242]
 offset_enabled = true         # subtract keep-out from survey polygon
 max_area_loss_pct = 30        # flag needs_review if more than this % lost to keep-out
 

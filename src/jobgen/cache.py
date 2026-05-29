@@ -29,10 +29,12 @@ from jobgen.config import CacheConfig
 
 log = logging.getLogger(__name__)
 
-# EPSG:3067 metres, used as output path extension per dataset
+# Output file extension per dataset.
+# Buildings use .geojson rather than .gpkg to avoid a fiona/OGR dependency;
+# GeoJSON + shapely is sufficient for the tile sizes we work with.
 _DATASET_EXT: dict[str, str] = {
     "dem": ".tif",
-    "buildings": ".gpkg",
+    "buildings": ".geojson",
 }
 
 # (tile_id, bbox) → tile bbox in EPSG:3067
