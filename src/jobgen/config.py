@@ -30,6 +30,9 @@ class FlightConfig(BaseModel):
     # DJI Pilot 2 derives this from sensor shutter speed + GSD; 8.9 m/s is
     # appropriate for 80% front overlap at ~100 m AGL on the M3E.
     auto_flight_speed_ms: float = Field(default=8.9, gt=0)
+    # Extra margin around the survey polygon bbox in the terrain-follow DSM (metres).
+    # Covers the RTH path and takeoff/landing area outside the survey polygon.
+    dsm_margin_m: int = Field(default=300, ge=0)
     finish_action: str = Field(default="goHome")
     rc_lost_action: str = Field(default="goBack")
 
@@ -74,7 +77,7 @@ class PolygonConfig(BaseModel):
     gap_fill_m: float = Field(default=0.0, ge=0)
     simplify_tolerance_m: float = Field(default=1.0, ge=0)
     multipart_policy: Literal["split", "largest", "review"] = "review"
-    hole_policy: Literal["review", "fill", "clip"] = "review"
+    hole_policy: Literal["review", "fill", "clip"] = "fill"
 
 
 class CacheConfig(BaseModel):

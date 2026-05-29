@@ -178,8 +178,8 @@ class TestRunJob:
         self._run(config, dem_tile, bldg_tile)
         job_dir = tmp_path / "output" / "test-job"
         assert (job_dir / "test-job.kmz").exists()
-        assert (job_dir / "site_dsm_wgs84.tif").exists()
-        assert (job_dir / "homes.kml").exists()
+        assert (job_dir / "test-job_dsm.tif").exists()
+        assert (job_dir / "test-job_homes.kml").exists()
         assert (job_dir / "manifest.json").exists()
         assert (job_dir / "run.log").exists()
 

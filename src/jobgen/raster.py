@@ -1,14 +1,14 @@
-"""Mosaic, reproject, and clip DEM tiles to site_dsm_wgs84.tif.
+"""Mosaic, reproject, and crop DEM tiles to site_dsm_wgs84.tif.
 
 Pipeline:
   1. Mosaic all EPSG:3067 DEM tiles covering the job area (rasterio.merge).
-  2. Reproject mosaic 3067 → 4326, cropped to the survey polygon bounding
-     box (rasterio.warp.reproject + calculate_default_transform).
-  3. Apply polygon mask so pixels outside the survey area are set to nodata
-     (rasterio.mask.mask).
-  4. Write single-band float32 GeoTIFF, EPSG:4326, LZW-compressed.
+  2. Reproject mosaic 3067 → 4326 (rasterio.warp.reproject), cropped to the
+     survey polygon bounding box + margin_m on all sides.
+  3. Write single-band float32 GeoTIFF, EPSG:4326, LZW-compressed.
 
-Output: site_dsm_wgs84.tif — the terrain-follow DSM to be loaded on the RC.
+No polygon masking is applied — the output is a clean rectangular raster.
+Outside the survey polygon the terrain data is still present and used by
+DJI for the RTH path and any takeoff/landing area outside the polygon.
 
 Vertical datum note: heights remain N2000 as delivered by MML.  No vertical
 datum transform is applied (see constraint 3 in the plan).
@@ -17,16 +17,15 @@ datum transform is applied (see constraint 3 in the plan).
 from __future__ import annotations
 
 import logging
-import tempfile
+import math
 from pathlib import Path
 
 import numpy as np
 import rasterio
-import rasterio.mask
 import rasterio.merge
 from rasterio.crs import CRS
-from rasterio.warp import Resampling, calculate_default_transform, reproject
-from shapely.geometry import mapping
+from rasterio.transform import from_bounds as transform_from_bounds
+from rasterio.warp import Resampling, reproject
 from shapely.geometry.base import BaseGeometry
 
 from jobgen.crs import require_4326
@@ -37,23 +36,30 @@ _NODATA = -9999.0
 _DST_CRS = CRS.from_epsg(4326)
 _SRC_CRS = CRS.from_epsg(3067)
 
+# Native resolution of korkeusmalli_2m
+_SRC_RES_M = 2.0
+
 
 def build_site_dsm(
     tile_paths: list[Path],
     survey_4326: BaseGeometry,
     output_path: Path,
+    margin_m: int = 300,
 ) -> dict:
-    """Mosaic DEM tiles, reproject to EPSG:4326, clip to survey polygon.
+    """Mosaic DEM tiles, reproject to EPSG:4326, crop to survey bbox + margin.
 
-    *tile_paths*   — list of cached EPSG:3067 DEM GeoTIFF paths from cache.get_tiles().
-    *survey_4326*  — final survey polygon in EPSG:4326 (used for clipping).
-    *output_path*  — destination path for site_dsm_wgs84.tif.
+    *tile_paths*  — cached EPSG:3067 DEM GeoTIFF paths from cache.get_tiles().
+    *survey_4326* — final survey polygon in EPSG:4326 (used for bbox crop).
+    *output_path* — destination path for site_dsm_wgs84.tif.
+    *margin_m*    — extra metres of terrain data beyond the polygon bbox on all
+                    sides; covers the RTH path and takeoff/landing area.
+
+    Output is a clean rectangular raster — no polygon masking is applied.
+    All terrain pixels within the bbox+margin are valid and available for
+    DJI terrain-follow, including outside the survey polygon itself.
 
     Returns a stats dict for manifest inclusion:
       crs, shape, bounds_4326, elevation_min_m, elevation_max_m.
-
-    Raises if any tile is missing, or if the output has no valid pixels
-    inside the survey polygon.
     """
     require_4326(survey_4326)
 
@@ -76,36 +82,43 @@ def build_site_dsm(
         for ds in datasets:
             ds.close()
 
-    src_profile = rasterio.open(tile_paths[0]).profile
-    src_profile.update(
-        height=mosaic.shape[1],
-        width=mosaic.shape[2],
-        transform=mosaic_transform,
-        crs=_SRC_CRS,
-        driver="GTiff",
-        dtype="float32",
-        count=1,
-        nodata=_NODATA,
-    )
-
-    log.debug("Mosaic shape: %s, transform: %s", mosaic.shape, mosaic_transform)
+    log.debug("Mosaic shape: %s", mosaic.shape)
 
     # ------------------------------------------------------------------
-    # Step 2: reproject 3067 → 4326, cropped to survey polygon bounds
+    # Step 2: compute output bounds in 4326 (polygon bbox + margin)
     # ------------------------------------------------------------------
     bounds = survey_4326.bounds  # (minx, miny, maxx, maxy) in 4326
+    mid_lat = (bounds[1] + bounds[3]) / 2
 
-    # Calculate output transform covering the survey polygon extent
-    dst_transform, dst_width, dst_height = calculate_default_transform(
-        _SRC_CRS, _DST_CRS,
-        src_profile["width"], src_profile["height"],
-        left=mosaic_transform.c,
-        bottom=mosaic_transform.f + mosaic_transform.e * src_profile["height"],
-        right=mosaic_transform.c + mosaic_transform.a * src_profile["width"],
-        top=mosaic_transform.f,
-        dst_width=None, dst_height=None,
+    deg_per_m_lat = 1.0 / 111_132.0
+    deg_per_m_lon = 1.0 / (111_132.0 * math.cos(math.radians(mid_lat)))
+
+    margin_lat = margin_m * deg_per_m_lat
+    margin_lon = margin_m * deg_per_m_lon
+
+    dst_left   = bounds[0] - margin_lon
+    dst_bottom = bounds[1] - margin_lat
+    dst_right  = bounds[2] + margin_lon
+    dst_top    = bounds[3] + margin_lat
+
+    # Target resolution: match the source 2 m/px
+    res_lon = _SRC_RES_M * deg_per_m_lon
+    res_lat = _SRC_RES_M * deg_per_m_lat
+
+    dst_width  = max(1, int(round((dst_right - dst_left)  / res_lon)))
+    dst_height = max(1, int(round((dst_top   - dst_bottom) / res_lat)))
+    dst_transform = transform_from_bounds(
+        dst_left, dst_bottom, dst_right, dst_top, dst_width, dst_height
     )
 
+    log.debug(
+        "DSM output: %dx%d px, bounds (%.5f,%.5f)→(%.5f,%.5f), margin %d m",
+        dst_width, dst_height, dst_left, dst_bottom, dst_right, dst_top, margin_m,
+    )
+
+    # ------------------------------------------------------------------
+    # Step 3: reproject mosaic → 4326, cropped to target bounds
+    # ------------------------------------------------------------------
     dst_data = np.full((1, dst_height, dst_width), _NODATA, dtype="float32")
 
     reproject(
@@ -120,87 +133,54 @@ def build_site_dsm(
         resampling=Resampling.bilinear,
     )
 
-    dst_profile = {
-        "driver": "GTiff",
-        "dtype": "float32",
-        "width": dst_width,
-        "height": dst_height,
-        "count": 1,
-        "crs": _DST_CRS,
-        "transform": dst_transform,
-        "nodata": _NODATA,
-        "compress": "lzw",
-    }
-
     # ------------------------------------------------------------------
-    # Step 3: mask to survey polygon and write output
+    # Step 4: write output
     # ------------------------------------------------------------------
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp_f:
-        tmp_path = Path(tmp_f.name)
-
-    try:
-        with rasterio.open(tmp_path, "w", **dst_profile) as tmp_ds:
-            tmp_ds.write(dst_data)
-
-        with rasterio.open(tmp_path) as tmp_ds:
-            clipped, clip_transform = rasterio.mask.mask(
-                tmp_ds,
-                [mapping(survey_4326)],
-                crop=True,
-                nodata=_NODATA,
-                filled=True,
-            )
-            clip_profile = tmp_ds.profile.copy()
-            clip_profile.update(
-                height=clipped.shape[1],
-                width=clipped.shape[2],
-                transform=clip_transform,
-            )
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-    with rasterio.open(output_path, "w", **clip_profile) as out_ds:
-        out_ds.write(clipped)
+    profile = {
+        "driver":    "GTiff",
+        "dtype":     "float32",
+        "width":     dst_width,
+        "height":    dst_height,
+        "count":     1,
+        "crs":       _DST_CRS,
+        "transform": dst_transform,
+        "nodata":    _NODATA,
+        "compress":  "lzw",
+    }
+    with rasterio.open(output_path, "w", **profile) as ds:
+        ds.write(dst_data)
 
     log.info("site DSM written: %s", output_path)
 
-    # ------------------------------------------------------------------
-    # Validate and collect stats
-    # ------------------------------------------------------------------
-    stats = _validate_and_stats(output_path, survey_4326)
+    stats = _stats(output_path)
     log.info(
-        "DSM stats: shape=%s elevation=%.1f–%.1f m",
-        stats["shape"], stats["elevation_min_m"], stats["elevation_max_m"],
+        "DSM stats: %dx%d px, elevation %.1f–%.1f m, margin %d m",
+        stats["shape"][0], stats["shape"][1],
+        stats["elevation_min_m"], stats["elevation_max_m"],
+        margin_m,
     )
     return stats
 
 
-def _validate_and_stats(path: Path, survey_4326: BaseGeometry) -> dict:
-    """Open the output DSM, validate it, and return stats for the manifest."""
+def _stats(path: Path) -> dict:
     with rasterio.open(path) as ds:
         if ds.crs.to_epsg() != 4326:
             raise ValueError(f"Output DSM CRS is {ds.crs}, expected EPSG:4326")
-
         data = ds.read(1)
-        valid_mask = data != _NODATA
-        valid_pixels = data[valid_mask]
-
-        if len(valid_pixels) == 0:
+        valid = data[data != _NODATA]
+        if len(valid) == 0:
             raise ValueError(
-                "site_dsm_wgs84.tif has no valid pixels inside the survey polygon. "
+                "site_dsm_wgs84.tif has no valid pixels. "
                 "Check that the DEM tiles cover the survey area."
             )
-
         bounds = ds.bounds
-        shape = (ds.width, ds.height)
-
     return {
-        "crs": "EPSG:4326",
-        "shape": shape,
-        "bounds_4326": (bounds.left, bounds.bottom, bounds.right, bounds.top),
-        "elevation_min_m": float(np.min(valid_pixels)),
-        "elevation_max_m": float(np.max(valid_pixels)),
-        "valid_pixel_count": int(len(valid_pixels)),
+        "crs":              "EPSG:4326",
+        "shape":            (ds.width, ds.height),
+        "bounds_4326":      (bounds.left, bounds.bottom, bounds.right, bounds.top),
+        "elevation_min_m":  float(np.min(valid)),
+        "elevation_max_m":  float(np.max(valid)),
+        "valid_pixel_count": int(len(valid)),
     }

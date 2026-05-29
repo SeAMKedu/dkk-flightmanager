@@ -15,6 +15,9 @@ overlap_front_pct = 80
 overlap_side_pct = 70
 # Speed along mapping strips (m/s). Default matches the reference fixture (8.9 m/s).
 auto_flight_speed_ms = 8.9
+# Extra margin around the survey polygon in the terrain-follow DSM (metres).
+# Covers the RTH path and takeoff/landing area outside the survey polygon.
+dsm_margin_m = 300
 finish_action = "goHome"      # goHome | hover | autoLand
 rc_lost_action = "goBack"
 
@@ -51,7 +54,7 @@ multipart_policy = "review"
 #   review → flag needs_review, skip artifact write
 #   fill   → fill holes (use convex hull of ring)
 #   clip   → drop holed polygons, keep only exterior ring
-hole_policy = "review"
+hole_policy = "fill"
 
 [cache]
 cache_dir = "cache"

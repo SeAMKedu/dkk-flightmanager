@@ -164,8 +164,11 @@ def run_job(
     dsm_stats: dict = {}
     if not dry_run:
         log.info("Building site DSM …")
-        dsm_path = job_dir / "site_dsm_wgs84.tif"
-        dsm_stats = build_site_dsm(tile_paths, survey_geom.survey_4326, dsm_path)
+        dsm_path = job_dir / f"{job_name}_dsm.tif"
+        dsm_stats = build_site_dsm(
+            tile_paths, survey_geom.survey_4326, dsm_path,
+            margin_m=config.flight.dsm_margin_m,
+        )
 
     # ------------------------------------------------------------------
     # 6. Zone check
@@ -189,14 +192,19 @@ def run_job(
         ):
             suffix = f"-{i+1}" if pieces_count > 1 else ""
             kmz_path = job_dir / f"{job_name}{suffix}.kmz"
-            result = build_kmz(piece_4326, config.flight, kmz_path, terrain_follow=True)
-            kmz_results.append(result)
-
-            if result.over_one_battery:
-                reason = (
-                    f"Piece {i+1}: estimated flight time {result.estimated_flight_time_min:.1f} min "
-                    f"exceeds one battery. Consider splitting."
-                )
+            try:
+                result = build_kmz(piece_4326, config.flight, kmz_path, terrain_follow=True)
+                kmz_results.append(result)
+                if result.over_one_battery:
+                    reason = (
+                        f"Piece {i+1}: estimated flight time "
+                        f"{result.estimated_flight_time_min:.1f} min "
+                        f"exceeds one battery. Consider splitting."
+                    )
+                    all_review_reasons.append(reason)
+            except ValueError as e:
+                reason = f"KMZ not written for piece {i+1}: {e}"
+                log.warning(reason)
                 all_review_reasons.append(reason)
 
     # ------------------------------------------------------------------
@@ -204,14 +212,25 @@ def run_job(
     # ------------------------------------------------------------------
     if not dry_run:
         log.info("Writing homes KML …")
+        # Only pin buildings within home_buffer_m of the final survey polygon —
+        # the tile fetch area is larger, so many buildings are too far to matter.
+        buf = config.home_safety.home_buffer_m
+        nearby = [
+            b for b in buildings
+            if survey_geom.survey_3067.distance(b.geometry) <= buf
+        ]
+        log.info(
+            "%d of %d building(s) within %.0f m of survey polygon — writing to KML",
+            len(nearby), len(buildings), buf,
+        )
         # Buildings must be in EPSG:4326 for the KML pin coordinates
         buildings_4326 = [
             dataclasses.replace(b, geometry=reproject_to_4326(b.geometry))
-            for b in buildings
+            for b in nearby
         ]
         build_homes_kml(
             buildings_4326,
-            job_dir / "homes.kml",
+            job_dir / f"{job_name}_homes.kml",
             home_safety=config.home_safety,
         )
 

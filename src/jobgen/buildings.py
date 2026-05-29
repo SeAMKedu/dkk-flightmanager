@@ -148,7 +148,10 @@ def _fetch_tile_features(
     offset = 0
 
     while True:
-        params["offset"] = offset
+        if offset > 0:
+            params["offset"] = offset
+        elif "offset" in params:
+            del params["offset"]
         resp = sess.get(_ITEMS_URL, params=params, timeout=timeout_s)
         resp.raise_for_status()
         data = resp.json()
