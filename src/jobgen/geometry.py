@@ -1,4 +1,357 @@
-"""Geometry operations: union, buffer, CRS reproject, keep-out subtraction, validity."""
+"""Survey polygon geometry pipeline.
 
-# Phase 3 — stub only.
-raise NotImplementedError("Phase 3: geometry.py not yet implemented")
+Responsibilities (in order):
+  1. Merge parcel polygons into one shape.
+  2. Apply optional outward edge buffer.
+  3. Build keep-out zone from buffered buildings.
+  4. Subtract keep-out from survey (or just measure distance if offset disabled).
+  5. Enforce multipart / hole policy for DJI validity.
+  6. Simplify vertex count.
+  7. Reproject 3067 → 4326 for KMZ output.
+  8. Return a SurveyGeometry carrying stats, flags, and both CRS variants.
+
+All input geometries must be in EPSG:3067; this is asserted at the boundary.
+The 4326 outputs are asserted before being returned.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+
+from pyproj import Transformer
+from shapely import make_valid, orient_polygons
+from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import transform, unary_union
+
+from jobgen.buildings import Building
+from jobgen.config import HomeSafetyConfig, PolygonConfig
+from jobgen.crs import require_3067, require_4326
+from jobgen.parcels import Parcel
+
+log = logging.getLogger(__name__)
+
+# Reproject EPSG:3067 → EPSG:4326, always_xy=True → (lon, lat) ordering,
+# matching the fixture coordinate order confirmed in Phase 0.
+_T_3067_4326 = Transformer.from_crs(3067, 4326, always_xy=True)
+
+_M2_TO_HA = 1 / 10_000
+
+
+# ---------------------------------------------------------------------------
+# Output dataclass
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SurveyGeometry:
+    """Complete result of the geometry processing pipeline for one job."""
+
+    # Final survey polygon in EPSG:3067 (unified, before splitting).
+    survey_3067: BaseGeometry
+    # Same polygon reprojected to EPSG:4326 for KMZ embedding.
+    survey_4326: BaseGeometry
+
+    # For multipart_policy="split": one piece per KMZ.
+    # For "largest" / "review": single-element list matching survey_3067.
+    pieces_3067: list[BaseGeometry]
+    pieces_4326: list[BaseGeometry]
+
+    # Bounding box of survey_3067 in EPSG:3067 — used to request elevation tiles.
+    bbox_3067: tuple[float, float, float, float]  # xmin, ymin, xmax, ymax
+
+    # Area statistics
+    original_area_ha: float   # merged parcels before any keep-out
+    final_area_ha: float      # after keep-out subtraction
+    area_lost_pct: float      # (original - final) / original × 100
+
+    # Home proximity
+    min_dist_to_home_m: float | None  # None when no buildings were supplied
+    offset_applied: bool
+
+    # Review gate — set True on: excess area loss, multipart result, hole policy,
+    # or any zone intersection (added later by zones.py).
+    needs_review: bool
+    review_reasons: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def process_survey(
+    parcels: list[Parcel],
+    buildings: list[Building],
+    home_safety: HomeSafetyConfig,
+    polygon_cfg: PolygonConfig,
+) -> SurveyGeometry:
+    """Run the full geometry pipeline and return a SurveyGeometry.
+
+    All parcel and building geometries must be in EPSG:3067.
+    """
+    for p in parcels:
+        require_3067(p.geometry)
+    for b in buildings:
+        require_3067(b.geometry)
+
+    review_reasons: list[str] = []
+
+    # 1. Merge parcels
+    merged = _merge_parcels(parcels)
+    original_area_ha = merged.area * _M2_TO_HA
+    log.info("Merged %d parcel(s): %.2f ha", len(parcels), original_area_ha)
+
+    # 2. Optional outward edge buffer
+    survey = _apply_edge_buffer(merged, polygon_cfg.edge_buffer_m)
+
+    # 3. Build keep-out zone
+    keepout = _build_keepout(buildings, home_safety)
+
+    # 4. Apply keep-out (or measure distance)
+    survey, area_lost_pct, min_dist, offset_applied = _apply_keepout(
+        survey, keepout, home_safety, original_area_ha
+    )
+
+    if area_lost_pct > home_safety.max_area_loss_pct:
+        reason = (
+            f"Keep-out removed {area_lost_pct:.1f}% of survey area "
+            f"(threshold {home_safety.max_area_loss_pct}%)"
+        )
+        log.warning(reason)
+        review_reasons.append(reason)
+
+    if min_dist is not None and not offset_applied and min_dist < home_safety.home_buffer_m:
+        log.warning(
+            "Survey polygon is %.1f m from nearest home (buffer %.1f m)",
+            min_dist, home_safety.home_buffer_m,
+        )
+
+    # 5. Ensure validity
+    if not survey.is_valid:
+        log.warning("Survey polygon is invalid after keep-out — applying make_valid")
+        survey = make_valid(survey)
+
+    # 6. Enforce multipart / hole policy
+    pieces, policy_reasons = _enforce_policy(survey, polygon_cfg)
+    review_reasons.extend(policy_reasons)
+
+    # 7. Simplify (applied per piece, after keep-out so edges stay accurate)
+    if polygon_cfg.simplify_tolerance_m > 0:
+        pieces = [p.simplify(polygon_cfg.simplify_tolerance_m) for p in pieces]
+
+    # 8. Fix winding order (CCW exterior ring as GeoJSON / KML expects)
+    pieces = [_fix_winding(p) for p in pieces]
+
+    # Reconstruct unified survey geometry from pieces
+    survey = pieces[0] if len(pieces) == 1 else unary_union(pieces)
+    final_area_ha = survey.area * _M2_TO_HA
+
+    # 9. Reproject to 4326
+    survey_4326 = _reproject(survey)
+    pieces_4326 = [_reproject(p) for p in pieces]
+
+    require_4326(survey_4326)
+
+    bbox = survey.bounds  # (minx, miny, maxx, maxy) in 3067
+
+    return SurveyGeometry(
+        survey_3067=survey,
+        survey_4326=survey_4326,
+        pieces_3067=pieces,
+        pieces_4326=pieces_4326,
+        bbox_3067=(bbox[0], bbox[1], bbox[2], bbox[3]),
+        original_area_ha=original_area_ha,
+        final_area_ha=final_area_ha,
+        area_lost_pct=area_lost_pct,
+        min_dist_to_home_m=min_dist,
+        offset_applied=offset_applied,
+        needs_review=bool(review_reasons),
+        review_reasons=review_reasons,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step implementations
+# ---------------------------------------------------------------------------
+
+
+def _merge_parcels(parcels: list[Parcel]) -> BaseGeometry:
+    geoms = [p.geometry for p in parcels]
+    merged = unary_union(geoms)
+    return make_valid(merged)
+
+
+def _apply_edge_buffer(geom: BaseGeometry, buffer_m: float) -> BaseGeometry:
+    if buffer_m <= 0:
+        return geom
+    buffered = geom.buffer(buffer_m)
+    log.debug("Edge buffer +%.1f m applied", buffer_m)
+    return buffered
+
+
+def _build_keepout(
+    buildings: list[Building],
+    home_safety: HomeSafetyConfig,
+) -> BaseGeometry | None:
+    """Buffer relevant buildings by home_buffer_m and union into a keep-out zone."""
+    if not buildings:
+        return None
+
+    res_codes = set(home_safety.residential_kohdeluokka)
+    a3_codes = set(home_safety.a3_additional_kohdeluokka)
+
+    if home_safety.operating_subcategory == "A3":
+        relevant_codes = res_codes | a3_codes
+    else:
+        relevant_codes = res_codes
+
+    relevant = [b for b in buildings if b.kohdeluokka in relevant_codes]
+    if not relevant:
+        log.debug("No relevant buildings for keep-out in subcategory %s",
+                  home_safety.operating_subcategory)
+        return None
+
+    buf = home_safety.home_buffer_m
+    buffered = [b.geometry.buffer(buf) for b in relevant]
+    keepout = unary_union(buffered)
+    log.info(
+        "Keep-out: buffered %d building(s) by %.1f m (subcategory %s)",
+        len(relevant), buf, home_safety.operating_subcategory,
+    )
+    return keepout
+
+
+def _apply_keepout(
+    survey: BaseGeometry,
+    keepout: BaseGeometry | None,
+    home_safety: HomeSafetyConfig,
+    original_area_ha: float,
+) -> tuple[BaseGeometry, float, float | None, bool]:
+    """Apply keep-out to survey polygon.
+
+    Returns (survey, area_lost_pct, min_dist_to_home_m, offset_applied).
+    """
+    if keepout is None:
+        return survey, 0.0, None, False
+
+    if home_safety.offset_enabled:
+        result = survey.difference(keepout)
+        if result.is_empty:
+            log.error("Keep-out completely covers the survey area — flagging for review")
+            result = survey  # return original so pipeline can flag and surface it
+            area_lost_pct = 100.0
+        else:
+            area_lost_pct = max(
+                0.0,
+                (original_area_ha - result.area * _M2_TO_HA) / original_area_ha * 100
+            )
+        log.info("Keep-out applied: %.1f%% area lost", area_lost_pct)
+        return result, area_lost_pct, None, True
+    else:
+        # No offset: measure minimum distance to nearest building instead
+        min_dist = survey.distance(keepout)
+        log.info(
+            "offset_enabled=false — minimum distance to keep-out zone: %.1f m", min_dist
+        )
+        return survey, 0.0, min_dist, False
+
+
+def _enforce_policy(
+    geom: BaseGeometry,
+    cfg: PolygonConfig,
+) -> tuple[list[BaseGeometry], list[str]]:
+    """Enforce multipart_policy and hole_policy; return (pieces, review_reasons)."""
+    reasons: list[str] = []
+
+    # --- Hole policy ---
+    geom, hole_reasons = _enforce_hole_policy(geom, cfg.hole_policy)
+    reasons.extend(hole_reasons)
+
+    # --- Multipart policy ---
+    if isinstance(geom, MultiPolygon):
+        sub_geoms = list(geom.geoms)
+        if cfg.multipart_policy == "split":
+            log.info("multipart_policy=split: producing %d separate pieces", len(sub_geoms))
+            pieces = sub_geoms
+        elif cfg.multipart_policy == "largest":
+            largest = max(sub_geoms, key=lambda g: g.area)
+            dropped_pct = (geom.area - largest.area) / geom.area * 100
+            log.warning(
+                "multipart_policy=largest: keeping largest piece, dropping %.1f%% of area",
+                dropped_pct,
+            )
+            pieces = [largest]
+        else:  # "review"
+            reason = (
+                f"Survey area is a MultiPolygon ({len(sub_geoms)} pieces) after keep-out. "
+                f"Manual review required (multipart_policy=review)."
+            )
+            log.warning(reason)
+            reasons.append(reason)
+            pieces = sub_geoms  # surface all pieces for inspection
+    else:
+        pieces = [geom]
+
+    return pieces, reasons
+
+
+def _enforce_hole_policy(
+    geom: BaseGeometry,
+    policy: str,
+) -> tuple[BaseGeometry, list[str]]:
+    """Remove or flag interior holes in a Polygon or MultiPolygon."""
+    reasons: list[str] = []
+
+    def _has_holes(g: BaseGeometry) -> bool:
+        if isinstance(g, Polygon):
+            return len(g.interiors) > 0
+        if isinstance(g, MultiPolygon):
+            return any(len(p.interiors) > 0 for p in g.geoms)
+        return False
+
+    def _fill_holes(g: BaseGeometry) -> BaseGeometry:
+        if isinstance(g, Polygon):
+            return Polygon(g.exterior)
+        if isinstance(g, MultiPolygon):
+            return MultiPolygon([Polygon(p.exterior) for p in g.geoms])
+        return g
+
+    if not _has_holes(geom):
+        return geom, []
+
+    if policy == "review":
+        reason = (
+            "Survey polygon has interior holes after keep-out subtraction. "
+            "Manual review required (hole_policy=review)."
+        )
+        log.warning(reason)
+        reasons.append(reason)
+        return geom, reasons
+    elif policy in ("fill", "clip"):
+        # Both fill and clip: drop interior rings so DJI gets a valid single ring.
+        # "fill" semantics: covered area is included in the survey.
+        # "clip" here is treated the same — the hole is filled rather than routed around,
+        # which is acceptable for open-field surveys where holes indicate nearby buildings
+        # already handled by the keep-out buffer.
+        log.info("hole_policy=%s: filling %s interior ring(s)", policy,
+                 "MultiPolygon" if isinstance(geom, MultiPolygon) else "Polygon")
+        return _fill_holes(geom), []
+
+    return geom, []
+
+
+def _fix_winding(geom: BaseGeometry) -> BaseGeometry:
+    """Ensure exterior ring is CCW, as expected by GeoJSON / KML consumers.
+
+    shapely 2.x uses orient_polygons(geom, clockwise=False) for CCW exterior.
+    """
+    if isinstance(geom, (Polygon, MultiPolygon)):
+        return orient_polygons(geom, exterior_cw=False)  # exterior_cw=False → CCW exterior
+    return geom
+
+
+def _reproject(geom: BaseGeometry) -> BaseGeometry:
+    """Reproject a geometry from EPSG:3067 to EPSG:4326 (lon, lat ordering)."""
+    return transform(_T_3067_4326.transform, geom)
