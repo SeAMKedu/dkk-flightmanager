@@ -35,6 +35,10 @@ max_area_loss_pct = 30        # flag needs_review if more than this % lost to ke
 
 [polygon]
 edge_buffer_m = 0             # optional outward edge buffer on merged parcel polygon
+# Close small gaps between adjacent parcels (morphological closing: buffer +d then -d).
+# Bridges gaps up to 2×gap_fill_m wide; rounds corners by up to gap_fill_m.
+# Typical Finnish field cadastral gaps are 0–5 m.  0 = disabled.
+gap_fill_m = 3.0
 simplify_tolerance_m = 1.0    # applied after difference; 0 = disabled
 # What to do if difference() produces a MultiPolygon:
 #   split   → emit one KMZ per piece

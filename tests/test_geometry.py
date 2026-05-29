@@ -13,6 +13,7 @@ from jobgen.geometry import (
     _apply_edge_buffer,
     _apply_keepout,
     _build_keepout,
+    _close_gaps,
     _enforce_hole_policy,
     _enforce_policy,
     _fix_winding,
@@ -104,6 +105,45 @@ class TestMergeParcels:
 # ---------------------------------------------------------------------------
 # _apply_edge_buffer
 # ---------------------------------------------------------------------------
+
+
+class TestCloseGaps:
+    def _two_parcels_with_gap(self, gap_m: float = 2.0):
+        """Two 500×500 m parcels separated by gap_m."""
+        p1 = make_parcel(x=300_000, w=500)
+        p2 = make_parcel(x=300_000 + 500 + gap_m, w=500, parcel_id="P2")
+        return _merge_parcels([p1, p2])
+
+    def test_zero_gap_fill_no_change(self):
+        mp = self._two_parcels_with_gap(gap_m=4)
+        result = _close_gaps(mp, gap_fill_m=0)
+        assert result.equals(mp)
+
+    def test_gap_smaller_than_fill_merges_to_single_polygon(self):
+        mp = self._two_parcels_with_gap(gap_m=3)
+        assert mp.geom_type == "MultiPolygon"  # gap present before fill
+        result = _close_gaps(mp, gap_fill_m=3)  # fill ≥ gap/2 → bridges it
+        assert result.geom_type == "Polygon"
+
+    def test_gap_larger_than_fill_stays_multipolygon(self):
+        mp = self._two_parcels_with_gap(gap_m=20)
+        result = _close_gaps(mp, gap_fill_m=3)
+        # 3 m fill can only bridge gaps up to 6 m wide
+        assert result.geom_type == "MultiPolygon"
+
+    def test_area_roughly_preserved(self):
+        mp = self._two_parcels_with_gap(gap_m=2)
+        result = _close_gaps(mp, gap_fill_m=2)
+        # Area should be close to original (fill adds the gap strip, erode removes it)
+        assert abs(result.area - mp.area) / mp.area < 0.05  # within 5%
+
+    def test_process_survey_uses_gap_fill(self):
+        """Two parcels with a small gap produce a single polygon with gap_fill enabled."""
+        p1 = make_parcel(x=300_000, w=500, parcel_id="P1")
+        p2 = make_parcel(x=300_503, w=500, parcel_id="P2")  # 3 m gap
+        cfg = PolygonConfig(gap_fill_m=3, multipart_policy="split")
+        result = process_survey([p1, p2], [], _DEFAULT_HOME_SAFETY, cfg)
+        assert len(result.pieces_3067) == 1  # merged into one piece
 
 
 class TestEdgeBuffer:

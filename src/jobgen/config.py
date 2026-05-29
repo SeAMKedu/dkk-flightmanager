@@ -63,6 +63,11 @@ class HomeSafetyConfig(BaseModel):
 
 class PolygonConfig(BaseModel):
     edge_buffer_m: float = Field(default=0.0, ge=0)
+    # Close small gaps between adjacent parcels via morphological closing
+    # (buffer +d then -d).  Gaps up to 2×gap_fill_m wide are bridged.
+    # Corners are rounded by up to gap_fill_m — acceptable for survey polygons.
+    # Typical Finnish field cadastral gaps: 0–5 m.  Set 0 to disable.
+    gap_fill_m: float = Field(default=0.0, ge=0)
     simplify_tolerance_m: float = Field(default=1.0, ge=0)
     multipart_policy: Literal["split", "largest", "review"] = "review"
     hole_policy: Literal["review", "fill", "clip"] = "review"

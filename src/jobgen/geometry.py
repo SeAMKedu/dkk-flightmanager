@@ -100,10 +100,14 @@ def process_survey(
 
     # 1. Merge parcels
     merged = _merge_parcels(parcels)
-    original_area_ha = merged.area * _M2_TO_HA
-    log.info("Merged %d parcel(s): %.2f ha", len(parcels), original_area_ha)
+    log.info("Merged %d parcel(s)", len(parcels))
 
-    # 2. Optional outward edge buffer
+    # 2. Close small inter-parcel gaps (before measuring area so stats reflect intent)
+    merged = _close_gaps(merged, polygon_cfg.gap_fill_m)
+    original_area_ha = merged.area * _M2_TO_HA
+    log.info("Survey area after gap-fill: %.2f ha", original_area_ha)
+
+    # 3. Optional outward edge buffer
     survey = _apply_edge_buffer(merged, polygon_cfg.edge_buffer_m)
 
     # 3. Build keep-out zone
@@ -181,6 +185,20 @@ def _merge_parcels(parcels: list[Parcel]) -> BaseGeometry:
     geoms = [p.geometry for p in parcels]
     merged = unary_union(geoms)
     return make_valid(merged)
+
+
+def _close_gaps(geom: BaseGeometry, gap_fill_m: float) -> BaseGeometry:
+    """Bridge small gaps between adjacent parcels via morphological closing.
+
+    Expands by gap_fill_m then contracts by gap_fill_m.  Gaps narrower than
+    2×gap_fill_m are filled; corners are rounded by at most gap_fill_m.
+    No-op when gap_fill_m == 0.
+    """
+    if gap_fill_m <= 0:
+        return geom
+    closed = geom.buffer(gap_fill_m).buffer(-gap_fill_m)
+    log.debug("Gap fill %.1f m applied", gap_fill_m)
+    return closed
 
 
 def _apply_edge_buffer(geom: BaseGeometry, buffer_m: float) -> BaseGeometry:
