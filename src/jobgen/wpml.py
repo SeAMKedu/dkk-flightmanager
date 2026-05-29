@@ -314,19 +314,19 @@ def _estimate_budget(survey_4326: BaseGeometry, cfg: FlightConfig) -> dict:
     m_per_deg_lon = 111_132.0 * math.cos(math.radians(mid_lat))
     area_m2 = survey_4326.area * m_per_deg_lon * m_per_deg_lat
 
-    # Bounding box side lengths for strip/photo count estimates
+    # Bounding box dimensions — over-estimates vs DJI's polygon-exact calculation
+    # but also partially compensates for lead-in/lead-out photos DJI takes beyond
+    # the polygon boundary at each strip end.  Treat as rough planning estimate.
     bbox = survey_4326.bounds
     width_m  = (bbox[2] - bbox[0]) * m_per_deg_lon
     height_m = (bbox[3] - bbox[1]) * m_per_deg_lat
 
-    n_strips = math.ceil(width_m / strip_spacing) + 1
-    photos_per_strip = math.ceil(height_m / photo_spacing) + 1
+    n_strips = max(1, math.ceil(width_m / strip_spacing))
+    photos_per_strip = max(1, math.ceil(height_m / photo_spacing))
     photo_count = n_strips * photos_per_strip
 
-    # Flight distance: strips + inter-strip transitions
-    strip_length   = height_m
-    total_dist_m   = n_strips * strip_length + (n_strips - 1) * strip_spacing
-    flight_time_s  = total_dist_m / cfg.auto_flight_speed_ms
+    total_dist_m    = n_strips * height_m + (n_strips - 1) * strip_spacing
+    flight_time_s   = total_dist_m / cfg.auto_flight_speed_ms
     flight_time_min = flight_time_s / 60
 
     return {
