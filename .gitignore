@@ -1,6 +1,8 @@
 # Secrets and local config
 config.toml
 .env
+.env.*
+!.env.example
 
 # Output and cache
 cache/
