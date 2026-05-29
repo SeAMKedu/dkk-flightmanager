@@ -55,3 +55,11 @@ offline = false               # true = cache-only; fail cleanly on cache miss
 
 [output]
 output_dir = "output"
+
+[parcels]
+# Year of the Ruokavirasto LPIS layer to query (inspire:LC.LandCoverSurfaces.LPIS.<year>).
+# Defaults to current_year - 1 (the most recently completed and published season).
+# Override here if you need a specific year.
+# lpis_year = 2025
+page_size = 1000    # WFS page size; GeoServer cap is 1000
+timeout_s = 60

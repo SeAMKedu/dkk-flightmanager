@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import tomllib
 from pathlib import Path
 from typing import Literal
@@ -72,12 +73,25 @@ class OutputConfig(BaseModel):
     output_dir: str = "output"
 
 
+class ParcelsConfig(BaseModel):
+    # Year of the LPIS layer to use. Defaults to current_year - 1 because LPIS
+    # data covers completed agricultural seasons: in any given year N the most
+    # recent published layer is N-1.  Override in config if a specific year is needed.
+    # Available years on the service: 2020–2025 (verify via GetCapabilities).
+    lpis_year: int = Field(default_factory=lambda: datetime.date.today().year - 1)
+    # WFS page size; GeoServer default cap is 1000.
+    page_size: int = Field(default=1000, gt=0)
+    # Request timeout in seconds.
+    timeout_s: int = Field(default=60, gt=0)
+
+
 class AppConfig(BaseModel):
     flight: FlightConfig
     home_safety: HomeSafetyConfig = Field(default_factory=HomeSafetyConfig)
     polygon: PolygonConfig = Field(default_factory=PolygonConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+    parcels: ParcelsConfig = Field(default_factory=ParcelsConfig)
 
 
 def load_config(path: Path | str = "config.toml") -> AppConfig:
