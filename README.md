@@ -58,7 +58,8 @@ jobgen run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 | `--parcels-file` | — | File with one parcel ID per line |
 | `--properties`, `-k` | — | Comma-separated kiinteistötunnus values (dash or 14-digit form) |
 | `--bbox` | — | Bounding box `xmin,ymin,xmax,ymax` in EPSG:3067 metres |
-| `--height` | from config | Flight height in metres AGL (back-calculates GSD from M3E camera constants) |
+| `--drone` | from config | Drone + payload profile name (e.g. `m3m`, `m300-p1-24`) — see below |
+| `--height` | from config | Flight height in metres AGL (back-calculates GSD from the active drone's camera constants) |
 | `--subcategory` | from config | Operating subcategory: `A2` or `A3` |
 | `--buffer` | from config | Home keep-out buffer in metres (overrides the subcategory default) |
 | `--simplify` | from config | Polygon vertex reduction — see below |
@@ -94,6 +95,52 @@ auto_simplify_max_vertices = 50   # vertex target for simplify_mode = "auto"
 
 The vertex count after simplification is printed in the job summary and recorded
 in `manifest.json` under `geometry.survey_vertex_count`.
+
+### Drone profiles (`--drone`)
+
+The tool ships with built-in profiles for common DJI mapping drones. Each profile
+carries the WPML drone/payload enum values and camera constants needed to generate
+a correct KMZ and calculate GSD.
+
+List available profiles and their GSD at typical altitudes:
+
+```bash
+jobgen drones
+```
+
+```
+Name               GSD@50m  GSD@100m  Label
+m3m *                1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB channel
+m3e                  1.34 cm    2.68 cm  DJI Mavic 3 Enterprise — RGB camera
+m300-p1-24           0.92 cm    1.83 cm  DJI Matrice 300 RTK + Zenmuse P1 (24 mm)
+m300-p1-35           0.63 cm    1.26 cm  DJI Matrice 300 RTK + Zenmuse P1 (35 mm)
+m300-p1-50           0.44 cm    0.88 cm  DJI Matrice 300 RTK + Zenmuse P1 (50 mm)
+m350-p1-24           0.92 cm    1.83 cm  DJI Matrice 350 RTK + Zenmuse P1 (24 mm)
+m350-p1-35           0.63 cm    1.26 cm  DJI Matrice 350 RTK + Zenmuse P1 (35 mm)
+m350-p1-50           0.44 cm    0.88 cm  DJI Matrice 350 RTK + Zenmuse P1 (50 mm)
+```
+
+Select a drone for a job:
+
+```bash
+jobgen run --name pelto-2024 --parcels 5241087453 --drone m300-p1-24
+```
+
+Set the default in `config.toml`:
+
+```toml
+default_drone = "m3m"
+```
+
+To add a custom drone, add a `[[drones]]` entry to `config.toml` — see the commented
+examples in `config.example.toml`. If you add any `[[drones]]` entries, they replace
+the built-in list entirely, so copy across any profiles you still want to use.
+
+> **Note on M350 RTK:** the `drone_enum` value (89) for M350 RTK profiles is from
+> community sources and has not been confirmed from official DJI WPML documentation.
+> Before flying a job generated for an M350 RTK, verify the value by exporting a
+> test mission from DJI Pilot 2 on the aircraft and checking `wpml:droneEnumValue`
+> in the KMZ.
 
 ### Cache management
 

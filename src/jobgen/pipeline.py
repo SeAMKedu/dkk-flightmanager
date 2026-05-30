@@ -210,11 +210,14 @@ def run_job(
     # ------------------------------------------------------------------
     # 6. Zone check
     # ------------------------------------------------------------------
+    drone_cfg = config.active_drone()
+    flight_height_m = drone_cfg.height_from_gsd(config.flight.target_gsd_cm)
+
     log.info("Checking UAS restriction zones …")
     zone_result = check_zones(
         survey_geom.survey_4326,
         config.zones,
-        flight_height_m=config.flight.derived_flight_height_m,
+        flight_height_m=flight_height_m,
         cache_dir=config.cache.cache_dir,
     )
     all_review_reasons.extend(zone_result.reasons)
@@ -231,7 +234,8 @@ def run_job(
             kmz_path = job_dir / f"{job_name}{suffix}.kmz"
             try:
                 result = build_kmz(piece_4326, config.flight, kmz_path,
-                                   dsm_path=dsm_path if not dry_run else None)
+                                   dsm_path=dsm_path if not dry_run else None,
+                                   drone=drone_cfg)
                 kmz_results.append(result)
                 if result.over_one_battery:
                     reason = (
@@ -328,10 +332,12 @@ def run_job(
 
         "flight": {
             "target_gsd_cm":       config.flight.target_gsd_cm,
-            "derived_height_m":    round(config.flight.derived_flight_height_m, 2),
+            "derived_height_m":    round(flight_height_m, 2),
             "overlap_front_pct":   config.flight.overlap_front_pct,
             "overlap_side_pct":    config.flight.overlap_side_pct,
             "terrain_follow":      True,
+            "drone":               drone_cfg.name,
+            "drone_label":         drone_cfg.label,
         },
 
         "battery": (
@@ -381,9 +387,7 @@ def run_job(
                     "upper_limit": h.altitude.upper_limit,
                     "upper_uom":   h.altitude.upper_uom,
                     "upper_ref":   h.altitude.upper_ref,
-                    "ceiling_note": h.altitude.ceiling_note(
-                        config.flight.derived_flight_height_m
-                    ),
+                    "ceiling_note": h.altitude.ceiling_note(flight_height_m),
                 }
                 for h in zone_result.intersecting_zones
             ],

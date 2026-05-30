@@ -100,3 +100,86 @@ max_age_days = 14
 # lpis_year = 2025
 page_size = 1000    # WFS page size; GeoServer cap is 1000
 timeout_s = 60
+
+# ---------------------------------------------------------------------------
+# Drone / payload profiles
+#
+# default_drone selects which [[drones]] entry is used when generating a job.
+# Override per-job with: jobgen run --drone <name>
+#
+# Built-in profiles are always available even without entries here.
+# Add [[drones]] entries to extend the list or override a built-in profile.
+#
+# WPML enum sources:
+#   M3E / M3M  (enum 77)  — confirmed from DJI Pilot 2 KMZ fixture (FIXTURE_NOTES.md)
+#   M300 RTK   (enum 60)  — confirmed from DJI Cloud-API-Doc (product-type-enumerate.md)
+#   M350 RTK   (enum 89)  — community-sourced; verify against a real M350 RTK KMZ export
+#
+# Pixel pitch sources:
+#   M3E / M3M  3.3 µm — confirmed from image EXIF (calibrated focal length method)
+#   Zenmuse P1 4.4 µm — from DJI P1 spec sheet
+# ---------------------------------------------------------------------------
+default_drone = "m3m"
+
+# Uncomment and edit to override a built-in profile or add a custom drone:
+#
+# [[drones]]
+# name        = "m3m"
+# label       = "DJI Mavic 3 Multispectral — RGB channel"
+# drone_enum  = 77
+# drone_sub_enum = 0
+# payload_enum   = 68
+# payload_sub_enum = 3
+# payload_position_index = 0
+# focal_length_mm = 12.3
+# pixel_pitch_um  = 3.3
+# image_width_px  = 5280
+# image_height_px = 3956
+# image_format    = "visable,narrow_band"
+# battery_minutes = 28.0
+#
+# [[drones]]
+# name        = "m3e"
+# label       = "DJI Mavic 3 Enterprise — RGB camera"
+# drone_enum  = 77
+# drone_sub_enum = 0
+# payload_enum   = 68
+# payload_sub_enum = 0
+# payload_position_index = 0
+# focal_length_mm = 12.3
+# pixel_pitch_um  = 3.3
+# image_width_px  = 5280
+# image_height_px = 3956
+# image_format    = "wide"
+# battery_minutes = 28.0
+#
+# [[drones]]
+# name        = "m300-p1-24"
+# label       = "DJI Matrice 300 RTK + Zenmuse P1 (24 mm)"
+# drone_enum  = 60
+# drone_sub_enum = 0
+# payload_enum   = 50
+# payload_sub_enum = 0    # 0=24mm, 1=35mm, 2=50mm
+# payload_position_index = 0
+# focal_length_mm = 24.0
+# pixel_pitch_um  = 4.4
+# image_width_px  = 8192
+# image_height_px = 5460
+# image_format    = "wide"
+# battery_minutes = 35.0
+#
+# [[drones]]
+# name        = "m350-p1-24"
+# label       = "DJI Matrice 350 RTK + Zenmuse P1 (24 mm)"
+# # NOTE: drone_enum 89 is community-sourced; verify before flying.
+# drone_enum  = 89
+# drone_sub_enum = 0
+# payload_enum   = 50
+# payload_sub_enum = 0
+# payload_position_index = 0
+# focal_length_mm = 24.0
+# pixel_pitch_um  = 4.4
+# image_width_px  = 8192
+# image_height_px = 5460
+# image_format    = "wide"
+# battery_minutes = 40.0

@@ -12,20 +12,140 @@ from pydantic import BaseModel, Field, model_validator
 
 # M3M (Mavic 3 Multispectral) RGB camera constants — confirmed from image EXIF (2026-05-29).
 # Note: the drone model is M3M, not M3E; WPML drone enum 77 is correct for both.
-#
-# Focal length:  `Focal Length: 12.3 mm` in EXIF  →  M3M_FOCAL_LENGTH_MM = 12.3
-# Pixel pitch:   `Calibrated Focal Length: 3725.15 px` ÷ 12.3 mm = 3.301 μm  (≈ 3.3 μm)
-#                Consistent with 4/3" sensor (17.3 × 13.0 mm) ÷ 5280 px = 3.28 μm
-# Resolution:    `Exif Image Width/Height: 5280 × 3956`
-# RTK:           Drone carries RTK module (`Rtk Flag: 16`), but RTK fix is not always
-#                available on-site.  Without RTK, GNSS vertical noise (±several metres)
-#                swamps the N2000↔ellipsoid offset (~0.3 m in Finland), so leaving
-#                heights as-is (constraint 3) remains the correct default.  A future
-#                RTK-aware workflow could apply the offset when fix is confirmed.
+# Kept as module-level constants for backward compatibility; prefer DroneConfig.
 M3E_FOCAL_LENGTH_MM = 12.3
-M3E_PIXEL_PITCH_UM  = 3.3      # empirically 3.301 μm; difference < 0.03%, negligible
+M3E_PIXEL_PITCH_UM  = 3.3
 M3E_IMAGE_WIDTH_PX  = 5280
 M3E_IMAGE_HEIGHT_PX = 3956
+
+
+class DroneConfig(BaseModel):
+    """Camera and WPML identifiers for one drone + payload combination."""
+    name: str = Field(description="Short slug used on the CLI (e.g. 'm3m', 'm300-p1-24')")
+    label: str = Field(description="Human-readable name shown in summaries")
+
+    # WPML identifiers — written into template.kml and waylines.wpml.
+    # Confirmed sources noted per profile in config.example.toml.
+    drone_enum: int
+    drone_sub_enum: int = 0
+    payload_enum: int
+    payload_sub_enum: int = 0
+    payload_position_index: int = 0
+
+    # Camera optics — used for GSD ↔ AGL height conversion.
+    focal_length_mm: float = Field(gt=0)
+    pixel_pitch_um: float = Field(gt=0)
+    image_width_px: int = Field(gt=0)
+    image_height_px: int = Field(gt=0)
+
+    # WPML imageFormat value written into payloadParam.
+    # M3M: "visable,narrow_band" (RGB + multispectral simultaneously).
+    # Everything else: "wide" (single RGB lens).
+    image_format: str = "wide"
+
+    # Battery planning — flag jobs that exceed this estimated flight time.
+    battery_minutes: float = Field(default=28.0, gt=0)
+
+    def height_from_gsd(self, gsd_cm: float) -> float:
+        """Return required AGL height (m) for a given GSD (cm/px)."""
+        return (gsd_cm / 100) * self.focal_length_mm / (self.pixel_pitch_um / 1000)
+
+    def gsd_from_height(self, height_m: float) -> float:
+        """Return achievable GSD (cm/px) at a given AGL height (m)."""
+        return height_m * self.pixel_pitch_um / (self.focal_length_mm * 10)
+
+
+def _default_drones() -> list[DroneConfig]:
+    """Built-in drone profiles shipped with the tool."""
+    return [
+        # ── Mavic 3 Multispectral ─────────────────────────────────────────────
+        # drone_enum 77 / payload_enum 68 confirmed from DJI Pilot 2 KMZ fixture
+        # (FIXTURE_NOTES.md).  Payload sub_enum 3 = RGB + multispectral capture.
+        DroneConfig(
+            name="m3m", label="DJI Mavic 3 Multispectral — RGB channel",
+            drone_enum=77, drone_sub_enum=0,
+            payload_enum=68, payload_sub_enum=3, payload_position_index=0,
+            focal_length_mm=12.3, pixel_pitch_um=3.3,
+            image_width_px=5280, image_height_px=3956,
+            image_format="visable,narrow_band",
+            battery_minutes=28.0,
+        ),
+        # ── Mavic 3 Enterprise ────────────────────────────────────────────────
+        # Same airframe and RGB sensor as M3M; sub_enum 0 = RGB-only capture.
+        # drone_enum 77 confirmed; payload sub_enum 0 is inferred (no M3E fixture).
+        # Verify against a real M3E KMZ export before flying.
+        DroneConfig(
+            name="m3e", label="DJI Mavic 3 Enterprise — RGB camera",
+            drone_enum=77, drone_sub_enum=0,
+            payload_enum=68, payload_sub_enum=0, payload_position_index=0,
+            focal_length_mm=12.3, pixel_pitch_um=3.3,
+            image_width_px=5280, image_height_px=3956,
+            image_format="wide",
+            battery_minutes=28.0,
+        ),
+        # ── Matrice 300 RTK + Zenmuse P1 ─────────────────────────────────────
+        # drone_enum 60, payload_enum 50 confirmed from DJI Cloud-API-Doc.
+        # payload_sub_enum: 0=24 mm, 1=35 mm, 2=50 mm (interchangeable DL lenses).
+        # Pixel pitch 4.4 μm confirmed from DJI P1 spec sheet.
+        DroneConfig(
+            name="m300-p1-24", label="DJI Matrice 300 RTK + Zenmuse P1 (24 mm)",
+            drone_enum=60, drone_sub_enum=0,
+            payload_enum=50, payload_sub_enum=0, payload_position_index=0,
+            focal_length_mm=24.0, pixel_pitch_um=4.4,
+            image_width_px=8192, image_height_px=5460,
+            image_format="wide",
+            battery_minutes=35.0,
+        ),
+        DroneConfig(
+            name="m300-p1-35", label="DJI Matrice 300 RTK + Zenmuse P1 (35 mm)",
+            drone_enum=60, drone_sub_enum=0,
+            payload_enum=50, payload_sub_enum=1, payload_position_index=0,
+            focal_length_mm=35.0, pixel_pitch_um=4.4,
+            image_width_px=8192, image_height_px=5460,
+            image_format="wide",
+            battery_minutes=35.0,
+        ),
+        DroneConfig(
+            name="m300-p1-50", label="DJI Matrice 300 RTK + Zenmuse P1 (50 mm)",
+            drone_enum=60, drone_sub_enum=0,
+            payload_enum=50, payload_sub_enum=2, payload_position_index=0,
+            focal_length_mm=50.0, pixel_pitch_um=4.4,
+            image_width_px=8192, image_height_px=5460,
+            image_format="wide",
+            battery_minutes=35.0,
+        ),
+        # ── Matrice 350 RTK + Zenmuse P1 ─────────────────────────────────────
+        # drone_enum 89 is from community sources — NOT confirmed from official
+        # DJI WPML documentation.  Verify by exporting a test mission from
+        # DJI Pilot 2 on an M350 RTK and inspecting the wpml:droneEnumValue.
+        DroneConfig(
+            name="m350-p1-24", label="DJI Matrice 350 RTK + Zenmuse P1 (24 mm)",
+            drone_enum=89, drone_sub_enum=0,
+            payload_enum=50, payload_sub_enum=0, payload_position_index=0,
+            focal_length_mm=24.0, pixel_pitch_um=4.4,
+            image_width_px=8192, image_height_px=5460,
+            image_format="wide",
+            battery_minutes=40.0,
+        ),
+        DroneConfig(
+            name="m350-p1-35", label="DJI Matrice 350 RTK + Zenmuse P1 (35 mm)",
+            drone_enum=89, drone_sub_enum=0,
+            payload_enum=50, payload_sub_enum=1, payload_position_index=0,
+            focal_length_mm=35.0, pixel_pitch_um=4.4,
+            image_width_px=8192, image_height_px=5460,
+            image_format="wide",
+            battery_minutes=40.0,
+        ),
+        DroneConfig(
+            name="m350-p1-50", label="DJI Matrice 350 RTK + Zenmuse P1 (50 mm)",
+            drone_enum=89, drone_sub_enum=0,
+            payload_enum=50, payload_sub_enum=2, payload_position_index=0,
+            focal_length_mm=50.0, pixel_pitch_um=4.4,
+            image_width_px=8192, image_height_px=5460,
+            image_format="wide",
+            battery_minutes=40.0,
+        ),
+    ]
 
 
 class FlightConfig(BaseModel):
@@ -46,19 +166,12 @@ class FlightConfig(BaseModel):
     finish_action: str = Field(default="goHome")
     rc_lost_action: str = Field(default="goBack")
 
-    @model_validator(mode="after")
-    def check_derived_height(self) -> "FlightConfig":
-        h = self.derived_flight_height_m
-        if h > self.max_height_agl_m:
-            raise ValueError(
-                f"Target GSD {self.target_gsd_cm} cm/px requires {h:.1f} m AGL "
-                f"which exceeds max_height_agl_m={self.max_height_agl_m}"
-            )
-        return self
-
     @property
     def derived_flight_height_m(self) -> float:
-        """Compute required AGL height from target GSD using M3E camera constants."""
+        """AGL height for target GSD using M3E/M3M constants (backward-compat).
+
+        Prefer DroneConfig.height_from_gsd() when a specific drone is selected.
+        """
         return (self.target_gsd_cm / 100) * M3E_FOCAL_LENGTH_MM / (M3E_PIXEL_PITCH_UM / 1000)
 
 
@@ -160,6 +273,24 @@ class AppConfig(BaseModel):
     parcels: ParcelsConfig = Field(default_factory=ParcelsConfig)
     properties: PropertiesConfig = Field(default_factory=PropertiesConfig)
     zones: ZonesConfig = Field(default_factory=ZonesConfig)
+    # Drone / payload profiles.  The built-in list covers common DJI mapping drones.
+    # Add [[drones]] entries in config.toml to extend or override.
+    default_drone: str = "m3m"
+    drones: list[DroneConfig] = Field(default_factory=_default_drones)
+
+    @model_validator(mode="after")
+    def _check_default_drone(self) -> "AppConfig":
+        names = [d.name for d in self.drones]
+        if self.default_drone not in names:
+            raise ValueError(
+                f"default_drone '{self.default_drone}' not found. "
+                f"Available: {names}"
+            )
+        return self
+
+    def active_drone(self) -> DroneConfig:
+        """Return the drone profile selected by default_drone."""
+        return next(d for d in self.drones if d.name == self.default_drone)
 
 
 def load_config(path: Path | str = "config.toml") -> AppConfig:

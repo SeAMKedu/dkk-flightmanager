@@ -27,6 +27,31 @@ app.add_typer(cache_app, name="cache")
 
 
 # ---------------------------------------------------------------------------
+# jobgen drones
+# ---------------------------------------------------------------------------
+
+
+@app.command("drones")
+def list_drones(
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """List available drone profiles and their camera specs."""
+    cfg = _load_cfg(config_path)
+    default = cfg.default_drone
+
+    typer.echo(f"\n{'Name':<18} {'GSD@50m':>8} {'GSD@100m':>9}  {'Label'}")
+    typer.echo("-" * 80)
+    for d in cfg.drones:
+        marker = " *" if d.name == default else "  "
+        gsd50  = d.gsd_from_height(50)
+        gsd100 = d.gsd_from_height(100)
+        typer.echo(
+            f"{d.name + marker:<18} {gsd50:>7.2f} cm {gsd100:>8.2f} cm  {d.label}"
+        )
+    typer.echo(f"\n  * = default drone (override with --drone or default_drone in config.toml)\n")
+
+
+# ---------------------------------------------------------------------------
 # jobgen run
 # ---------------------------------------------------------------------------
 
@@ -58,9 +83,17 @@ def run_job_cmd(
         "config.toml", "--config", "-c",
         help="Path to config.toml.",
     ),
+    drone: Optional[str] = typer.Option(
+        None, "--drone",
+        help=(
+            "Drone + payload profile name (e.g. 'm3m', 'm300-p1-24'). "
+            "Must match a name in the [[drones]] list in config.toml. "
+            "Overrides default_drone from config."
+        ),
+    ),
     height: Optional[float] = typer.Option(
         None, "--height",
-        help="Override flight height in metres AGL (back-calculates GSD from M3E sensor constants).",
+        help="Override flight height in metres AGL (back-calculates GSD from the active drone's camera constants).",
     ),
     subcategory: Optional[str] = typer.Option(
         None, "--subcategory",
@@ -161,11 +194,20 @@ def run_job_cmd(
     if offline:
         cfg.cache.offline = True
 
+    if drone is not None:
+        names = [d.name for d in cfg.drones]
+        if drone not in names:
+            typer.echo(
+                f"Error: unknown drone '{drone}'. Available: {', '.join(names)}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        cfg.default_drone = drone
+        typer.echo(f"Drone override: {drone} ({cfg.active_drone().label})")
+
     if height is not None:
-        from jobgen.config import M3E_FOCAL_LENGTH_MM, M3E_PIXEL_PITCH_UM
-        # Inverse of: height = (gsd_cm/100) * focal_mm / (pitch_um/1000)
-        # → gsd_cm = height * pitch_um / (focal_mm * 10)
-        gsd = height * M3E_PIXEL_PITCH_UM / (M3E_FOCAL_LENGTH_MM * 10)
+        active = cfg.active_drone()
+        gsd = active.gsd_from_height(height)
         cfg.flight.target_gsd_cm = gsd
         cfg.flight.max_height_agl_m = max(cfg.flight.max_height_agl_m, height + 1)
         typer.echo(f"Height override: {height:.0f} m AGL  (GSD {gsd:.2f} cm/px)")
@@ -179,7 +221,9 @@ def run_job_cmd(
         # A2: buffer ≈ flight height (EU reg: ≥ flight height from people).
         # Apply automatically unless the operator overrides with --buffer.
         if sub == "A2" and buffer is None:
-            cfg.home_safety.home_buffer_m = cfg.flight.derived_flight_height_m
+            cfg.home_safety.home_buffer_m = cfg.active_drone().height_from_gsd(
+                cfg.flight.target_gsd_cm
+            )
         typer.echo(
             f"Subcategory override: {sub}  "
             f"(buffer {cfg.home_safety.home_buffer_m:.0f} m)"
@@ -438,6 +482,7 @@ def _print_job_summary(manifest: dict, dry_run: bool) -> None:
     vc = g.get("survey_vertex_count")
     if vc is not None:
         typer.echo(f"  Vertices:    {vc}")
+    typer.echo(f"  Drone:       {f.get('drone_label', f.get('drone', ''))}")
     typer.echo(f"  Height:      {f.get('derived_height_m', 0):.1f} m AGL  "
                f"GSD {f.get('target_gsd_cm', 0):.1f} cm/px")
 
