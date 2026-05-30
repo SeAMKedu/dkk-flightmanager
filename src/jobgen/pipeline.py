@@ -409,6 +409,7 @@ def run_job(
             manifest=manifest,
             parcels_4326=parcels_4326,
             zone_hits=zone_result.intersecting_zones,
+            dsm_path=dsm_path,
         )
 
         manifest_path = job_dir / "manifest.json"

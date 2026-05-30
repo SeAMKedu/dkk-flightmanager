@@ -7,6 +7,7 @@ Shows:
   - Survey polygon (post-keepout, green fill)
   - Building pins (red = keep-out, yellow = informational)
   - UAS zone hits if any (orange overlay)
+  - DSM grayscale thumbnail (black = low, white = high) as base layer
   - Info panel: area, height, GSD, flight time, status flags
 
 No extra Python dependencies — data is embedded as GeoJSON in the HTML.
@@ -14,6 +15,7 @@ No extra Python dependencies — data is embedded as GeoJSON in the HTML.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from pathlib import Path
@@ -26,6 +28,51 @@ from jobgen.config import HomeSafetyConfig
 from jobgen.zones import ZoneHit
 
 log = logging.getLogger(__name__)
+
+_DSM_MAX_PX = 512   # longest side of the thumbnail embedded in the HTML
+
+
+def _dsm_thumbnail_b64(dsm_path: Path) -> tuple[str, tuple[float, float, float, float]] | tuple[None, None]:
+    """Return (base64-PNG, (west, south, east, north)) for the DSM, or (None, None)."""
+    import numpy as np
+    import rasterio
+    from rasterio.enums import Resampling as RasterioResampling
+    from rasterio.io import MemoryFile
+
+    with rasterio.open(dsm_path) as ds:
+        bounds = ds.bounds
+        h, w = ds.height, ds.width
+        scale = min(1.0, _DSM_MAX_PX / max(h, w))
+        th = max(1, int(round(h * scale)))
+        tw = max(1, int(round(w * scale)))
+        data = ds.read(1, out_shape=(th, tw), resampling=RasterioResampling.average)
+        nodata = ds.nodata if ds.nodata is not None else -9999.0
+
+    valid_mask = data != nodata
+    valid = data[valid_mask]
+    if len(valid) == 0:
+        return None, None
+
+    lo, hi = float(valid.min()), float(valid.max())
+    gray = np.zeros((th, tw), dtype=np.uint8)
+    if hi > lo:
+        gray[valid_mask] = ((data[valid_mask] - lo) / (hi - lo) * 255).astype(np.uint8)
+    else:
+        gray[valid_mask] = 128
+
+    rgba = np.zeros((4, th, tw), dtype=np.uint8)
+    rgba[0] = gray
+    rgba[1] = gray
+    rgba[2] = gray
+    rgba[3] = np.where(valid_mask, 255, 0).astype(np.uint8)
+
+    with MemoryFile() as mem:
+        with mem.open(driver="PNG", dtype="uint8", count=4, width=tw, height=th) as dst:
+            dst.write(rgba)
+        png_bytes = mem.read()
+
+    return base64.b64encode(png_bytes).decode(), (bounds.left, bounds.bottom, bounds.right, bounds.top)
+
 
 # Colours matching the DJI KML pin colours (converted from AABBGGRR to CSS hex)
 _RED    = "#E23C39"
@@ -42,6 +89,7 @@ def build_map_preview(
     manifest: dict,
     parcels_4326: list[BaseGeometry] | None = None,
     zone_hits: list[ZoneHit] | None = None,
+    dsm_path: Path | None = None,
 ) -> Path:
     """Write a Leaflet HTML map preview for the job.
 
@@ -134,6 +182,15 @@ def build_map_preview(
         for p in (parcels_4326 or [])
     ])
 
+    # DSM thumbnail
+    dsm_b64: str | None = None
+    dsm_bounds: tuple[float, float, float, float] | None = None
+    if dsm_path and dsm_path.exists():
+        try:
+            dsm_b64, dsm_bounds = _dsm_thumbnail_b64(dsm_path)
+        except Exception:
+            log.warning("Could not render DSM thumbnail for preview", exc_info=True)
+
     bounds = survey_4326.bounds
     center_lat = (bounds[1] + bounds[3]) / 2
     center_lon = (bounds[0] + bounds[2]) / 2
@@ -151,6 +208,8 @@ def build_map_preview(
         center_lat=center_lat,
         center_lon=center_lon,
         home_buffer_m=home_safety.home_buffer_m,
+        dsm_b64=dsm_b64,
+        dsm_bounds=dsm_bounds,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,6 +246,8 @@ def _render(
     center_lat: float = 62.0,
     center_lon: float = 25.0,
     home_buffer_m: float = 150.0,
+    dsm_b64: str | None = None,
+    dsm_bounds: tuple[float, float, float, float] | None = None,
 ) -> str:
     rows_html = "".join(
         f"<tr><td>{k}</td><td><b>{v}</b></td></tr>"
@@ -196,6 +257,35 @@ def _render(
     if review_reasons:
         items = "".join(f"<li>{r}</li>" for r in review_reasons)
         reasons_html = f'<div class="reasons"><b>Review reasons:</b><ul>{items}</ul></div>'
+
+    # DSM overlay — conditional snippets so the template stays clean
+    if dsm_b64 and dsm_bounds:
+        west, south, east, north = dsm_bounds
+        dsm_legend_row = f"""    <div class="leg-row">
+      <button class="eye-btn off" id="eye-dsm" title="Toggle DSM elevation"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <div class="leg-icon"><div class="swatch" style="background:linear-gradient(to right,#000,#fff);border:1px solid #9ca3af;"></div></div>
+      <span>DSM elevation</span>
+    </div>"""
+        dsm_js = f"""
+// DSM grayscale overlay — rendered in a pane below overlayPane so it sits
+// beneath the survey polygon and all other vector layers.
+map.createPane('dsmPane');
+map.getPane('dsmPane').style.zIndex = 350;  // below overlayPane (400)
+map.getPane('dsmPane').style.pointerEvents = 'none';
+var dsmGroup = L.layerGroup().addTo(map);
+L.imageOverlay(
+  'data:image/png;base64,{dsm_b64}',
+  [[{south}, {west}], [{north}, {east}]],
+  {{opacity: 0.65, interactive: false, pane: 'dsmPane'}}
+).addTo(dsmGroup);
+map.removeLayer(dsmGroup);  // start hidden
+eyeTog('eye-dsm',
+  function() {{ dsmGroup.addTo(map); }},
+  function() {{ map.removeLayer(dsmGroup); }});
+"""
+    else:
+        dsm_legend_row = ""
+        dsm_js = ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -257,6 +347,7 @@ def _render(
   <div class="status">{status_text}</div>
   <table>{rows_html}</table>
   <div class="legend">
+{dsm_legend_row}
     <div class="leg-row">
       <button class="eye-btn" id="eye-parcel" title="Toggle parcel outline"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
       <div class="leg-icon"><div class="swatch" style="background:none;border:1.5px dashed #6b7280;"></div></div>
@@ -268,6 +359,11 @@ def _render(
       <span>Survey polygon</span>
     </div>
     <div class="leg-row">
+      <button class="eye-btn" id="eye-vertices" title="Toggle polygon vertices"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <div class="leg-icon"><div class="dot" style="background:#93c5fd;border:1px solid #1d4ed8;"></div></div>
+      <span>Polygon vertices</span>
+    </div>
+    <div class="leg-row">
       <button class="eye-btn" id="eye-yellow-c" title="Toggle 100 m circles"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
       <div class="leg-icon"><div class="swatch" style="background:#fef08a;opacity:.7;border:1px dashed #ca8a04;"></div></div>
       <span>100 m radius</span>
@@ -276,11 +372,6 @@ def _render(
       <button class="eye-btn" id="eye-red-c" title="Toggle keep-out circles"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
       <div class="leg-icon"><div class="swatch" style="background:#fca5a5;opacity:.7;border:1px dashed #dc2626;"></div></div>
       <span>{home_buffer_m:.0f} m keep-out</span>
-    </div>
-    <div class="leg-row">
-      <button class="eye-btn" id="eye-vertices" title="Toggle polygon vertices"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-      <div class="leg-icon"><div class="dot" style="background:#93c5fd;border:1px solid #1d4ed8;"></div></div>
-      <span>Polygon vertices</span>
     </div>
     <div class="leg-row">
       <div></div>
@@ -419,7 +510,7 @@ eyeTog('eye-red-c',
 eyeTog('eye-vertices',
   function() {{ vertexGroup.addTo(map); }},
   function() {{ map.removeLayer(vertexGroup); }});
-
+{dsm_js}
 </script>
 </body>
 </html>
