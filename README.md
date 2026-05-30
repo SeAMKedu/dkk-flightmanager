@@ -2,8 +2,8 @@
 
 DJI Mavic 3 Enterprise terrain-following mapping job generator for Finnish field parcels.
 
-Given a list of Ruokavirasto *peruslohko* parcel IDs (or a bounding box), produces a
-ready-to-fly DJI Pilot 2 mapping job:
+Given Ruokavirasto *peruslohko* parcel IDs, MML *kiinteistötunnus* property IDs, or a
+bounding box, produces a ready-to-fly DJI Pilot 2 mapping job:
 
 | File | Description |
 |---|---|
@@ -29,25 +29,71 @@ Ruokavirasto parcel data is open and requires no key.
 
 ## Usage
 
+### Specifying the survey area
+
 ```bash
-# Generate a job by parcel IDs (comma-separated peruslohkotunnus)
-jobgen run --name jalasto-north --parcels 1641355689,1641355690
+# Ruokavirasto peruslohkotunnus (comma-separated, or mixed with --properties)
+jobgen run --name pelto-2024 --parcels 5241087453,5241087454
 
-# From a file of IDs (one per line)
-jobgen run --name jalasto-north --parcels-file ids.txt
+# From a file of parcel IDs (one per line)
+jobgen run --name pelto-2024 --parcels-file ids.txt
 
-# From a bounding box (EPSG:3067 metres)
-jobgen run --name jalasto-north --bbox 295000,6974000,305000,6984000
+# Finnish kiinteistötunnus — dash form or 14-digit numeric
+jobgen run --name pelto-2024 --properties 214-407-3-22
+jobgen run --name pelto-2024 --properties 21440700030022
 
-# Override subcategory and flight height
-jobgen run --name jalasto-north --parcels 1641355689 --subcategory A2 --height 30
+# Combine parcel and property IDs
+jobgen run --name pelto-2024 --parcels 5241087453 --properties 214-407-3-22
 
-# Flags
---dry-run      Fetch and validate only — no output files written
---offline      Cache-only; fail cleanly if tiles are missing (use after cache warm)
---refresh      Force re-download of all touched tiles
---buffer N     Override home keep-out buffer in metres
+# Bounding box (EPSG:3067 metres)
+jobgen run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 ```
+
+### All `jobgen run` options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--name`, `-n` | *(required)* | Job name; used as output subdirectory |
+| `--parcels`, `-p` | — | Comma-separated peruslohkotunnus IDs |
+| `--parcels-file` | — | File with one parcel ID per line |
+| `--properties`, `-k` | — | Comma-separated kiinteistötunnus values (dash or 14-digit form) |
+| `--bbox` | — | Bounding box `xmin,ymin,xmax,ymax` in EPSG:3067 metres |
+| `--height` | from config | Flight height in metres AGL (back-calculates GSD from M3E camera constants) |
+| `--subcategory` | from config | Operating subcategory: `A2` or `A3` |
+| `--buffer` | from config | Home keep-out buffer in metres (overrides the subcategory default) |
+| `--simplify` | from config | Polygon vertex reduction — see below |
+| `--config`, `-c` | `config.toml` | Path to config file |
+| `--dry-run` | off | Fetch and validate only — no output files written |
+| `--offline` | off | Cache-only mode; fail cleanly on any cache miss |
+| `--refresh` | off | Force re-download of all touched tiles |
+
+### Polygon simplification (`--simplify`)
+
+Parcel and property boundaries follow cadastral lines precisely and can produce
+dense polygons that are difficult to edit on the DJI RC touch screen.
+`--simplify` reduces vertex count before writing the KMZ.
+
+```bash
+# Auto: find the largest simplification that keeps the polygon ≤ 50 vertices
+jobgen run --name pelto-2024 --parcels 5241087453 --simplify auto
+
+# Fixed tolerance in metres (Douglas-Peucker)
+jobgen run --name pelto-2024 --parcels 5241087453 --simplify 5
+
+# Disable (keep every vertex from the source data)
+jobgen run --name pelto-2024 --parcels 5241087453 --simplify 0
+```
+
+The default tolerance and mode are set in `config.toml` under `[polygon]`:
+
+```toml
+simplify_mode = "fixed"           # "fixed" or "auto"
+simplify_tolerance_m = 1.0        # metres; used when simplify_mode = "fixed"
+auto_simplify_max_vertices = 50   # vertex target for simplify_mode = "auto"
+```
+
+The vertex count after simplification is printed in the job summary and recorded
+in `manifest.json` under `geometry.survey_vertex_count`.
 
 ### Cache management
 
@@ -93,6 +139,21 @@ The `operating_subcategory` in `config.toml` sets the default; override per-job 
 - The generated job is a planning aid. The remote pilot remains responsible for
   compliance, airspace checks, and uninvolved-person separation on the day.
 
+## Disclaimer
+
+This software is a flight-planning aid. It does not replace the legal and operational responsibilities of the remote pilot or the UAS operator.
+
+**The remote pilot and operator are solely responsible for:**
+- Ensuring the flight complies with all applicable regulations (EU UAS Regulation 2019/947, Finnish national rules, and Traficom guidance).
+- Verifying airspace status, NOTAMs, and temporary restrictions before every flight.
+- Confirming that uninvolved-person separation distances are maintained throughout the operation.
+- Checking that the aircraft, batteries, and equipment are airworthy.
+- Making the final go/no-go decision on the day.
+
+The tool flags potential issues (zones, buffer violations, geometry problems) via `flight_ready` and `needs_review` in the manifest, but **a clean manifest is not a clearance to fly**. These checks are limited to the data sources available at job-generation time and may be incomplete or out of date.
+
+The authors and SeAMK accept no liability for accidents, incidents, regulatory violations, or any other consequences arising from the use of this software.
+
 ## Reference fixtures
 
 `tests/test_wpml.py` validates generated KMZ output against a reference mission
@@ -119,3 +180,11 @@ See `fixtures/FIXTURE_NOTES.md` for annotated analysis of all M3E-specific value
 - Elevation: "Contains data from the National Land Survey of Finland, Elevation model 2 m, retrieved \<date\>."
 - Buildings: "Contains data from the National Land Survey of Finland, Topographic Database, retrieved \<date\>."
 - Parcels: "Contains data from Ruokavirasto (Finnish Food Authority), Peltolohkorekisteri, retrieved \<date\>."
+
+---
+
+## Project
+
+This tool was developed as part of the **[Datakasvukunto](https://projektit.seamk.fi/kestavat-ruokaratkaisut/datakasvukunto/)** project at [Seinäjoki University of Applied Sciences (SeAMK)](https://www.seamk.fi).
+
+More projects from SeAMK: [github.com/SeAMKedu](https://github.com/SeAMKedu)
