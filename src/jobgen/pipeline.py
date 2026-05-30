@@ -322,7 +322,8 @@ def run_job(
                 "xmax": survey_geom.bbox_3067[2],
                 "ymax": survey_geom.bbox_3067[3],
             },
-            "pieces_count":     pieces_count,
+            "pieces_count":         pieces_count,
+            "survey_vertex_count":  survey_geom.survey_vertex_count,
         },
 
         "flight": {

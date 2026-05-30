@@ -89,7 +89,15 @@ class PolygonConfig(BaseModel):
     # Corners are rounded by up to gap_fill_m — acceptable for survey polygons.
     # Typical Finnish field cadastral gaps: 0–5 m.  Set 0 to disable.
     gap_fill_m: float = Field(default=0.0, ge=0)
+    # Vertex simplification.
+    # simplify_mode="fixed": apply simplify_tolerance_m (Douglas-Peucker).
+    # simplify_mode="auto":  binary-search for the largest tolerance that keeps
+    #                        the vertex count ≤ auto_simplify_max_vertices.
+    # Both modes intersect the result with the original to guarantee the
+    # simplified polygon never exits the original parcel boundary.
+    simplify_mode: Literal["fixed", "auto"] = "fixed"
     simplify_tolerance_m: float = Field(default=1.0, ge=0)
+    auto_simplify_max_vertices: int = Field(default=50, ge=4)
     multipart_policy: Literal["split", "largest", "review"] = "review"
     hole_policy: Literal["review", "fill", "clip"] = "fill"
 

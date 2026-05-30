@@ -74,6 +74,14 @@ def run_job_cmd(
             "For A3 defaults to 150 m."
         ),
     ),
+    simplify: Optional[str] = typer.Option(
+        None, "--simplify",
+        help=(
+            "Polygon simplification: 'auto' to target ≤50 vertices (good for RC touch screen), "
+            "a tolerance in metres (e.g. '5'), or '0' to disable. "
+            "Overrides config simplify_mode / simplify_tolerance_m."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run",
         help="Fetch and validate only — skip writing output files.",
@@ -180,6 +188,24 @@ def run_job_cmd(
     if buffer is not None:
         cfg.home_safety.home_buffer_m = buffer
         typer.echo(f"Buffer override: {buffer:.0f} m")
+
+    if simplify is not None:
+        if simplify.lower() == "auto":
+            cfg.polygon.simplify_mode = "auto"
+            typer.echo(
+                f"Simplify override: auto (target ≤{cfg.polygon.auto_simplify_max_vertices} vertices)"
+            )
+        else:
+            try:
+                tol = float(simplify)
+                if tol < 0:
+                    raise ValueError
+                cfg.polygon.simplify_mode = "fixed"
+                cfg.polygon.simplify_tolerance_m = tol
+                typer.echo(f"Simplify override: {tol:.1f} m tolerance")
+            except ValueError:
+                typer.echo("Error: --simplify must be 'auto' or a non-negative number.", err=True)
+                raise typer.Exit(1)
 
     # --- run ---
     typer.echo(f"Starting job '{name}' …")
@@ -409,6 +435,9 @@ def _print_job_summary(manifest: dict, dry_run: bool) -> None:
     typer.echo(f"  Area:        {g.get('original_area_ha', 0):.2f} ha → "
                f"{g.get('final_area_ha', 0):.2f} ha "
                f"({g.get('area_lost_pct', 0):.1f}% lost to keep-out)")
+    vc = g.get("survey_vertex_count")
+    if vc is not None:
+        typer.echo(f"  Vertices:    {vc}")
     typer.echo(f"  Height:      {f.get('derived_height_m', 0):.1f} m AGL  "
                f"GSD {f.get('target_gsd_cm', 0):.1f} cm/px")
 
