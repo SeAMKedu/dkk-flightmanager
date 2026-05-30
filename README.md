@@ -7,9 +7,10 @@ ready-to-fly DJI Pilot 2 mapping job:
 
 | File | Description |
 |---|---|
-| `<name>.kmz` | WPML mapping route — import into DJI Pilot 2 |
-| `<name>_dsm.tif` | Terrain-follow DSM — link to the route on the RC |
-| `<name>_homes.kml` | Building pins — import as a Pilot 2 map layer |
+| `<name>.kmz` | WPML mapping route with embedded terrain-follow DSM — import into DJI Pilot 2 |
+| `<name>_dsm.tif` | Terrain-follow DSM (also embedded in the KMZ, kept separately as a backup) |
+| `<name>_homes.kml` | Building pins — import as a Pilot 2 custom map layer |
+| `<name>_map.html` | Browser map preview — review before driving to the field |
 | `manifest.json` | Full provenance record with flight stats and safety flags |
 | `run.log` | Structured log for this run |
 
@@ -38,10 +39,14 @@ jobgen run --name jalasto-north --parcels-file ids.txt
 # From a bounding box (EPSG:3067 metres)
 jobgen run --name jalasto-north --bbox 295000,6974000,305000,6984000
 
+# Override subcategory and flight height
+jobgen run --name jalasto-north --parcels 1641355689 --subcategory A2 --height 30
+
 # Flags
 --dry-run      Fetch and validate only — no output files written
 --offline      Cache-only; fail cleanly if tiles are missing (use after cache warm)
 --refresh      Force re-download of all touched tiles
+--buffer N     Override home keep-out buffer in metres
 ```
 
 ### Cache management
@@ -61,22 +66,30 @@ jobgen cache refresh --older-than 30
 
 ## Operator workflow (on the RC)
 
-1. Copy `<name>.kmz`, `<name>_dsm.tif`, and `<name>_homes.kml` to the RC via USB.
+1. Copy `<name>.kmz` and `<name>_homes.kml` to the RC via USB.
 2. Open DJI Pilot 2 → **Routes** → import `<name>.kmz`.
-3. In the route editor, set **Terrain Follow** and point the DSM field at `<name>_dsm.tif`.
-4. In the map view → **Custom layers** → import `<name>_homes.kml` to see the building pins.
-5. Verify the height readout over the field looks correct (~100 m AGL).
+   The DSM is embedded in the KMZ — Pilot 2 links it automatically.
+3. In the map view → **Custom layers** → import `<name>_homes.kml` to see building pins.
+4. Open `<name>_map.html` in a browser for a visual pre-flight review.
+5. Verify the height readout over the field looks correct.
 6. **Never fly a job with `flight_ready: false` or `needs_review: true` in the manifest
    without a human check** — these flags indicate home-distance, zone, or geometry issues.
+
+## Subcategory and keep-out distances
+
+| Subcategory | Requirement | Buffer used |
+|---|---|---|
+| **A2** (C2-labelled drone + A2 certificate) | ≥ flight height from people | Derived from `--height` or config |
+| **A3** (no C-label / C3 / C4) | ≥ 150 m from residential/commercial/industrial/recreational areas | 150 m fixed |
+
+The `operating_subcategory` in `config.toml` sets the default; override per-job with `--subcategory`.
 
 ## Safety notes
 
 - **120 m AGL limit** — enforced by the tool; `max_height_agl_m` in config.
-- **Home keep-out** — defaults to 150 m (A3 subcategory). Confirm the drone's
-  C-label marking and check Traficom guidance before changing to A2 rules.
-- **UAS zones** — checked against Traficom's published zone data automatically.
-  Temporary restrictions (NOTAMs) are NOT in this dataset — check NOTAMs manually
-  on the day of the flight.
+- **UAS zones** — checked automatically against Traficom's published zone data.
+  This is a static dump of permanent zones — temporary restrictions (NOTAMs) are
+  NOT included. Check NOTAMs manually on the day of the flight.
 - The generated job is a planning aid. The remote pilot remains responsible for
   compliance, airspace checks, and uninvolved-person separation on the day.
 
@@ -98,6 +111,8 @@ be provided locally.
 cd fixtures
 unzip -j reference_mission.kmz 'wpmz/template.kml' 'wpmz/waylines.wpml'
 ```
+
+See `fixtures/FIXTURE_NOTES.md` for annotated analysis of all M3E-specific values.
 
 ## Attribution (CC-BY 4.0)
 

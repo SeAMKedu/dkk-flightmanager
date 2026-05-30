@@ -10,11 +10,21 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 
-# M3E camera constants — confirm against spec sheet (open question 11).
-# These are used to derive flight height from target GSD.
+# M3M (Mavic 3 Multispectral) RGB camera constants — confirmed from image EXIF (2026-05-29).
+# Note: the drone model is M3M, not M3E; WPML drone enum 77 is correct for both.
+#
+# Focal length:  `Focal Length: 12.3 mm` in EXIF  →  M3M_FOCAL_LENGTH_MM = 12.3
+# Pixel pitch:   `Calibrated Focal Length: 3725.15 px` ÷ 12.3 mm = 3.301 μm  (≈ 3.3 μm)
+#                Consistent with 4/3" sensor (17.3 × 13.0 mm) ÷ 5280 px = 3.28 μm
+# Resolution:    `Exif Image Width/Height: 5280 × 3956`
+# RTK:           Drone carries RTK module (`Rtk Flag: 16`), but RTK fix is not always
+#                available on-site.  Without RTK, GNSS vertical noise (±several metres)
+#                swamps the N2000↔ellipsoid offset (~0.3 m in Finland), so leaving
+#                heights as-is (constraint 3) remains the correct default.  A future
+#                RTK-aware workflow could apply the offset when fix is confirmed.
 M3E_FOCAL_LENGTH_MM = 12.3
-M3E_PIXEL_PITCH_UM = 3.3
-M3E_IMAGE_WIDTH_PX = 5280
+M3E_PIXEL_PITCH_UM  = 3.3      # empirically 3.301 μm; difference < 0.03%, negligible
+M3E_IMAGE_WIDTH_PX  = 5280
 M3E_IMAGE_HEIGHT_PX = 3956
 
 
@@ -53,7 +63,11 @@ class FlightConfig(BaseModel):
 
 
 class HomeSafetyConfig(BaseModel):
-    operating_subcategory: Literal["A2", "A3"] = "A3"
+    operating_subcategory: Literal["A2", "A3"] = "A2"
+    # A2: buffer ≈ flight height AGL (EU reg: ≥ flight height from people).
+    #     The CLI --subcategory A2 flag auto-derives this from flight height.
+    #     Set explicitly here if running pipeline programmatically.
+    # A3: fixed 150 m from residential/commercial/industrial/recreational areas.
     home_buffer_m: float = Field(default=150.0, ge=0)
     # MML Maastotietokanta kohdeluokka codes treated as residential for keep-out.
     # Confirmed codes: 42210=asuinrakennus (point), 42211 (1-2 krs), 42212 (3+ krs).

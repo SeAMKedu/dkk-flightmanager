@@ -225,13 +225,25 @@ def _render(
   table {{ width: 100%; border-collapse: collapse; margin-bottom: 12px; }}
   td {{ padding: 3px 0; font-size: .85rem; color: #374151; }}
   td:first-child {{ color: #6b7280; width: 50%; }}
-  .legend {{ margin-top: 12px; font-size: .82rem; }}
-  .legend-item {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; }}
-  .dot {{ width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }}
-  .swatch {{ width: 20px; height: 12px; flex-shrink: 0; border-radius: 2px; }}
-  .toggles {{ margin-top: 14px; border-top: 1px solid #e5e7eb; padding-top: 10px; font-size: .82rem; }}
-  .toggles label {{ display: flex; align-items: center; gap: 8px; margin: 5px 0; cursor: pointer; }}
-  .toggles input[type=checkbox] {{ width: 15px; height: 15px; cursor: pointer; }}
+  .legend {{ margin-top: 12px; font-size: .82rem; border-top: 1px solid #e5e7eb; padding-top: 10px; }}
+  .leg-row {{
+    display: grid;
+    grid-template-columns: 22px 24px 1fr;
+    align-items: center;
+    margin: 5px 0;
+  }}
+  .eye-btn {{
+    background: none; border: none; cursor: pointer; padding: 0;
+    width: 22px; display: flex; align-items: center; justify-content: center;
+    color: #374151; transition: color .15s;
+  }}
+  .eye-btn .eye-slash {{ display: none; }}
+  .eye-btn.off {{ color: #9ca3af; }}
+  .eye-btn.off .eye-open {{ display: none; }}
+  .eye-btn.off .eye-slash {{ display: block; }}
+  .leg-icon {{ display: flex; justify-content: center; align-items: center; }}
+  .dot {{ width: 12px; height: 12px; border-radius: 50%; }}
+  .swatch {{ width: 20px; height: 11px; border-radius: 2px; }}
   .reasons {{ background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px;
               padding: 8px; font-size: .8rem; margin-top: 10px; }}
   .reasons ul {{ margin: 4px 0 0; padding-left: 16px; }}
@@ -245,37 +257,38 @@ def _render(
   <div class="status">{status_text}</div>
   <table>{rows_html}</table>
   <div class="legend">
-    <div class="legend-item">
-      <div class="swatch" style="background:none;border:1.5px dashed #6b7280;"></div>
-      Original parcel
+    <div class="leg-row">
+      <button class="eye-btn" id="eye-parcel" title="Toggle parcel outline"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <div class="leg-icon"><div class="swatch" style="background:none;border:1.5px dashed #6b7280;"></div></div>
+      <span>Original parcel</span>
     </div>
-    <div class="legend-item">
-      <div class="swatch" style="background:#4ade80;opacity:.5;border:2px solid #16a34a;"></div>
-      Survey polygon
+    <div class="leg-row">
+      <button class="eye-btn" id="eye-survey" title="Toggle survey polygon"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <div class="leg-icon"><div class="swatch" style="background:#4ade80;opacity:.6;border:2px solid #16a34a;"></div></div>
+      <span>Survey polygon</span>
     </div>
-    <div class="legend-item">
-      <div class="dot" style="background:{_RED};"></div>
-      Keep-out building (red pin)
+    <div class="leg-row">
+      <button class="eye-btn" id="eye-yellow-c" title="Toggle 100 m circles"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <div class="leg-icon"><div class="swatch" style="background:#fef08a;opacity:.7;border:1px dashed #ca8a04;"></div></div>
+      <span>100 m radius</span>
     </div>
-    <div class="legend-item">
-      <div class="dot" style="background:{_YELLOW};"></div>
-      Nearby building (yellow pin)
+    <div class="leg-row">
+      <button class="eye-btn" id="eye-red-c" title="Toggle keep-out circles"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <div class="leg-icon"><div class="swatch" style="background:#fca5a5;opacity:.7;border:1px dashed #dc2626;"></div></div>
+      <span>{home_buffer_m:.0f} m keep-out</span>
     </div>
-    <div class="legend-item">
-      <div class="swatch" style="background:#fef08a;opacity:.6;border:1px dashed #ca8a04;"></div>
-      100 m radius
+    <div class="leg-row">
+      <div></div>
+      <div class="leg-icon"><div class="dot" style="background:{_RED};"></div></div>
+      <span>Keep-out building</span>
     </div>
-    <div class="legend-item">
-      <div class="swatch" style="background:#fca5a5;opacity:.6;border:1px dashed #dc2626;"></div>
-      {home_buffer_m:.0f} m keep-out radius
+    <div class="leg-row">
+      <div></div>
+      <div class="leg-icon"><div class="dot" style="background:{_YELLOW};"></div></div>
+      <span>Nearby building</span>
     </div>
   </div>
   {reasons_html}
-  <div class="toggles">
-    <label><input type="checkbox" id="tog-parcel" checked> Original parcel outline</label>
-    <label><input type="checkbox" id="tog-survey" checked> Survey polygon</label>
-    <label><input type="checkbox" id="tog-circles" checked> Distance circles</label>
-  </div>
 </div>
 <script>
 var surveyData = {survey_geojson};
@@ -291,12 +304,16 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
 
 map.invalidateSize();
 
+// Pins pane sits above the default overlayPane (z 400) so dots always render on top
+map.createPane('pinsPane');
+map.getPane('pinsPane').style.zIndex = 450;
+
 // Drawing order (bottom to top):
 //   1. survey polygon
 //   2. yellow 100 m circles (all buildings)
 //   3. red keep-out circles (all buildings)
 //   4. original parcel outline
-//   5. pin markers
+//   5. pin markers (pinsPane, z 450)
 
 var surveyGroup  = L.layerGroup().addTo(map);
 var yellowGroup  = L.layerGroup().addTo(map);
@@ -338,11 +355,12 @@ parcels.forEach(function(f) {{
   }}).addTo(parcelGroup);
 }});
 
-// 5. Pin markers — always on top, added directly to map
+// 5. Pin markers — always on top via pinsPane
 pins.forEach(function(p) {{
   L.circleMarker([p.lat, p.lon], {{
     radius: 7, color: '#fff', weight: 1.5,
-    fillColor: p.colour, fillOpacity: 0.9
+    fillColor: p.colour, fillOpacity: 0.9,
+    pane: 'pinsPane'
   }}).bindPopup(p.label).addTo(map);
 }});
 
@@ -353,21 +371,24 @@ zones.forEach(function(z) {{
   }}).bindPopup('<b>' + z.name + '</b><br>' + z.type).addTo(map);
 }});
 
-// Toggle checkboxes — circles toggle controls both yellow and red groups
-function tog(id, onFn, offFn) {{
-  document.getElementById(id).addEventListener('change', function() {{
-    this.checked ? onFn() : offFn();
+// Eye-button toggles — click cycles visible↔hidden, 'off' class = hidden
+function eyeTog(btnId, showFn, hideFn) {{
+  document.getElementById(btnId).addEventListener('click', function() {{
+    if (this.classList.toggle('off')) {{ hideFn(); }} else {{ showFn(); }}
   }});
 }}
-tog('tog-survey',
-  function() {{ surveyGroup.addTo(map); }},
-  function() {{ map.removeLayer(surveyGroup); }});
-tog('tog-circles',
-  function() {{ yellowGroup.addTo(map); redGroup.addTo(map); }},
-  function() {{ map.removeLayer(yellowGroup); map.removeLayer(redGroup); }});
-tog('tog-parcel',
+eyeTog('eye-parcel',
   function() {{ parcelGroup.addTo(map); }},
   function() {{ map.removeLayer(parcelGroup); }});
+eyeTog('eye-survey',
+  function() {{ surveyGroup.addTo(map); }},
+  function() {{ map.removeLayer(surveyGroup); }});
+eyeTog('eye-yellow-c',
+  function() {{ yellowGroup.addTo(map); }},
+  function() {{ map.removeLayer(yellowGroup); }});
+eyeTog('eye-red-c',
+  function() {{ redGroup.addTo(map); }},
+  function() {{ map.removeLayer(redGroup); }});
 
 </script>
 </body>

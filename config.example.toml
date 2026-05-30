@@ -22,12 +22,16 @@ finish_action = "goHome"      # goHome | hover | autoLand
 rc_lost_action = "goBack"
 
 [home_safety]
-# EU Open-category subcategory. Determines default home_buffer_m.
-# A3 (no C-label / C3 / C4): 150 m from residential/commercial/industrial/recreational areas.
-# A2 (C2 label + A2 certificate): height-based distance from people; built-up areas not subject to 150 m.
+# EU Open-category subcategory.
+# A2 (C2 label + A2 certificate): buffer ≈ flight height AGL from people.
+#   Use --subcategory A2 on the CLI to auto-derive buffer from flight height,
+#   or set home_buffer_m explicitly below to match your planned altitude.
+# A3 (no C-label / C3 / C4): fixed 150 m from residential/commercial/industrial/recreational areas.
 # Confirm against the drone's actual C-label marking and current Traficom guidance.
-operating_subcategory = "A3"  # conservative default
-home_buffer_m = 150
+operating_subcategory = "A2"
+# For A2: set to approximately your planned flight height (e.g. 100 for 100 m AGL).
+# For A3: use 150.
+home_buffer_m = 100
 # MML Maastotietokanta kohdeluokka codes for residential buildings (keep-out for A2 + A3).
 # Confirmed: 42210=asuinrakennus (point repr.), 42211 (1-2 floors), 42212 (3+ floors).
 residential_kohdeluokka = [42210, 42211, 42212]
