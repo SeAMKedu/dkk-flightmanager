@@ -278,6 +278,11 @@ def _render(
       <span>{home_buffer_m:.0f} m keep-out</span>
     </div>
     <div class="leg-row">
+      <button class="eye-btn" id="eye-vertices" title="Toggle polygon vertices"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <div class="leg-icon"><div class="dot" style="background:#93c5fd;border:1px solid #1d4ed8;"></div></div>
+      <span>Polygon vertices</span>
+    </div>
+    <div class="leg-row">
       <div></div>
       <div class="leg-icon"><div class="dot" style="background:{_RED};"></div></div>
       <span>Keep-out building</span>
@@ -313,13 +318,15 @@ map.getPane('pinsPane').style.zIndex = 450;
 //   2. yellow 100 m circles (all buildings)
 //   3. red keep-out circles (all buildings)
 //   4. original parcel outline
-//   5. pin markers (pinsPane, z 450)
+//   5. survey vertex dots
+//   6. pin markers (pinsPane, z 450)
 
 var surveyGroup  = L.layerGroup().addTo(map);
 var yellowGroup  = L.layerGroup().addTo(map);
 var redGroup     = L.layerGroup().addTo(map);
 var circleGroup  = L.layerGroup();  // virtual group for the toggle (controls both)
 var parcelGroup  = L.layerGroup().addTo(map);
+var vertexGroup  = L.layerGroup().addTo(map);
 
 // 1. Survey polygon
 var surveyLayer = L.geoJSON(surveyData, {{
@@ -355,7 +362,27 @@ parcels.forEach(function(f) {{
   }}).addTo(parcelGroup);
 }});
 
-// 5. Pin markers — always on top via pinsPane
+// 5. Survey polygon vertex dots
+(function() {{
+  var geom = surveyData.geometry;
+  var rings = geom.type === 'Polygon' ? geom.coordinates
+            : geom.type === 'MultiPolygon' ? geom.coordinates.reduce(function(a, poly) {{ return a.concat(poly); }}, [])
+            : [];
+  var seen = {{}};
+  rings.forEach(function(ring) {{
+    ring.forEach(function(coord) {{
+      var key = coord[0].toFixed(7) + ',' + coord[1].toFixed(7);
+      if (seen[key]) return;
+      seen[key] = true;
+      L.circleMarker([coord[1], coord[0]], {{
+        radius: 3, color: '#1d4ed8', weight: 1,
+        fillColor: '#93c5fd', fillOpacity: 0.9, interactive: false
+      }}).addTo(vertexGroup);
+    }});
+  }});
+}})();
+
+// 6. Pin markers — always on top via pinsPane
 pins.forEach(function(p) {{
   L.circleMarker([p.lat, p.lon], {{
     radius: 7, color: '#fff', weight: 1.5,
@@ -389,6 +416,9 @@ eyeTog('eye-yellow-c',
 eyeTog('eye-red-c',
   function() {{ redGroup.addTo(map); }},
   function() {{ map.removeLayer(redGroup); }});
+eyeTog('eye-vertices',
+  function() {{ vertexGroup.addTo(map); }},
+  function() {{ map.removeLayer(vertexGroup); }});
 
 </script>
 </body>
