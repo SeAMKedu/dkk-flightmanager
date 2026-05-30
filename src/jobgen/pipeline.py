@@ -32,6 +32,7 @@ from jobgen.elevation import tile_fetcher as dem_fetcher, validate_tile
 from jobgen.geometry import process_survey, reproject_to_4326
 from jobgen.logging_setup import setup_logging
 from jobgen.parcels import fetch_parcels
+from jobgen.properties import fetch_properties
 from jobgen.raster import build_site_dsm
 from jobgen.preview import build_map_preview
 from jobgen.wpml import build_homes_kml, build_kmz
@@ -52,6 +53,10 @@ _CC_BY = {
         "Contains data from Ruokavirasto (Finnish Food Authority), "
         "Peltolohkorekisteri, retrieved {date}."
     ),
+    "properties": (
+        "Contains data from the National Land Survey of Finland, "
+        "Cadastral Index Map, retrieved {date}."
+    ),
 }
 
 
@@ -65,13 +70,16 @@ def run_job(
     config: AppConfig,
     *,
     parcel_ids: list[str] | None = None,
+    property_ids: list[str] | None = None,
     bbox_3067: tuple[float, float, float, float] | None = None,
     dry_run: bool = False,
     refresh: bool = False,
 ) -> dict:
     """Run one mapping job and return the manifest dict.
 
-    Exactly one of *parcel_ids* or *bbox_3067* must be provided.
+    At least one of *parcel_ids*, *property_ids*, or *bbox_3067* must be
+    provided. *parcel_ids* and *property_ids* may be combined — their
+    geometries are unioned before processing.
     If *dry_run* is True, all fetching and validation runs but no output
     files are written.
 
@@ -89,19 +97,47 @@ def run_job(
     parcel_fetch_ts = datetime.now(timezone.utc).isoformat()
 
     # ------------------------------------------------------------------
-    # 1. Parcels
+    # 1. Area inputs — parcels and/or properties
     # ------------------------------------------------------------------
-    log.info("Fetching parcels …")
-    parcels = fetch_parcels(
-        parcel_ids=parcel_ids,
-        bbox=bbox_3067,
-        config=config.parcels,
-    )
-    if not parcels:
-        raise ValueError("No parcels returned — check parcel IDs or bbox.")
+    input_geoms: list = []
+    parcel_fetch_ts = datetime.now(timezone.utc).isoformat()
+    parcel_ids_used: list[str] = []
+    property_ids_used: list[str] = []
+    property_display_ids_used: list[str] = []
+    property_fetch_ts: str | None = None
 
-    parcel_ids_used = [p.parcel_id for p in parcels]
-    log.info("%d parcel(s) fetched: %s", len(parcels), parcel_ids_used)
+    if parcel_ids is not None or bbox_3067 is not None:
+        log.info("Fetching parcels …")
+        parcels = fetch_parcels(
+            parcel_ids=parcel_ids,
+            bbox=bbox_3067,
+            config=config.parcels,
+        )
+        if not parcels:
+            raise ValueError("No parcels returned — check parcel IDs or bbox.")
+        parcel_ids_used = [p.parcel_id for p in parcels]
+        log.info("%d parcel(s) fetched: %s", len(parcels), parcel_ids_used)
+        input_geoms.extend(parcels)
+
+    if property_ids is not None:
+        property_fetch_ts = datetime.now(timezone.utc).isoformat()
+        log.info("Fetching kiinteistöt …")
+        props = fetch_properties(
+            property_ids,
+            api_key,
+            timeout_s=config.properties.timeout_s,
+            page_size=config.properties.page_size,
+        )
+        property_ids_used = [p.property_id for p in props]
+        property_display_ids_used = [p.display_id for p in props]
+        log.info(
+            "%d kiinteistö(t) fetched: %s",
+            len(props), property_display_ids_used,
+        )
+        input_geoms.extend(props)
+
+    if not input_geoms:
+        raise ValueError("No input geometries — provide --parcels, --properties, or --bbox.")
 
     # ------------------------------------------------------------------
     # 2. Geometry — merge, gap-fill, edge buffer, keep-out, policy, reproject
@@ -112,7 +148,7 @@ def run_job(
     # Use a preliminary merge bbox + buffer to warm buildings cache.
     from shapely.ops import unary_union
     from shapely import make_valid
-    prelim = make_valid(unary_union([p.geometry for p in parcels]))
+    prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
     prelim_bounds = prelim.bounds  # xmin, ymin, xmax, ymax in EPSG:3067
 
     buf = config.home_safety.home_buffer_m
@@ -143,7 +179,7 @@ def run_job(
     # ------------------------------------------------------------------
     pieces_count = 1
     survey_geom = process_survey(
-        parcels, buildings, config.home_safety, config.polygon
+        input_geoms, buildings, config.home_safety, config.polygon
     )
     pieces_count = len(survey_geom.pieces_3067)
 
@@ -251,12 +287,30 @@ def run_job(
         "run_timestamp": run_ts,
         "dry_run":       dry_run,
 
-        "parcels": {
-            "parcel_ids":      parcel_ids_used,
-            "lpis_year":       config.parcels.lpis_year,
-            "fetched_at":      parcel_fetch_ts,
-            "attribution":     _CC_BY["parcels"].format(date=parcel_fetch_ts[:10]),
-        },
+        **(
+            {
+                "parcels": {
+                    "parcel_ids":  parcel_ids_used,
+                    "lpis_year":   config.parcels.lpis_year,
+                    "fetched_at":  parcel_fetch_ts,
+                    "attribution": _CC_BY["parcels"].format(date=parcel_fetch_ts[:10]),
+                }
+            }
+            if parcel_ids_used else {}
+        ),
+        **(
+            {
+                "properties": {
+                    "property_ids":         property_ids_used,
+                    "property_display_ids": property_display_ids_used,
+                    "fetched_at":           property_fetch_ts,
+                    "attribution":          _CC_BY["properties"].format(
+                        date=(property_fetch_ts or "")[:10]
+                    ),
+                }
+            }
+            if property_ids_used else {}
+        ),
 
         "geometry": {
             "original_area_ha": round(survey_geom.original_area_ha, 4),
@@ -345,7 +399,7 @@ def run_job(
     }
 
     if not dry_run:
-        parcels_4326 = [reproject_to_4326(p.geometry) for p in parcels]
+        parcels_4326 = [reproject_to_4326(p.geometry) for p in input_geoms]
         build_map_preview(
             survey_geom.survey_4326,
             buildings_4326,

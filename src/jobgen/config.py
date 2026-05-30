@@ -134,6 +134,15 @@ class ParcelsConfig(BaseModel):
     timeout_s: int = Field(default=60, gt=0)
 
 
+class PropertiesConfig(BaseModel):
+    # MML kiinteistö OGC API Features (PalstanSijaintitiedot).
+    # Uses the same MML_API_KEY as elevation and buildings.
+    # OGC API page size (limit= parameter).
+    page_size: int = Field(default=100, gt=0)
+    # Request timeout in seconds.
+    timeout_s: int = Field(default=60, gt=0)
+
+
 class AppConfig(BaseModel):
     flight: FlightConfig
     home_safety: HomeSafetyConfig = Field(default_factory=HomeSafetyConfig)
@@ -141,6 +150,7 @@ class AppConfig(BaseModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     parcels: ParcelsConfig = Field(default_factory=ParcelsConfig)
+    properties: PropertiesConfig = Field(default_factory=PropertiesConfig)
     zones: ZonesConfig = Field(default_factory=ZonesConfig)
 
 

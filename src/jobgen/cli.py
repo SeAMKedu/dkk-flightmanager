@@ -42,6 +42,14 @@ def run_job_cmd(
         None, "--parcels-file",
         help="Path to a newline-separated file of parcel IDs.",
     ),
+    properties: Optional[str] = typer.Option(
+        None, "--properties", "-k",
+        help=(
+            "Comma-separated kiinteistötunnus values. "
+            "Accepts dash form (399-891-1-1) or 14-digit numeric (39989100010001). "
+            "May be combined with --parcels."
+        ),
+    ),
     bbox: Optional[str] = typer.Option(
         None, "--bbox",
         help="Bounding box as 'xmin,ymin,xmax,ymax' in EPSG:3067 metres.",
@@ -84,20 +92,29 @@ def run_job_cmd(
     from jobgen.pipeline import run_job
 
     # --- input validation ---
-    inputs = sum([
+    # --bbox is exclusive; --parcels / --parcels-file / --properties may be combined.
+    area_inputs = sum([
         parcels is not None,
         parcels_file is not None,
         bbox is not None,
+        properties is not None,
     ])
-    if inputs == 0:
-        typer.echo("Error: provide --parcels, --parcels-file, or --bbox.", err=True)
+    if area_inputs == 0:
+        typer.echo(
+            "Error: provide at least one of --parcels, --parcels-file, --properties, or --bbox.",
+            err=True,
+        )
         raise typer.Exit(1)
-    if inputs > 1:
-        typer.echo("Error: --parcels, --parcels-file, and --bbox are mutually exclusive.", err=True)
+    if bbox is not None and area_inputs > 1:
+        typer.echo("Error: --bbox cannot be combined with other area inputs.", err=True)
+        raise typer.Exit(1)
+    if parcels is not None and parcels_file is not None:
+        typer.echo("Error: --parcels and --parcels-file are mutually exclusive.", err=True)
         raise typer.Exit(1)
 
     # --- parse inputs ---
     parcel_ids: list[str] | None = None
+    property_ids: list[str] | None = None
     bbox_3067: tuple[float, float, float, float] | None = None
 
     if parcels:
@@ -109,6 +126,9 @@ def run_job_cmd(
             typer.echo(f"Error: parcels file not found: {p}", err=True)
             raise typer.Exit(1)
         parcel_ids = [line.strip() for line in p.read_text().splitlines() if line.strip()]
+
+    if properties:
+        property_ids = [k.strip() for k in properties.split(",") if k.strip()]
 
     if bbox:
         try:
@@ -167,6 +187,7 @@ def run_job_cmd(
         manifest = run_job(
             name, cfg,
             parcel_ids=parcel_ids,
+            property_ids=property_ids,
             bbox_3067=bbox_3067,
             dry_run=dry_run,
             refresh=refresh,
