@@ -9,9 +9,10 @@ KMZ internal structure (must match exactly):
       └── waylines.wpml  ← minimal stub; DJI Pilot 2 regenerates waypoints on import
 
 Height mode:
-  The reference fixture uses heightMode=relativeToStartPoint (flat AGL,
-  no terrain follow).  Generated missions use heightMode=followTerrain so
-  the flight height tracks the terrain surface via the attached DSM.
+  Both the reference fixture and generated missions use
+  heightMode=relativeToStartPoint.  Terrain-following is activated by
+  surfaceFollowModeEnable=1 and a dsmFile reference embedded in the KMZ —
+  DJI Pilot 2 uses these to apply the DSM on import.
 
 Battery budget:
   Estimated from polygon area + flight height + overlap using M3E sensor
@@ -467,9 +468,10 @@ def build_homes_kml(
 
     lines.append('</Document></kml>')
 
+    pin_count = sum(1 for b in buildings if b.kohdeluokka in shown_codes)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines), encoding="utf-8")
-    log.info("Homes KML written: %d pin(s) → %s", len(buildings), output_path)
+    log.info("Homes KML written: %d pin(s) → %s", pin_count, output_path)
     return output_path
 
 

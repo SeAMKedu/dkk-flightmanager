@@ -192,9 +192,6 @@ def run_job(
 
     all_review_reasons: list[str] = list(survey_geom.review_reasons)
 
-    if survey_geom.over_one_battery if hasattr(survey_geom, "over_one_battery") else False:
-        pass  # handled after KMZ build
-
     # ------------------------------------------------------------------
     # 5. Elevation tiles (cache) + site DSM
     # ------------------------------------------------------------------
@@ -354,11 +351,26 @@ def run_job(
         },
 
         "battery": (
-            {
-                "estimated_photo_count":    kmz_results[0].estimated_photo_count if kmz_results else None,
-                "estimated_flight_time_min": round(kmz_results[0].estimated_flight_time_min, 1) if kmz_results else None,
-                "over_one_battery":         any(r.over_one_battery for r in kmz_results),
-            }
+            (
+                {
+                    "estimated_photo_count":     kmz_results[0].estimated_photo_count,
+                    "estimated_flight_time_min": round(kmz_results[0].estimated_flight_time_min, 1),
+                    "over_one_battery":          kmz_results[0].over_one_battery,
+                }
+                if len(kmz_results) == 1
+                else {
+                    "pieces": [
+                        {
+                            "piece":                     i + 1,
+                            "estimated_photo_count":     r.estimated_photo_count,
+                            "estimated_flight_time_min": round(r.estimated_flight_time_min, 1),
+                            "over_one_battery":          r.over_one_battery,
+                        }
+                        for i, r in enumerate(kmz_results)
+                    ],
+                    "over_any_battery": any(r.over_one_battery for r in kmz_results),
+                }
+            )
             if kmz_results else {"note": "dry_run — not computed"}
         ),
 
