@@ -191,6 +191,15 @@ class HomeSafetyConfig(BaseModel):
     a3_additional_kohdeluokka: list[int] = Field(
         default_factory=lambda: [42220, 42221, 42222, 42230, 42231, 42232, 42240, 42241, 42242]
     )
+    # Distance from the survey polygon boundary used to include buildings in the
+    # homes KML.  None (default) means 2× home_buffer_m, which gives a visible
+    # safety margin around the keep-out zone.  Set explicitly to override.
+    home_include_buffer_m: float | None = Field(default=None, ge=0)
+    # Radius (m) of the yellow informational circle drawn around each building
+    # in the HTML map preview.  None (default) means 3× derived flight height
+    # (the "3:1 horizontal rule" often used for risk assessment).
+    # CLI: --preview-radius <metres>
+    preview_radius_m: float | None = Field(default=None, ge=0)
     offset_enabled: bool = True
     max_area_loss_pct: float = Field(default=30.0, ge=0, le=100)
 

@@ -152,11 +152,18 @@ def run_job(
     prelim_bounds = prelim.bounds  # xmin, ymin, xmax, ymax in EPSG:3067
 
     buf = config.home_safety.home_buffer_m
+    include_buf = (
+        config.home_safety.home_include_buffer_m
+        if config.home_safety.home_include_buffer_m is not None
+        else 2.0 * buf
+    )
+    # Preview yellow circle radius — resolved lazily below once flight_height_m is known
+    _preview_radius_cfg = config.home_safety.preview_radius_m
     buildings_bbox = (
-        prelim_bounds[0] - buf,
-        prelim_bounds[1] - buf,
-        prelim_bounds[2] + buf,
-        prelim_bounds[3] + buf,
+        prelim_bounds[0] - include_buf,
+        prelim_bounds[1] - include_buf,
+        prelim_bounds[2] + include_buf,
+        prelim_bounds[3] + include_buf,
     )
 
     # ------------------------------------------------------------------
@@ -212,6 +219,12 @@ def run_job(
     # ------------------------------------------------------------------
     drone_cfg = config.active_drone()
     flight_height_m = drone_cfg.height_from_gsd(config.flight.target_gsd_cm)
+    # 3× flight height is the "horizontal 3:1 rule" often used for risk assessment.
+    preview_radius_m = (
+        _preview_radius_cfg if _preview_radius_cfg is not None
+        else 3.0 * flight_height_m
+    )
+    log.info("Preview yellow-circle radius: %.0f m", preview_radius_m)
 
     log.info("Checking UAS restriction zones …")
     zone_result = check_zones(
@@ -252,19 +265,19 @@ def run_job(
     # ------------------------------------------------------------------
     # 8. Homes KML
     # ------------------------------------------------------------------
+    # Filter to buildings within include_buf of the closest point on the survey
+    # polygon. include_buf defaults to 2× keep-out buffer so houses just outside
+    # the keep-out zone still appear on the RC map.
+    nearby = [
+        b for b in buildings
+        if survey_geom.survey_3067.distance(b.geometry) <= include_buf
+    ]
+    log.info(
+        "%d of %d building(s) within %.0f m of survey polygon",
+        len(nearby), len(buildings), include_buf,
+    )
     if not dry_run:
         log.info("Writing homes KML …")
-        # Only pin buildings within home_buffer_m of the final survey polygon —
-        # the tile fetch area is larger, so many buildings are too far to matter.
-        buf = config.home_safety.home_buffer_m
-        nearby = [
-            b for b in buildings
-            if survey_geom.survey_3067.distance(b.geometry) <= buf
-        ]
-        log.info(
-            "%d of %d building(s) within %.0f m of survey polygon — writing to KML",
-            len(nearby), len(buildings), buf,
-        )
         # Buildings must be in EPSG:4326 for the KML pin coordinates
         buildings_4326 = [
             dataclasses.replace(b, geometry=reproject_to_4326(b.geometry))
@@ -362,15 +375,18 @@ def run_job(
         ),
 
         "home_safety": {
-            "operating_subcategory": config.home_safety.operating_subcategory,
-            "home_buffer_m":         config.home_safety.home_buffer_m,
-            "offset_applied":        survey_geom.offset_applied,
-            "min_dist_to_home_m":    (
+            "operating_subcategory":  config.home_safety.operating_subcategory,
+            "home_buffer_m":          config.home_safety.home_buffer_m,
+            "home_include_buffer_m":  round(include_buf, 1),
+            "preview_radius_m":       round(preview_radius_m, 1),
+            "offset_applied":         survey_geom.offset_applied,
+            "min_dist_to_home_m":     (
                 round(survey_geom.min_dist_to_home_m, 1)
                 if survey_geom.min_dist_to_home_m is not None else None
             ),
-            "buildings_fetched":     len(buildings),
-            "buildings_attribution": _CC_BY["buildings"].format(
+            "buildings_fetched":      len(buildings),
+            "buildings_in_homes_kml": len(nearby),
+            "buildings_attribution":  _CC_BY["buildings"].format(
                 date=bldg_prov.get("fetch_date_min", "")[:10]
             ),
         },
@@ -415,6 +431,7 @@ def run_job(
             parcels_4326=parcels_4326,
             zone_hits=zone_result.intersecting_zones,
             dsm_path=dsm_path,
+            preview_radius_m=preview_radius_m,
         )
 
         manifest_path = job_dir / "manifest.json"

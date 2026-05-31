@@ -90,12 +90,17 @@ def build_map_preview(
     parcels_4326: list[BaseGeometry] | None = None,
     zone_hits: list[ZoneHit] | None = None,
     dsm_path: Path | None = None,
+    preview_radius_m: float = 300.0,
 ) -> Path:
     """Write a Leaflet HTML map preview for the job.
 
     *buildings* should already be filtered to the relevant set (within
-    home_buffer_m of the survey polygon) and reprojected to EPSG:4326
+    home_include_buffer_m of the survey polygon) and reprojected to EPSG:4326
     before being passed here — the pipeline handles this before calling.
+
+    *preview_radius_m* sets the radius of the informational yellow circle drawn
+    around each building.  Defaults to 3× derived flight height (the "3:1
+    horizontal rule"); the pipeline passes the resolved value.
 
     Returns *output_path*.
     """
@@ -208,6 +213,7 @@ def build_map_preview(
         center_lat=center_lat,
         center_lon=center_lon,
         home_buffer_m=home_safety.home_buffer_m,
+        preview_radius_m=preview_radius_m,
         dsm_b64=dsm_b64,
         dsm_bounds=dsm_bounds,
     )
@@ -246,6 +252,7 @@ def _render(
     center_lat: float = 62.0,
     center_lon: float = 25.0,
     home_buffer_m: float = 150.0,
+    preview_radius_m: float = 300.0,
     dsm_b64: str | None = None,
     dsm_bounds: tuple[float, float, float, float] | None = None,
 ) -> str:
@@ -364,9 +371,9 @@ eyeTog('eye-dsm',
       <span>Polygon vertices</span>
     </div>
     <div class="leg-row">
-      <button class="eye-btn" id="eye-yellow-c" title="Toggle 100 m circles"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <button class="eye-btn" id="eye-yellow-c" title="Toggle {preview_radius_m:.0f} m circles"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
       <div class="leg-icon"><div class="swatch" style="background:#fef08a;opacity:.7;border:1px dashed #ca8a04;"></div></div>
-      <span>100 m radius</span>
+      <span>{preview_radius_m:.0f} m radius</span>
     </div>
     <div class="leg-row">
       <button class="eye-btn" id="eye-red-c" title="Toggle keep-out circles"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
@@ -406,8 +413,8 @@ map.getPane('pinsPane').style.zIndex = 450;
 
 // Drawing order (bottom to top):
 //   1. survey polygon
-//   2. yellow 100 m circles (all buildings)
-//   3. red keep-out circles (all buildings)
+//   2. yellow {preview_radius_m:.0f} m circles (keep-out buildings only)
+//   3. red keep-out circles (keep-out buildings only)
 //   4. original parcel outline
 //   5. survey vertex dots
 //   6. pin markers (pinsPane, z 450)
@@ -428,11 +435,11 @@ if (surveyLayer.getLayers().length > 0) {{
   map.fitBounds(surveyLayer.getBounds().pad(0.15));
 }}
 
-// 2. Yellow 100 m circles — keep-out buildings only
+// 2. Yellow {preview_radius_m:.0f} m circles — keep-out buildings only
 pins.forEach(function(p) {{
   if (!p.keepout) return;
   L.circle([p.lat, p.lon], {{
-    radius: 100, color: '#ca8a04', weight: 1,
+    radius: {preview_radius_m}, color: '#ca8a04', weight: 1,
     fillColor: '#fef08a', fillOpacity: 0.25, dashArray: '4 4'
   }}).addTo(yellowGroup);
 }});

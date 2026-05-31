@@ -62,6 +62,8 @@ jobgen run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 | `--height` | from config | Flight height in metres AGL (back-calculates GSD from the active drone's camera constants) |
 | `--subcategory` | from config | Operating subcategory: `A2` or `A3` |
 | `--buffer` | from config | Home keep-out buffer in metres (overrides the subcategory default) |
+| `--homes-distance` | 2× buffer | Max distance (m) from survey polygon to include a building in the homes KML — see below |
+| `--preview-radius` | 3× height | Radius (m) of the yellow informational circle in the HTML preview — see below |
 | `--simplify` | from config | Polygon vertex reduction — see below |
 | `--config`, `-c` | `config.toml` | Path to config file |
 | `--dry-run` | off | Fetch and validate only — no output files written |
@@ -176,6 +178,33 @@ jobgen cache refresh --older-than 30
 | **A3** (no C-label / C3 / C4) | ≥ 150 m from residential/commercial/industrial/recreational areas | 150 m fixed |
 
 The `operating_subcategory` in `config.toml` sets the default; override per-job with `--subcategory`.
+
+### Homes KML inclusion distance (`--homes-distance`)
+
+Buildings are included in `<name>_homes.kml` if their nearest point is within this distance of the survey polygon boundary. The default is 2× the keep-out buffer (e.g. 300 m for A3, 2× flight height for A2) — wide enough to capture buildings that sit just outside the keep-out zone but are still visible from the survey area.
+
+```bash
+# Include buildings up to 400 m from the polygon (A3 job)
+jobgen run --name pelto-2024 --parcels 5241087453 --subcategory A3 --homes-distance 400
+```
+
+Set `home_include_buffer_m` in `config.toml` under `[home_safety]` to change the default permanently.
+
+### Map preview yellow circle (`--preview-radius`)
+
+The HTML preview draws a yellow dashed circle around each keep-out building. This is a visual reference only — it does not affect the KMZ or homes KML.
+
+The default radius is **3× derived flight height** (the "3:1 horizontal rule" sometimes used for risk assessment). At 100 m AGL the default is 300 m.
+
+```bash
+# Use a fixed 200 m circle instead of the 3:1 default
+jobgen run --name pelto-2024 --parcels 5241087453 --preview-radius 200
+
+# Tighten to 1:1 (same as the keep-out buffer)
+jobgen run --name pelto-2024 --parcels 5241087453 --height 80 --subcategory A2 --preview-radius 80
+```
+
+Set `preview_radius_m` in `config.toml` under `[home_safety]` to change the default permanently.
 
 ## Safety notes
 

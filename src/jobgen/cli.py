@@ -107,6 +107,22 @@ def run_job_cmd(
             "For A3 defaults to 150 m."
         ),
     ),
+    homes_distance: Optional[float] = typer.Option(
+        None, "--homes-distance",
+        help=(
+            "Maximum distance (m) from the survey polygon to include a building in the "
+            "homes KML, measured to the nearest point on the polygon boundary. "
+            "Defaults to 2× the keep-out buffer (e.g. 300 m for A3, 2× flight height for A2)."
+        ),
+    ),
+    preview_radius: Optional[float] = typer.Option(
+        None, "--preview-radius",
+        help=(
+            "Radius (m) of the yellow informational circle drawn around each building "
+            "in the HTML map preview. Defaults to 3× flight height (the 3:1 horizontal rule). "
+            "E.g. at 100 m AGL the default is 300 m."
+        ),
+    ),
     simplify: Optional[str] = typer.Option(
         None, "--simplify",
         help=(
@@ -232,6 +248,14 @@ def run_job_cmd(
     if buffer is not None:
         cfg.home_safety.home_buffer_m = buffer
         typer.echo(f"Buffer override: {buffer:.0f} m")
+
+    if homes_distance is not None:
+        cfg.home_safety.home_include_buffer_m = homes_distance
+        typer.echo(f"Homes distance override: {homes_distance:.0f} m")
+
+    if preview_radius is not None:
+        cfg.home_safety.preview_radius_m = preview_radius
+        typer.echo(f"Preview radius override: {preview_radius:.0f} m")
 
     if simplify is not None:
         if simplify.lower() == "auto":

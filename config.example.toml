@@ -41,6 +41,20 @@ residential_kohdeluokka = [42210, 42211, 42212]
 a3_additional_kohdeluokka = [42220, 42221, 42222, 42230, 42231, 42232, 42240, 42241, 42242]
 offset_enabled = true         # subtract keep-out from survey polygon
 max_area_loss_pct = 30        # flag needs_review if more than this % lost to keep-out
+# Distance (m) from the survey polygon boundary used to decide which buildings
+# appear in the homes KML (measured to the nearest point on the boundary).
+# Omit or set to a large value to include all nearby buildings.
+# Default when unset: 2× home_buffer_m (e.g. 300 m for A3, 2× flight height for A2).
+# CLI: --homes-distance <metres>
+# home_include_buffer_m = 300
+
+# Radius (m) of the yellow informational circle drawn around each building in
+# the HTML map preview.  This is a visual reference only — it does not affect
+# the keep-out subtraction or the homes KML.
+# Default when unset: 3× derived flight height (the "3:1 horizontal rule").
+# At 100 m AGL the default is 300 m; at 80 m it is 240 m.
+# CLI: --preview-radius <metres>
+# preview_radius_m = 300
 
 [polygon]
 edge_buffer_m = 0             # optional outward edge buffer on merged parcel polygon
