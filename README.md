@@ -65,6 +65,8 @@ jobgen run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 | `--homes-distance` | 2× buffer | Max distance (m) from survey polygon to include a building in the homes KML — see below |
 | `--preview-radius` | 3× height | Radius (m) of the yellow informational circle in the HTML preview — see below |
 | `--simplify` | from config | Polygon vertex reduction — see below |
+| `--offset` | `0` | Expand (+) or contract (−) the survey polygon by this many metres relative to the parcel boundary — see below |
+| `--no-keepout` | off | Disable automatic keep-out subtraction around buildings — see below |
 | `--config`, `-c` | `config.toml` | Path to config file |
 | `--dry-run` | off | Fetch and validate only — no output files written |
 | `--offline` | off | Cache-only mode; fail cleanly on any cache miss |
@@ -97,6 +99,38 @@ auto_simplify_max_vertices = 50   # vertex target for simplify_mode = "auto"
 
 The vertex count after simplification is printed in the job summary and recorded
 in `manifest.json` under `geometry.survey_vertex_count`.
+
+### Survey polygon offset (`--offset`)
+
+Expand or contract the survey polygon relative to the parcel/property cadastral boundary, applied after gap-fill and before keep-out subtraction.
+
+```bash
+# Push the survey area 10 m outside the cadastral line
+jobgen run --name pelto-2024 --parcels 5241087453 --offset 10
+
+# Pull the survey area 5 m inside the cadastral line (field-edge margin)
+jobgen run --name pelto-2024 --parcels 5241087453 --offset -5
+```
+
+A negative offset can split the polygon or introduce holes at narrow corners — these are handled automatically by `hole_policy` / `multipart_policy` in the same way as keep-out subtraction results. If the contraction collapses the polygon entirely, the original geometry is preserved and a warning is logged.
+
+Set `survey_offset_m` in `config.toml` under `[polygon]` to apply a default offset to every job.
+
+### Disabling keep-out subtraction (`--no-keepout`)
+
+By default the tool subtracts a buffer around buildings from the survey polygon. This produces a clean separation from structures but adds arc vertices to the polygon boundary, which can make it harder to edit on the RC touch screen.
+
+```bash
+# Skip the keep-out subtraction
+jobgen run --name pelto-2024 --parcels 5241087453 --no-keepout
+```
+
+When `--no-keepout` is used:
+- The survey polygon is not cut back around buildings — it covers the full parcel area.
+- Buildings and their distance circles are still shown on the HTML preview map.
+- A prominent red warning is added to the preview panel reminding the operator to verify distances to all buildings manually.
+
+Use this only when you have the landowner's permission to fly close to buildings and have verified the required separation under your operating subcategory. Set `offset_enabled = false` in `config.toml` under `[home_safety]` to make it the default.
 
 ### Drone profiles (`--drone`)
 
