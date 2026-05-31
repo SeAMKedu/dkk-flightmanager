@@ -293,7 +293,7 @@ def _build_waylines_stub(cfg: FlightConfig, *, drone: DroneConfig | None = None)
     # Empty folder — Pilot 2 fills this from the template polygon
     folder = etree.SubElement(doc, f"{_KML}Folder")
     _tx(folder, f"{_WPML}templateId",        "0")
-    _tx(folder, f"{_WPML}executeHeightMode", "followTerrain")
+    _tx(folder, f"{_WPML}executeHeightMode", "WGS84")
     _tx(folder, f"{_WPML}waylineId",         "0")
     _tx(folder, f"{_WPML}distance",          "0")
     _tx(folder, f"{_WPML}duration",          "0")
