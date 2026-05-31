@@ -67,6 +67,7 @@ jobgen run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 | `--simplify` | from config | Polygon vertex reduction — see below |
 | `--offset` | `0` | Expand (+) or contract (−) the survey polygon by this many metres relative to the parcel boundary — see below |
 | `--no-keepout` | off | Disable automatic keep-out subtraction around buildings — see below |
+| `--open` | off | Open the HTML map preview in the default browser after the job completes |
 | `--config`, `-c` | `config.toml` | Path to config file |
 | `--dry-run` | off | Fetch and validate only — no output files written |
 | `--offline` | off | Cache-only mode; fail cleanly on any cache miss |

@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 import sys
+import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -152,6 +153,10 @@ def run_job_cmd(
             "A prominent warning is added to the HTML preview. "
             "Overrides home_safety.offset_enabled in config."
         ),
+    ),
+    open_map: bool = typer.Option(
+        False, "--open",
+        help="Open the HTML map preview in the default browser after the job completes.",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run",
@@ -325,6 +330,13 @@ def run_job_cmd(
         raise typer.Exit(1)
 
     _print_job_summary(manifest, dry_run)
+
+    if open_map and not dry_run:
+        map_path = Path(cfg.output.output_dir) / name / f"{name}_map.html"
+        if map_path.exists():
+            webbrowser.open(map_path.resolve().as_uri())
+        else:
+            typer.echo(f"Warning: map file not found at {map_path}", err=True)
 
     if manifest.get("needs_review") or not manifest.get("flight_ready"):
         raise typer.Exit(2)   # non-zero so scripts can detect review-needed
