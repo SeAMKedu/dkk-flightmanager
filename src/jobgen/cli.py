@@ -131,6 +131,16 @@ def run_job_cmd(
             "Overrides config simplify_mode / simplify_tolerance_m."
         ),
     ),
+    offset: Optional[float] = typer.Option(
+        None, "--offset",
+        help=(
+            "Expand (+) or contract (−) the survey polygon by this many metres relative to the "
+            "parcel/property boundary. Applied after gap-fill and before keep-out subtraction. "
+            "Positive values push the survey area outward; negative pull it inward. "
+            "Degenerate shapes from contraction are handled by hole_policy / multipart_policy. "
+            "Overrides polygon.survey_offset_m from config."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run",
         help="Fetch and validate only — skip writing output files.",
@@ -274,6 +284,11 @@ def run_job_cmd(
             except ValueError:
                 typer.echo("Error: --simplify must be 'auto' or a non-negative number.", err=True)
                 raise typer.Exit(1)
+
+    if offset is not None:
+        cfg.polygon.survey_offset_m = offset
+        direction = "outward" if offset > 0 else ("inward" if offset < 0 else "none")
+        typer.echo(f"Survey offset override: {offset:+.1f} m ({direction})")
 
     # --- run ---
     typer.echo(f"Starting job '{name}' …")

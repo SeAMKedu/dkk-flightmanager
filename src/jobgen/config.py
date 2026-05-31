@@ -211,6 +211,13 @@ class PolygonConfig(BaseModel):
     # Corners are rounded by up to gap_fill_m — acceptable for survey polygons.
     # Typical Finnish field cadastral gaps: 0–5 m.  Set 0 to disable.
     gap_fill_m: float = Field(default=0.0, ge=0)
+    # Expand (+) or contract (−) the survey polygon relative to the parcel
+    # boundary, applied after gap-fill and before keep-out subtraction.
+    # Positive: push the survey area outward beyond the cadastral line.
+    # Negative: pull it inward (useful to leave a margin inside the field edge).
+    # Degenerate shapes from inward contraction (holes, lost pieces) are handled
+    # by hole_policy / multipart_policy as normal.  Units: metres.
+    survey_offset_m: float = Field(default=0.0)
     # Vertex simplification.
     # simplify_mode="fixed": apply simplify_tolerance_m (Douglas-Peucker).
     # simplify_mode="auto":  binary-search for the largest tolerance that keeps

@@ -113,10 +113,13 @@ def process_survey(
     # 3. Optional outward edge buffer
     survey = _apply_edge_buffer(merged, polygon_cfg.edge_buffer_m)
 
-    # 3. Build keep-out zone
+    # 4. Optional survey offset (±metres relative to parcel boundary)
+    survey = _apply_survey_offset(survey, polygon_cfg.survey_offset_m)
+
+    # 5. Build keep-out zone
     keepout = _build_keepout(buildings, home_safety)
 
-    # 4. Apply keep-out (or measure distance)
+    # 6. Apply keep-out (or measure distance)
     survey, area_lost_pct, min_dist, offset_applied = _apply_keepout(
         survey, keepout, home_safety, original_area_ha
     )
@@ -135,19 +138,19 @@ def process_survey(
             min_dist, home_safety.home_buffer_m,
         )
 
-    # 5. Ensure validity
+    # 7. Ensure validity
     if not survey.is_valid:
         log.warning("Survey polygon is invalid after keep-out — applying make_valid")
         survey = make_valid(survey)
 
-    # 6. Enforce multipart / hole policy
+    # 8. Enforce multipart / hole policy
     pieces, policy_reasons = _enforce_policy(survey, polygon_cfg)
     review_reasons.extend(policy_reasons)
 
-    # 7. Simplify (applied per piece, after keep-out so edges stay accurate)
+    # 9. Simplify (applied per piece, after keep-out so edges stay accurate)
     pieces = _simplify_pieces(pieces, polygon_cfg)
 
-    # 8. Fix winding order (CCW exterior ring as GeoJSON / KML expects)
+    # 10. Fix winding order (CCW exterior ring as GeoJSON / KML expects)
     pieces = [_fix_winding(p) for p in pieces]
 
     # Reconstruct unified survey geometry from pieces
@@ -156,7 +159,7 @@ def process_survey(
     vertex_count = sum(_vertex_count(p) for p in pieces)
     log.info("Survey polygon vertex count after simplification: %d", vertex_count)
 
-    # 9. Reproject to 4326
+    # 11. Reproject to 4326
     survey_4326 = _reproject(survey)
     pieces_4326 = [_reproject(p) for p in pieces]
 
@@ -212,6 +215,30 @@ def _apply_edge_buffer(geom: BaseGeometry, buffer_m: float) -> BaseGeometry:
     buffered = geom.buffer(buffer_m)
     log.debug("Edge buffer +%.1f m applied", buffer_m)
     return buffered
+
+
+def _apply_survey_offset(geom: BaseGeometry, offset_m: float) -> BaseGeometry:
+    """Expand (positive) or contract (negative) the survey polygon by offset_m metres.
+
+    A negative offset can produce holes or split the polygon when corners pinch
+    together — those are passed on to the existing hole_policy / multipart_policy
+    steps which handle them as normal.  If the contraction collapses the entire
+    polygon, the original is returned and a warning is logged so the operator can
+    see what happened rather than silently losing the area.
+    """
+    if offset_m == 0:
+        return geom
+    result = geom.buffer(offset_m)
+    if result.is_empty:
+        log.warning(
+            "survey_offset_m=%.1f m collapsed the survey polygon — "
+            "offset ignored, returning original",
+            offset_m,
+        )
+        return geom
+    result = make_valid(result)
+    log.info("Survey offset %.1f m applied", offset_m)
+    return result
 
 
 def _build_keepout(

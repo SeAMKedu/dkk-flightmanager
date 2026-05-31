@@ -62,6 +62,14 @@ edge_buffer_m = 0             # optional outward edge buffer on merged parcel po
 # Bridges gaps up to 2×gap_fill_m wide; rounds corners by up to gap_fill_m.
 # Typical Finnish field cadastral gaps are 0–5 m.  0 = disabled.
 gap_fill_m = 3.0
+# Expand (+) or contract (−) the survey polygon relative to the parcel/property boundary.
+# Applied after gap-fill and before keep-out subtraction.  Units: metres.
+# Positive: push survey area beyond the cadastral line (e.g. +5 adds 5 m margin outside).
+# Negative: pull survey area inward (e.g. −10 leaves a 10 m margin inside the field edge).
+# Degenerate shapes from inward contraction (holes, split polygons) are handled by
+# hole_policy / multipart_policy as normal.  0 = disabled.
+# CLI: --offset <metres>
+survey_offset_m = 0
 # Vertex simplification — reduces vertex count for easier RC touch-screen editing.
 # simplify_mode = "fixed"  → apply simplify_tolerance_m (Douglas-Peucker).
 # simplify_mode = "auto"   → find the largest tolerance that keeps vertex count
