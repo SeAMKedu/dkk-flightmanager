@@ -432,6 +432,7 @@ def run_job(
             zone_hits=zone_result.intersecting_zones,
             dsm_path=dsm_path,
             preview_radius_m=preview_radius_m,
+            keepout_ignored=not config.home_safety.offset_enabled,
         )
 
         manifest_path = job_dir / "manifest.json"

@@ -141,6 +141,18 @@ def run_job_cmd(
             "Overrides polygon.survey_offset_m from config."
         ),
     ),
+    no_keepout: bool = typer.Option(
+        False, "--no-keepout",
+        help=(
+            "Disable automatic keep-out subtraction around buildings. "
+            "The survey polygon will not be cut back from buildings, reducing polygon complexity "
+            "(fewer vertices from buffer arcs) and allowing closer flight when you have the "
+            "landowner's permission. "
+            "Buildings are still shown on the preview map with their distance circles. "
+            "A prominent warning is added to the HTML preview. "
+            "Overrides home_safety.offset_enabled in config."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run",
         help="Fetch and validate only — skip writing output files.",
@@ -289,6 +301,13 @@ def run_job_cmd(
         cfg.polygon.survey_offset_m = offset
         direction = "outward" if offset > 0 else ("inward" if offset < 0 else "none")
         typer.echo(f"Survey offset override: {offset:+.1f} m ({direction})")
+
+    if no_keepout:
+        cfg.home_safety.offset_enabled = False
+        typer.echo(
+            "⚠  Keep-out disabled — buildings will NOT be subtracted from the survey polygon. "
+            "Verify distances to all buildings manually before flying."
+        )
 
     # --- run ---
     typer.echo(f"Starting job '{name}' …")

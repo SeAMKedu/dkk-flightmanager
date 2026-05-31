@@ -91,6 +91,7 @@ def build_map_preview(
     zone_hits: list[ZoneHit] | None = None,
     dsm_path: Path | None = None,
     preview_radius_m: float = 300.0,
+    keepout_ignored: bool = False,
 ) -> Path:
     """Write a Leaflet HTML map preview for the job.
 
@@ -216,6 +217,7 @@ def build_map_preview(
         preview_radius_m=preview_radius_m,
         dsm_b64=dsm_b64,
         dsm_bounds=dsm_bounds,
+        keepout_ignored=keepout_ignored,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -255,6 +257,7 @@ def _render(
     preview_radius_m: float = 300.0,
     dsm_b64: str | None = None,
     dsm_bounds: tuple[float, float, float, float] | None = None,
+    keepout_ignored: bool = False,
 ) -> str:
     rows_html = "".join(
         f"<tr><td>{k}</td><td><b>{v}</b></td></tr>"
@@ -264,6 +267,17 @@ def _render(
     if review_reasons:
         items = "".join(f"<li>{r}</li>" for r in review_reasons)
         reasons_html = f'<div class="reasons"><b>Review reasons:</b><ul>{items}</ul></div>'
+    keepout_notice_html = ""
+    if keepout_ignored:
+        keepout_notice_html = (
+            '<div class="keepout-notice">'
+            "<b>⚠ Keep-out subtraction disabled</b>"
+            "<p>Building buffers have NOT been applied to the survey polygon. "
+            "Verify distances to all marked buildings manually before flying — "
+            "confirm you have the landowner's permission and that you meet the "
+            "required separation under your operating subcategory.</p>"
+            "</div>"
+        )
 
     # DSM overlay — conditional snippets so the template stays clean
     if dsm_b64 and dsm_bounds:
@@ -345,6 +359,9 @@ eyeTog('eye-dsm',
               padding: 8px; font-size: .8rem; margin-top: 10px; }}
   .reasons ul {{ margin: 4px 0 0; padding-left: 16px; }}
   .reasons li {{ margin: 2px 0; }}
+  .keepout-notice {{ background: #fee2e2; border: 1px solid #dc2626; border-radius: 4px;
+                     padding: 8px; font-size: .8rem; margin-top: 10px; }}
+  .keepout-notice p {{ margin: 4px 0 0; }}
 </style>
 </head>
 <body>
@@ -392,6 +409,7 @@ eyeTog('eye-dsm',
     </div>
   </div>
   {reasons_html}
+  {keepout_notice_html}
 </div>
 <script>
 var surveyData = {survey_geojson};
