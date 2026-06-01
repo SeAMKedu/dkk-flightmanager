@@ -197,8 +197,12 @@ def run_job(
     # ------------------------------------------------------------------
     log.info("Fetching DEM tiles …")
     d_fetcher = dem_fetcher(api_key)
+    _dem_margin = config.flight.dsm_margin_m
+    _bx0, _by0, _bx1, _by1 = survey_geom.bbox_3067
+    _dem_bbox = (_bx0 - _dem_margin, _by0 - _dem_margin,
+                 _bx1 + _dem_margin, _by1 + _dem_margin)
     d_records = get_tiles(
-        "dem", survey_geom.bbox_3067, d_fetcher, config.cache, refresh=refresh
+        "dem", _dem_bbox, d_fetcher, config.cache, refresh=refresh
     )
     tile_paths = [r.path for r in d_records]
 
