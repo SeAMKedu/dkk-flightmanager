@@ -179,6 +179,9 @@ def run_job_cmd(
     from jobgen.config import load_config
     from jobgen.pipeline import run_job
 
+    # --- preflight checks ---
+    _require_key()
+
     # --- input validation ---
     # --bbox is exclusive; --parcels / --parcels-file / --properties may be combined.
     area_inputs = sum([
