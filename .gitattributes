@@ -1,0 +1,6 @@
+fixtures/*.kmz binary
+fixtures/*.tif binary
+cache/**/*.tif binary
+cache/**/*.gpkg binary
+output/**/*.kmz binary
+output/**/*.tif binary

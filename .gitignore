@@ -1,10 +1,21 @@
+# Claude Code and planning docs (local only)
+CLAUDE.md
+mavic3e-job-generator-plan.md
+
 # Secrets and local config
 config.toml
 .env
+.env.*
+!.env.example
 
 # Output and cache
 cache/
 output/
+
+# Fixture and reference mission data (kept local only)
+fixtures/*.md
+fixtures/*.kml
+fixtures/*.wpml
 
 # Raster artifacts
 *.tif

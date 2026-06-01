@@ -1,0 +1,212 @@
+# dkk-jobgen configuration — copy to config.toml and adjust.
+# config.toml is gitignored. This example file is committed.
+# API keys go in environment variables (see .env.example), NOT here.
+
+[flight]
+# Target GSD is authoritative; flight height is derived from it.
+# GSD formula: height = gsd_cm * focal_length_mm / (pixel_pitch_um / 10)
+# M3E camera constants (confirm against spec): focal_length_mm=12.3, pixel_pitch_um=3.3, image 5280x3956
+target_gsd_cm = 3.0           # cm/px — derived height ≈ 111 m; tune to stay under ceiling
+max_height_agl_m = 110        # hard ceiling (legal limit 120 m; keep margin)
+agl_safety_margin_m = 10      # added to DSM min when checking obstacle clearance
+takeoff_security_height_m = 50
+transitional_speed_ms = 15    # m/s transit between waylines
+overlap_front_pct = 80
+overlap_side_pct = 70
+# Speed along mapping strips (m/s). Default matches the reference fixture (8.9 m/s).
+auto_flight_speed_ms = 8.9
+# Extra margin around the survey polygon in the terrain-follow DSM (metres).
+# Covers the RTH path and takeoff/landing area outside the survey polygon.
+dsm_margin_m = 300
+finish_action = "goHome"      # goHome | hover | autoLand
+rc_lost_action = "goBack"
+
+[home_safety]
+# EU Open-category subcategory.
+# A2 (C2 label + A2 certificate): buffer ≈ flight height AGL from people.
+#   Use --subcategory A2 on the CLI to auto-derive buffer from flight height,
+#   or set home_buffer_m explicitly below to match your planned altitude.
+# A3 (no C-label / C3 / C4): fixed 150 m from residential/commercial/industrial/recreational areas.
+# Confirm against the drone's actual C-label marking and current Traficom guidance.
+operating_subcategory = "A2"
+# For A2: set to approximately your planned flight height (e.g. 100 for 100 m AGL).
+# For A3: use 150.
+home_buffer_m = 100
+# MML Maastotietokanta kohdeluokka codes for residential buildings (keep-out for A2 + A3).
+# Confirmed: 42210=asuinrakennus (point repr.), 42211 (1-2 floors), 42212 (3+ floors).
+residential_kohdeluokka = [42210, 42211, 42212]
+# For A3: also keep 150 m from commercial, holiday, and industrial buildings.
+# 42220-42222=liike-/julkinen, 42230-42232=lomarakennus, 42240-42242=teollinen.
+# Agricultural/storage (42260-42262) excluded — they are part of the farm operation.
+a3_additional_kohdeluokka = [42220, 42221, 42222, 42230, 42231, 42232, 42240, 42241, 42242]
+# When false: keep-out zones are NOT subtracted from the survey polygon.
+# The polygon stays simpler (no arc vertices from building buffers), but you must
+# verify distances to buildings manually.  Use only with landowner permission.
+# A prominent warning is added to the HTML preview when this is false.
+# CLI: --no-keepout
+offset_enabled = true         # subtract keep-out from survey polygon
+max_area_loss_pct = 30        # flag needs_review if more than this % lost to keep-out
+# Distance (m) from the survey polygon boundary used to decide which buildings
+# appear in the homes KML (measured to the nearest point on the boundary).
+# Omit or set to a large value to include all nearby buildings.
+# Default when unset: 2× home_buffer_m (e.g. 300 m for A3, 2× flight height for A2).
+# CLI: --homes-distance <metres>
+# home_include_buffer_m = 300
+
+# Radius (m) of the yellow informational circle drawn around each building in
+# the HTML map preview.  This is a visual reference only — it does not affect
+# the keep-out subtraction or the homes KML.
+# Default when unset: 3× derived flight height (the "3:1 horizontal rule").
+# At 100 m AGL the default is 300 m; at 80 m it is 240 m.
+# CLI: --preview-radius <metres>
+# preview_radius_m = 300
+
+[polygon]
+edge_buffer_m = 0             # optional outward edge buffer on merged parcel polygon
+# Close small gaps between adjacent parcels (morphological closing: buffer +d then -d).
+# Bridges gaps up to 2×gap_fill_m wide; rounds corners by up to gap_fill_m.
+# Typical Finnish field cadastral gaps are 0–5 m.  0 = disabled.
+gap_fill_m = 3.0
+# Expand (+) or contract (−) the survey polygon relative to the parcel/property boundary.
+# Applied after gap-fill and before keep-out subtraction.  Units: metres.
+# Positive: push survey area beyond the cadastral line (e.g. +5 adds 5 m margin outside).
+# Negative: pull survey area inward (e.g. −10 leaves a 10 m margin inside the field edge).
+# Degenerate shapes from inward contraction (holes, split polygons) are handled by
+# hole_policy / multipart_policy as normal.  0 = disabled.
+# CLI: --offset <metres>
+survey_offset_m = 0
+# Vertex simplification — reduces vertex count for easier RC touch-screen editing.
+# simplify_mode = "fixed"  → apply simplify_tolerance_m (Douglas-Peucker).
+# simplify_mode = "auto"   → find the largest tolerance that keeps vertex count
+#                            ≤ auto_simplify_max_vertices (good default for field use).
+# Both modes intersect the result with the original polygon so the simplified
+# boundary never exits the original parcel boundary.
+# CLI: --simplify auto | --simplify <metres>
+simplify_mode = "fixed"
+simplify_tolerance_m = 1.0    # used when simplify_mode = "fixed"; 0 = disabled
+auto_simplify_max_vertices = 50  # target for simplify_mode = "auto"
+# What to do if difference() produces a MultiPolygon:
+#   split   → emit one KMZ per piece
+#   largest → keep only the largest piece
+#   review  → flag needs_review, skip artifact write
+multipart_policy = "review"
+# What to do if the result polygon has interior holes:
+#   review → flag needs_review, skip artifact write
+#   fill   → fill holes (use convex hull of ring)
+#   clip   → drop holed polygons, keep only exterior ring
+hole_policy = "fill"
+
+[cache]
+cache_dir = "cache"
+tile_size_m = 1000            # grid tile side length in EPSG:3067 metres
+dem_ttl_days = 365            # korkeusmalli_2m: near-static, long TTL
+buildings_ttl_days = 180      # maastotietokanta: slower-changing, shorter TTL
+offline = false               # true = cache-only; fail cleanly on cache miss
+
+[output]
+output_dir = "output"
+
+[zones]
+# Traficom publishes Finnish UAS zones at a confirmed open endpoint (no auth).
+# The tool fetches and caches this automatically — no manual download needed.
+# api_url is the default; override only if Traficom changes the URL.
+# api_url = "https://eservices.traficom.fi/Ilmatilasovellus/api/uas-reservations/json?lang=fi"
+#
+# Optional: point to a local file instead of the API (offline / custom zones).
+# zones_file = "data/uas_zones_override.geojson"
+#
+# Re-fetch if the local copy is older than this many days.
+# The source is a periodic static dump of permanent zones — 7–30 days is fine.
+# Temporary restrictions (NOTAMs) are not in this dataset; check those manually.
+max_age_days = 14
+
+[parcels]
+# Year of the Ruokavirasto LPIS layer to query (inspire:LC.LandCoverSurfaces.LPIS.<year>).
+# Defaults to current_year - 1 (the most recently completed and published season).
+# Override here if you need a specific year.
+# lpis_year = 2025
+page_size = 1000    # WFS page size; GeoServer cap is 1000
+timeout_s = 60
+
+# ---------------------------------------------------------------------------
+# Drone / payload profiles
+#
+# default_drone selects which [[drones]] entry is used when generating a job.
+# Override per-job with: jobgen run --drone <name>
+#
+# Built-in profiles are always available even without entries here.
+# Add [[drones]] entries to extend the list or override a built-in profile.
+#
+# WPML enum sources:
+#   M3E / M3M  (enum 77)  — confirmed from DJI Pilot 2 KMZ fixture (FIXTURE_NOTES.md)
+#   M300 RTK   (enum 60)  — confirmed from DJI Cloud-API-Doc (product-type-enumerate.md)
+#   M350 RTK   (enum 89)  — community-sourced; verify against a real M350 RTK KMZ export
+#
+# Pixel pitch sources:
+#   M3E / M3M  3.3 µm — confirmed from image EXIF (calibrated focal length method)
+#   Zenmuse P1 4.4 µm — from DJI P1 spec sheet
+# ---------------------------------------------------------------------------
+default_drone = "m3m"
+
+# Uncomment and edit to override a built-in profile or add a custom drone:
+#
+# [[drones]]
+# name        = "m3m"
+# label       = "DJI Mavic 3 Multispectral — RGB channel"
+# drone_enum  = 77
+# drone_sub_enum = 0
+# payload_enum   = 68
+# payload_sub_enum = 3
+# payload_position_index = 0
+# focal_length_mm = 12.3
+# pixel_pitch_um  = 3.3
+# image_width_px  = 5280
+# image_height_px = 3956
+# image_format    = "visable,narrow_band"
+# battery_minutes = 28.0
+#
+# [[drones]]
+# name        = "m3e"
+# label       = "DJI Mavic 3 Enterprise — RGB camera"
+# drone_enum  = 77
+# drone_sub_enum = 0
+# payload_enum   = 68
+# payload_sub_enum = 0
+# payload_position_index = 0
+# focal_length_mm = 12.3
+# pixel_pitch_um  = 3.3
+# image_width_px  = 5280
+# image_height_px = 3956
+# image_format    = "wide"
+# battery_minutes = 28.0
+#
+# [[drones]]
+# name        = "m300-p1-24"
+# label       = "DJI Matrice 300 RTK + Zenmuse P1 (24 mm)"
+# drone_enum  = 60
+# drone_sub_enum = 0
+# payload_enum   = 50
+# payload_sub_enum = 0    # 0=24mm, 1=35mm, 2=50mm
+# payload_position_index = 0
+# focal_length_mm = 24.0
+# pixel_pitch_um  = 4.4
+# image_width_px  = 8192
+# image_height_px = 5460
+# image_format    = "wide"
+# battery_minutes = 35.0
+#
+# [[drones]]
+# name        = "m350-p1-24"
+# label       = "DJI Matrice 350 RTK + Zenmuse P1 (24 mm)"
+# # NOTE: drone_enum 89 is community-sourced; verify before flying.
+# drone_enum  = 89
+# drone_sub_enum = 0
+# payload_enum   = 50
+# payload_sub_enum = 0
+# payload_position_index = 0
+# focal_length_mm = 24.0
+# pixel_pitch_um  = 4.4
+# image_width_px  = 8192
+# image_height_px = 5460
+# image_format    = "wide"
+# battery_minutes = 40.0
