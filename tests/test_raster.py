@@ -175,7 +175,10 @@ class TestMosaic:
         out = tmp_path / "out.tif"
         stats = build_site_dsm([tile], _SURVEY, out, margin_m=0)
         assert stats["crs"] == "EPSG:4326"
-        assert abs(stats["elevation_min_m"] - 75.0) < 1.0
+        # After FIN2023N2000 geoid correction, N2000 75.0 m → WGS-84 ~92-94 m
+        # at this location in Finland (undulation ≈ 17.9 m).
+        assert abs(stats["elevation_min_m"] - 75.0) > 10.0, "geoid correction not applied"
+        assert 88.0 < stats["elevation_min_m"] < 98.0
 
 
 # ---------------------------------------------------------------------------
