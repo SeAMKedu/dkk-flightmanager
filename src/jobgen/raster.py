@@ -4,14 +4,17 @@ Pipeline:
   1. Mosaic all EPSG:3067 DEM tiles covering the job area (rasterio.merge).
   2. Reproject mosaic 3067 → 4326 (rasterio.warp.reproject), cropped to the
      survey polygon bounding box + margin_m on all sides.
-  3. Write single-band float32 GeoTIFF, EPSG:4326, LZW-compressed.
+  3. Apply geoid correction: N2000 orthometric → WGS-84 ellipsoidal heights
+     using the FIN2023N2000 model (fi_nls_fin2023n2000.tif from cdn.proj.org).
+     The grid is auto-downloaded into pyproj's data directory on first use.
+     DJI Pilot 2 reads DSM heights as WGS-84 ellipsoidal; without this step
+     the drone flies ~18 m lower than commanded (the N2000/WGS-84 offset in
+     Finland).
+  4. Write single-band float32 GeoTIFF, EPSG:4326, LZW-compressed.
 
 No polygon masking is applied — the output is a clean rectangular raster.
 Outside the survey polygon the terrain data is still present and used by
 DJI for the RTH path and any takeoff/landing area outside the polygon.
-
-Vertical datum note: heights remain N2000 as delivered by MML.  No vertical
-datum transform is applied (see constraint 3 in the plan).
 """
 
 from __future__ import annotations
@@ -23,6 +26,10 @@ from pathlib import Path
 import numpy as np
 import rasterio
 import rasterio.merge
+import rasterio.transform as rio_transform
+from pyproj import Transformer
+from pyproj.datadir import get_data_dir
+from pyproj.sync import _download_resource_file, get_proj_endpoint
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.warp import Resampling, reproject
@@ -39,6 +46,61 @@ _SRC_CRS = CRS.from_epsg(3067)
 # Native resolution of korkeusmalli_2m
 _SRC_RES_M = 2.0
 
+_GEOID_GRID = "fi_nls_fin2023n2000.tif"
+
+# Inverse vgridshift: N2000 orthometric → WGS-84 ellipsoidal (adds undulation)
+_GEOID_PIPELINE = (
+    "+proj=pipeline"
+    " +step +proj=unitconvert +xy_in=deg +xy_out=rad"
+    f" +step +inv +proj=vgridshift +grids={_GEOID_GRID}"
+    " +step +proj=unitconvert +xy_in=rad +xy_out=deg"
+)
+
+
+def _ensure_geoid_grid() -> None:
+    """Download fi_nls_fin2023n2000.tif into pyproj's data dir if absent."""
+    dest = Path(get_data_dir()) / _GEOID_GRID
+    if dest.exists():
+        return
+    log.info("Geoid grid %s not found — downloading from cdn.proj.org...", _GEOID_GRID)
+    try:
+        _download_resource_file(
+            file_url=f"{get_proj_endpoint()}/{_GEOID_GRID}",
+            short_name=_GEOID_GRID,
+            directory=str(get_data_dir()),
+            verbose=False,
+        )
+        log.info("Geoid grid downloaded → %s", dest)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to download geoid grid {_GEOID_GRID} from cdn.proj.org: {exc}\n"
+            "Check network access or manually place the file in "
+            f"{get_data_dir()}"
+        ) from exc
+
+
+def _apply_geoid_correction(dst_data: np.ndarray, dst_transform) -> float:
+    """Convert N2000 heights to WGS-84 ellipsoidal in-place; return mean undulation."""
+    _, H, W = dst_data.shape
+    cols, rows = np.meshgrid(np.arange(W), np.arange(H))
+    lons, lats = rio_transform.xy(dst_transform, rows, cols)
+    lons = np.asarray(lons, dtype="float64").ravel()
+    lats = np.asarray(lats, dtype="float64").ravel()
+
+    band = dst_data[0]
+    valid_mask = band != _NODATA
+    h_in = band.ravel().astype("float64")
+
+    transformer = Transformer.from_pipeline(_GEOID_PIPELINE)
+    _, _, h_out = transformer.transform(lons, lats, h_in)
+    h_out = h_out.reshape(H, W).astype("float32")
+
+    # Preserve nodata; compute mean undulation over valid pixels only
+    h_out[~valid_mask] = _NODATA
+    undulation = float(np.mean(h_out[valid_mask] - band[valid_mask]))
+    dst_data[0] = h_out
+    return undulation
+
 
 def build_site_dsm(
     tile_paths: list[Path],
@@ -46,7 +108,7 @@ def build_site_dsm(
     output_path: Path,
     margin_m: int = 300,
 ) -> dict:
-    """Mosaic DEM tiles, reproject to EPSG:4326, crop to survey bbox + margin.
+    """Mosaic DEM tiles, reproject to EPSG:4326, apply geoid correction, write DSM.
 
     *tile_paths*  — cached EPSG:3067 DEM GeoTIFF paths from cache.get_tiles().
     *survey_4326* — final survey polygon in EPSG:4326 (used for bbox crop).
@@ -69,6 +131,8 @@ def build_site_dsm(
     missing = [p for p in tile_paths if not p.exists()]
     if missing:
         raise FileNotFoundError(f"Missing DEM tile(s): {missing}")
+
+    _ensure_geoid_grid()
 
     log.info("Building site DSM from %d tile(s) → %s", len(tile_paths), output_path)
 
@@ -134,6 +198,14 @@ def build_site_dsm(
     )
 
     # ------------------------------------------------------------------
+    # Step 3.5: N2000 → WGS-84 ellipsoidal geoid correction (FIN2023N2000)
+    # ------------------------------------------------------------------
+    undulation = _apply_geoid_correction(dst_data, dst_transform)
+    log.info(
+        "Geoid correction applied (FIN2023N2000): mean undulation %.3f m", undulation
+    )
+
+    # ------------------------------------------------------------------
     # Step 4: write output
     # ------------------------------------------------------------------
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +228,7 @@ def build_site_dsm(
 
     stats = _stats(output_path)
     log.info(
-        "DSM stats: %dx%d px, elevation %.1f–%.1f m, margin %d m",
+        "DSM stats: %dx%d px, elevation %.1f–%.1f m (WGS-84 ellipsoidal), margin %d m",
         stats["shape"][0], stats["shape"][1],
         stats["elevation_min_m"], stats["elevation_max_m"],
         margin_m,
