@@ -27,6 +27,23 @@ Obtain one at https://www.maanmittauslaitos.fi/rajapinnat/api-avaimen-ohje
 
 Ruokavirasto parcel data is open and requires no key.
 
+### API key — `.env` auto-loading
+
+`jobgen` automatically reads a `.env` file on startup (via `python-dotenv`), so
+you only need to set `MML_API_KEY` once:
+
+```ini
+# .env
+MML_API_KEY=your_key_here
+```
+
+The tool walks up from the current working directory until it finds a `.env` file,
+so placing it in the project root covers all invocations. If no `.env` file exists
+the startup is a silent no-op — no error is raised.
+
+Environment variables already set in the shell always take precedence over the
+`.env` file, so `MML_API_KEY=xxx jobgen run ...` still works as before.
+
 ## Usage
 
 ### Specifying the survey area

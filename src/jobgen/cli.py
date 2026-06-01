@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+
+from dotenv import load_dotenv
+
+load_dotenv()  # reads .env (or .env.local) from cwd upward; no-op if not found
 import sqlite3
 import sys
 import webbrowser
