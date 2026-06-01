@@ -1,4 +1,4 @@
-# mavic3e-jobgen configuration — copy to config.toml and adjust.
+# dkk-jobgen configuration — copy to config.toml and adjust.
 # config.toml is gitignored. This example file is committed.
 # API keys go in environment variables (see .env.example), NOT here.
 

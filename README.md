@@ -1,6 +1,6 @@
-# mavic3e-jobgen
+# dkk-jobgen
 
-DJI Mavic 3 Enterprise terrain-following mapping job generator for Finnish field parcels.
+DJI terrain-following mapping job generator for Finnish field parcels.
 
 Given Ruokavirasto *peruslohko* parcel IDs, MML *kiinteistötunnus* property IDs, or a
 bounding box, produces a ready-to-fly DJI Pilot 2 mapping job:
@@ -16,33 +16,53 @@ bounding box, produces a ready-to-fly DJI Pilot 2 mapping job:
 
 ## Setup
 
+### 1 — Create and activate a virtual environment
+
+A virtual environment keeps the tool and its dependencies isolated from your system Python. You only do this once.
+
 ```bash
-cp config.example.toml config.toml   # edit flight params and buffer distances
-cp .env.example .env                  # add your MML_API_KEY
+python3 -m venv .venv        # create the virtual environment in .venv/
+source .venv/bin/activate    # activate it (your prompt will change to show (.venv))
+```
+
+> **Every time you open a new terminal** you need to activate again before using `jobgen`:
+> ```bash
+> source .venv/bin/activate
+> ```
+>
+> Alternatively, you can call the script directly without activating — useful in shell scripts or if you prefer not to activate:
+> ```bash
+> .venv/bin/jobgen run --name my-job --parcels 5241087453
+> ```
+
+### 2 — Install the tool
+
+With the virtual environment active, install `jobgen` and its dependencies:
+
+```bash
 pip install -e ".[dev]"
 ```
 
-The MML API key (free) is required for elevation and building data.
-Obtain one at https://www.maanmittauslaitos.fi/rajapinnat/api-avaimen-ohje
+This registers the `jobgen` command so you can run it by name from anywhere inside the project.
 
-Ruokavirasto parcel data is open and requires no key.
+### 3 — Copy and edit the config files
 
-### API key — `.env` auto-loading
+```bash
+cp config.example.toml config.toml   # edit flight params and buffer distances
+cp .env.example .env                  # add your MML API key (see below)
+```
 
-`jobgen` automatically reads a `.env` file on startup (via `python-dotenv`), so
-you only need to set `MML_API_KEY` once:
+### 4 — Add your MML API key
+
+Open `.env` in a text editor and set your key:
 
 ```ini
-# .env
 MML_API_KEY=your_key_here
 ```
 
-The tool walks up from the current working directory until it finds a `.env` file,
-so placing it in the project root covers all invocations. If no `.env` file exists
-the startup is a silent no-op — no error is raised.
+The MML API key is free — obtain one at https://www.maanmittauslaitos.fi/rajapinnat/api-avaimen-ohje
 
-Environment variables already set in the shell always take precedence over the
-`.env` file, so `MML_API_KEY=xxx jobgen run ...` still works as before.
+`jobgen` reads the `.env` file automatically on startup, so no extra steps are needed. Ruokavirasto parcel data is open and requires no key.
 
 ## Usage
 

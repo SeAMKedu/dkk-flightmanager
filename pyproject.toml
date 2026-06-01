@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mavic3e-jobgen"
-version = "0.1.0"
-description = "DJI Mavic 3 Enterprise terrain-following mapping job generator for Finnish field parcels"
+name = "dkk-jobgen"
+version = "1.0.0"
+description = "DJI terrain-following mapping job generator for Finnish field parcels"
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",

@@ -1,4 +1,4 @@
-"""mavic3e-jobgen — DJI M3E terrain-following mapping job generator."""
+"""dkk-jobgen — DJI terrain-following mapping job generator for Finnish field parcels."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _version_from_git() -> str:
 
 try:
     from importlib.metadata import version as _pkg_version
-    __version__ = _pkg_version("mavic3e-jobgen")
+    __version__ = _pkg_version("dkk-jobgen")
 except Exception:
     __version__ = _version_from_git()
 
