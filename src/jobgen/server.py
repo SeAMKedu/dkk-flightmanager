@@ -60,6 +60,12 @@ class ExportRequest(PreviewRequest):
     custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
 
 
+class PolygonOpRequest(BaseModel):
+    operation: str          # "bridge" | "subtract"
+    polygon: dict           # GeoJSON Polygon or MultiPolygon (current survey)
+    points: list            # 4 [lng, lat] coordinates
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -294,6 +300,56 @@ def create_app(config: AppConfig) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.post("/api/polygon_op")
+    async def polygon_op(req: PolygonOpRequest):
+        from shapely.geometry import Polygon as ShapelyPolygon, mapping, shape
+        from shapely.ops import unary_union
+        from shapely.validation import make_valid
+
+        try:
+            survey = shape(req.polygon)
+            pts = [(c[0], c[1]) for c in req.points]  # lng, lat
+
+            if len(pts) == 3:
+                # Triangle subtract — winding order doesn't matter for 3 points
+                quad = ShapelyPolygon(pts)
+                if not quad.is_valid:
+                    quad = make_valid(quad)
+            elif len(pts) == 4:
+                # Quad bridge — try both winding orders; pick non-self-intersecting
+                quad = None
+                for order in [
+                    [pts[0], pts[1], pts[2], pts[3]],
+                    [pts[0], pts[1], pts[3], pts[2]],
+                ]:
+                    candidate = ShapelyPolygon(order)
+                    if not candidate.is_valid:
+                        candidate = make_valid(candidate)
+                    if candidate.is_valid and not candidate.is_empty and candidate.area > 0:
+                        quad = candidate
+                        break
+                if quad is None:
+                    raise HTTPException(400, detail="Selected points do not form a valid quadrilateral")
+            else:
+                raise HTTPException(400, detail=f"Expected 3 or 4 points, got {len(pts)}")
+
+            if not quad.is_valid or quad.is_empty:
+                raise HTTPException(400, detail="Selected points do not form a valid shape")
+
+            if req.operation == "bridge":
+                result = unary_union([survey, quad])
+            else:
+                result = survey.difference(quad)
+
+            if result is None or result.is_empty:
+                raise HTTPException(400, detail="Operation produced empty geometry")
+
+            return {"geometry": mapping(result)}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(400, detail=str(exc))
+
     return app
 
 
@@ -440,6 +496,13 @@ button:disabled{opacity:.4;cursor:not-allowed}
 #ttrack{background:#e2e8f0;border-radius:3px;height:6px;overflow:hidden}
 #tfill{background:#3b82f6;height:100%;width:0;transition:width .25s}
 #tmsg{font-size:10px;color:#64748b;margin-top:3px}
+#bridge-hint{position:absolute;top:50px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:5px 14px;border-radius:20px;font-size:11px;z-index:600;display:none;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.25);transition:background .2s}
+.bridge-btn{background:#7c3aed;color:#fff;font-size:11px;margin-top:4px}
+.bridge-btn:not(:disabled):hover{background:#6d28d9}
+.bridge-btn.active{background:#dc2626}
+.bridge-btn.active:not(:disabled):hover{background:#b91c1c}
+/* Leaflet.draw midpoint handles — diamond shape to distinguish from vertex squares */
+.ld-mid{transform:rotate(45deg) scale(0.7)!important;background:#dbeafe!important;border:1.5px solid #60a5fa!important}
 </style>
 </head>
 <body>
@@ -507,6 +570,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
       </label>
       <div id="modbadge">&#9888; Polygon manually edited</div>
       <button class="rst-btn" id="rstbtn" onclick="resetPoly()" disabled style="margin-top:6px">&#8635; Reset polygon</button>
+      <button class="bridge-btn" id="bridge-btn" onclick="toggleBridgeMode()" disabled title="Right-click any vertex to start, or use this button">&#9003; Bridge / Cut</button>
     </div>
 
 
@@ -514,6 +578,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 
   <div id="mc">
     <div id="map"></div>
+    <div id="bridge-hint"></div>
     <div id="legend">
       <h4>Layers</h4>
       <div class="leg-row" id="leg-dsm-row" style="display:none">
@@ -589,6 +654,12 @@ var polyModified = false;
 var isRunning = false;
 var currentSSE = null;
 var editMode = false;
+var _bridgeMode = false;
+var _bridgePts = [];   // [{coord:[lng,lat], polyIdx}]
+var _bridgeVerts = []; // all vertices of current survey geometry
+var _bridgeGroup = null;
+var _editCHandler = null;  // container-level contextmenu capture (edit mode)
+var _editKHandler = null;  // container-level click capture (bridge picking)
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
@@ -742,8 +813,8 @@ var _simpAuto = true;
 
 function _simpRender() {
   document.getElementById('simp-auto').classList.toggle('active', _simpAuto);
-  document.getElementById('simp-minus').disabled = _simpAuto || _simpIdx === 0;
-  document.getElementById('simp-plus').disabled  = _simpAuto || _simpIdx === _simpSteps.length - 1;
+  document.getElementById('simp-minus').disabled = !_simpAuto && _simpIdx === 0;
+  document.getElementById('simp-plus').disabled  = !_simpAuto && _simpIdx === _simpSteps.length - 1;
   document.getElementById('simp-val').textContent = _simpAuto ? '—' : (_simpSteps[_simpIdx] === 0 ? 'off' : _simpSteps[_simpIdx] + ' m');
 }
 function setSimpAuto(silent) {
@@ -761,7 +832,7 @@ function setSimpManual(v, silent) {
   if (!silent) { clearPolyEdit(); scheduleAutoUpdate(); }
 }
 function simpStep(dir) {
-  if (_simpAuto) return;
+  _simpAuto = false;
   _simpIdx = Math.max(0, Math.min(_simpSteps.length - 1, _simpIdx + dir));
   _simpRender(); clearPolyEdit(); scheduleAutoUpdate();
 }
@@ -829,12 +900,14 @@ function newJob() {
   lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
   editLayers.clearLayers();
   editMode = false;
+  _detachEditListeners();
   // Reset state
   previewData = null; editedPoly = null; polyModified = false; _lastPreviewedIds = '';
   clearPolyEdit();
   clearError();
   document.getElementById('xb').disabled = true;
   document.getElementById('rstbtn').disabled = true;
+  document.getElementById('bridge-btn').disabled = true;
   renderStatus(null);
   setRadiusLinked(true);
   document.getElementById('legend').classList.add('inactive');
@@ -1070,6 +1143,7 @@ function onPreviewDone(payload) {
   clearAreaFocus();
   document.getElementById('xb').disabled = false;
   document.getElementById('rstbtn').disabled = false;
+  // bridge-btn stays disabled until the user enters edit mode
   try {
     renderMap(payload);
     redrawRings();
@@ -1099,6 +1173,7 @@ function geomToPolys(geom, style) {
 }
 
 function renderMap(data) {
+  exitBridgeMode();
   // Remove all layers from map and reset lrs (do NOT touch editLayers)
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
   lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
@@ -1173,7 +1248,7 @@ function renderMap(data) {
   if (surveyPolys.length) {
     lrs.survey = L.featureGroup(surveyPolys).addTo(map);
     lrs.survey.eachLayer(function(l) {
-      l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!editMode) toggleEdit(); });
+      l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!editMode && !_bridgeMode) toggleEdit(); });
     });
     console.log('[renderMap] survey bounds', lrs.survey.getBounds());
     map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]});
@@ -1182,26 +1257,7 @@ function renderMap(data) {
   }
 
   // Vertex dots (on top of survey polygon)
-  if (data.survey) {
-    var vg = L.layerGroup();
-    var geom = data.survey;
-    var rings = geom.type === 'Polygon' ? geom.coordinates
-              : geom.type === 'MultiPolygon' ? geom.coordinates.reduce(function(a,p){return a.concat(p);}, [])
-              : [];
-    var seen = {};
-    rings.forEach(function(ring) {
-      ring.forEach(function(coord) {
-        var key = coord[0].toFixed(7)+','+coord[1].toFixed(7);
-        if (seen[key]) return;
-        seen[key] = true;
-        L.circleMarker([coord[1],coord[0]], {
-          radius:3, color:'#1d4ed8', weight:1,
-          fillColor:'#93c5fd', fillOpacity:0.9, interactive:false
-        }).addTo(vg);
-      });
-    });
-    lrs.vertices = vg.addTo(map);
-  }
+  if (data.survey) lrs.vertices = _buildVertexLayer(data.survey).addTo(map);
 }
 
 function centroid(geom) {
@@ -1266,6 +1322,8 @@ function toggleEdit() {
     editLayers.addLayer(clone);
     if (clone.editing) clone.editing.enable();
   });
+  _attachEditListeners();
+  document.getElementById('bridge-btn').disabled = false;
 }
 
 function saveEdit() {
@@ -1286,6 +1344,9 @@ function saveEdit() {
   });
   editLayers.clearLayers();
   if (lrs.survey) lrs.survey.addTo(map);
+  exitBridgeMode();
+  _detachEditListeners();
+  document.getElementById('bridge-btn').disabled = true;
 }
 
 // Dblclick on map background (not on polygon) saves the edit
@@ -1293,11 +1354,282 @@ map.on('dblclick', function(e) {
   if (editMode) saveEdit();
 });
 
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    if (_bridgeMode) exitBridgeMode();
+    else if (editMode) saveEdit();
+  }
+});
+
+// ── Edit-mode container listeners (capture phase, bypass Leaflet.draw) ────────
+// Registered on toggleEdit, removed on saveEdit / _detachEditListeners.
+// Capture phase fires before Leaflet.draw can intercept, letting us intercept
+// right-click for bridge entry and left-click for vertex picking in bridge mode.
+
+function _attachEditListeners() {
+  _detachEditListeners();
+
+  _editCHandler = function(e) {
+    // Right-click in edit mode: enter bridge (snapping to nearest vertex)
+    // or cancel if already in bridge mode.
+    e.preventDefault(); e.stopPropagation();
+    if (_bridgeMode) { exitBridgeMode(); return; }
+    var latlng = map.mouseEventToLatLng(e);
+    var verts = _collectVerts(_currentSurveyGeom());
+    var mp = map.latLngToContainerPoint(latlng);
+    var best = null, bestD = 28;
+    verts.forEach(function(v) {
+      var vp = map.latLngToContainerPoint(L.latLng(v.coord[1], v.coord[0]));
+      var d = Math.sqrt(Math.pow(vp.x-mp.x,2) + Math.pow(vp.y-mp.y,2));
+      if (d < bestD) { bestD = d; best = v; }
+    });
+    if (best) _enterBridgeModeWithVertex(best);
+  };
+
+  _editKHandler = function(e) {
+    // Left-click in bridge mode: pick a vertex.
+    // When NOT in bridge mode, do nothing so normal Leaflet.draw drag works.
+    if (!_bridgeMode || e.button !== 0) return;
+    e.stopPropagation();
+    var latlng = map.mouseEventToLatLng(e);
+    var v = _nearestVertex(latlng, 28);
+    if (!v) {
+      var h = document.getElementById('bridge-hint');
+      h.style.color = '#fca5a5';
+      setTimeout(function(){ h.style.color = ''; }, 400);
+      return;
+    }
+    var dup = _bridgePts.some(function(p){ return p.coord[0]===v.coord[0]&&p.coord[1]===v.coord[1]; });
+    if (dup) return;
+    _bridgePts.push(v);
+    _checkAndCommit();
+  };
+
+  var c = map.getContainer();
+  c.addEventListener('contextmenu', _editCHandler, true);
+  c.addEventListener('click',       _editKHandler, true);
+}
+
+function _detachEditListeners() {
+  var c = map.getContainer();
+  if (_editCHandler) { c.removeEventListener('contextmenu', _editCHandler, true); _editCHandler = null; }
+  if (_editKHandler) { c.removeEventListener('click',       _editKHandler, true); _editKHandler = null; }
+}
+
+// ── Bridge / Cut mode ─────────────────────────────────────────────────────────
+
+// Build an interactive vertex layer for geom. Each dot accepts right-click to
+// enter bridge mode (with that vertex pre-selected) or cancel if already active.
+// Always non-interactive — bridge/cut interaction is handled via container-level
+// capture listeners attached in edit mode (_attachEditListeners).
+function _buildVertexLayer(geom) {
+  var vg = L.layerGroup();
+  var verts = _collectVerts(geom);
+  var seen = {};
+  verts.forEach(function(v) {
+    var key = v.coord[0].toFixed(7)+','+v.coord[1].toFixed(7);
+    if (seen[key]) return; seen[key] = true;
+    L.circleMarker([v.coord[1], v.coord[0]], {
+      radius: 3, color: '#1d4ed8', weight: 1,
+      fillColor: '#93c5fd', fillOpacity: 0.9, interactive: false
+    }).addTo(vg);
+  });
+  return vg;
+}
+
+function _enterBridgeModeWithVertex(v) {
+  enterBridgeMode();   // sets up state, disables box-zoom, refreshes _bridgeVerts
+  _bridgePts.push(v);
+  _checkAndCommit();
+}
+
+// After each pick: auto-commit when the selection is complete.
+// 3 picks all on same polygon → triangle cut.
+// 4 picks spanning 2 polygons → quad bridge.
+function _checkAndCommit() {
+  _updateBridgePreview();
+  var unique = _bridgePts.map(function(p){return p.polyIdx;})
+                         .filter(function(v,i,a){return a.indexOf(v)===i;});
+  if (_bridgePts.length === 3 && unique.length === 1) _commitBridge();
+  else if (_bridgePts.length === 4) _commitBridge();
+}
+
+function _currentSurveyGeom() {
+  return editedPoly || (previewData && previewData.survey) || null;
+}
+
+function _collectVerts(geom) {
+  var verts = [];
+  if (!geom) return verts;
+  if (geom.type === 'Polygon') {
+    var ring = geom.coordinates[0];
+    for (var i = 0; i < ring.length - 1; i++) verts.push({coord: ring[i], polyIdx: 0});
+  } else if (geom.type === 'MultiPolygon') {
+    geom.coordinates.forEach(function(pc, pi) {
+      var ring = pc[0];
+      for (var i = 0; i < ring.length - 1; i++) verts.push({coord: ring[i], polyIdx: pi});
+    });
+  }
+  return verts;
+}
+
+function _nearestVertex(latlng, snapPx) {
+  var mp = map.latLngToContainerPoint(latlng);
+  var best = null, bestD = snapPx;
+  _bridgeVerts.forEach(function(v) {
+    var vp = map.latLngToContainerPoint(L.latLng(v.coord[1], v.coord[0]));
+    var d = Math.sqrt(Math.pow(vp.x - mp.x, 2) + Math.pow(vp.y - mp.y, 2));
+    if (d < bestD) { bestD = d; best = v; }
+  });
+  return best;
+}
+
+function toggleBridgeMode() {
+  if (_bridgeMode) exitBridgeMode();
+  else enterBridgeMode();
+}
+
+function enterBridgeMode() {
+  if (!previewData) return;
+  _bridgeMode = true;
+  _bridgePts = [];
+  _bridgeVerts = _collectVerts(_currentSurveyGeom());
+  if (_bridgeGroup) map.removeLayer(_bridgeGroup);
+  _bridgeGroup = L.layerGroup().addTo(map);
+  map.boxZoom.disable();  // prevent Shift+drag box-zoom during picking
+  var btn = document.getElementById('bridge-btn');
+  btn.textContent = '✕ Cancel bridge/cut';
+  btn.classList.add('active');
+  map.getContainer().style.cursor = 'crosshair';
+  _updateBridgePreview();
+}
+
+function exitBridgeMode() {
+  if (!_bridgeMode) return;
+  _bridgeMode = false;
+  _bridgePts = [];
+  _bridgeVerts = [];
+  if (_bridgeGroup) { map.removeLayer(_bridgeGroup); _bridgeGroup = null; }
+  map.boxZoom.enable();
+  var hint = document.getElementById('bridge-hint');
+  hint.style.display = 'none';
+  hint.style.background = '#1e293b';
+  hint.style.color = '';
+  var btn = document.getElementById('bridge-btn');
+  btn.textContent = '⬡ Bridge / Cut';
+  btn.classList.remove('active');
+  map.getContainer().style.cursor = '';
+}
+
+function _updateBridgePreview() {
+  if (!_bridgeGroup) return;
+  _bridgeGroup.clearLayers();
+  _bridgePts.forEach(function(p) {
+    L.circleMarker([p.coord[1], p.coord[0]], {
+      radius: 6, color: '#f97316', weight: 2.5,
+      fillColor: '#fb923c', fillOpacity: 1, interactive: false
+    }).addTo(_bridgeGroup);
+  });
+  if (_bridgePts.length >= 2) {
+    var lls = _bridgePts.map(function(p){ return [p.coord[1], p.coord[0]]; });
+    var unique = _bridgePts.map(function(p){return p.polyIdx;})
+                           .filter(function(v,i,a){return a.indexOf(v)===i;});
+    var willClose = (_bridgePts.length === 3 && unique.length === 1) || _bridgePts.length >= 4;
+    if (willClose) lls.push(lls[0]);  // close the preview shape
+    L.polyline(lls, {color:'#f97316', weight:2, dashArray:'5 4', interactive:false}).addTo(_bridgeGroup);
+  }
+  var n = _bridgePts.length;
+  var u = _bridgePts.map(function(p){return p.polyIdx;}).filter(function(v,i,a){return a.indexOf(v)===i;});
+  var allSame = u.length <= 1;
+  var hintText = n === 0 ? 'Right-click a vertex to start — Esc to cancel'
+    : n === 1 ? 'Vertex 1 — pick 2 more to cut triangle, or cross to bridge'
+    : n === 2 && allSame  ? 'Vertex 2/3 — pick 1 more to cut triangle, or cross to bridge'
+    : n === 2 && !allSame ? 'Vertex 2/4 — pick 2 more to bridge'
+    : n === 3 && allSame  ? 'Cutting triangle…'
+    : n === 3 && !allSame ? 'Vertex 3/4 — pick 1 more to bridge'
+    : 'Bridging…';
+  var hint = document.getElementById('bridge-hint');
+  hint.style.display = 'block';
+  hint.textContent = hintText;
+}
+
+function _showBridgeError(msg) {
+  var hint = document.getElementById('bridge-hint');
+  hint.style.display = 'block';
+  hint.style.background = '#dc2626';
+  hint.textContent = '✕ ' + msg;
+  setTimeout(function(){ hint.style.display = 'none'; hint.style.background = '#1e293b'; }, 3500);
+}
+
+async function _commitBridge() {
+  var geom = _currentSurveyGeom();
+  if (!geom) { exitBridgeMode(); return; }
+
+  var indices = _bridgePts.map(function(p){ return p.polyIdx; });
+  var unique = indices.filter(function(v,i,a){ return a.indexOf(v)===i; });
+  var op = unique.length === 1 ? 'subtract' : 'bridge';
+
+  _updateBridgePreview();  // show "Processing…"
+
+  try {
+    var res = await fetch('/api/polygon_op', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        operation: op,
+        polygon: geom,
+        points: _bridgePts.map(function(p){ return p.coord; })
+      })
+    });
+    if (!res.ok) {
+      var err = await res.json().catch(function(){ return {detail:'Server error'}; });
+      exitBridgeMode();
+      _showBridgeError(err.detail || 'Operation failed');
+      return;
+    }
+    var data = await res.json();
+    exitBridgeMode();
+    // Exit edit mode — editLayers has stale geometry, result replaces it
+    if (editMode) {
+      editMode = false;
+      map.doubleClickZoom.enable();
+      editLayers.clearLayers();
+      document.getElementById('bridge-btn').disabled = true;
+    }
+    _detachEditListeners();
+    editedPoly = data.geometry;
+    polyModified = true;
+    document.getElementById('modbadge').style.display = 'block';
+    document.getElementById('rstbtn').disabled = false;
+    _updateSurveyDisplay(data.geometry);
+  } catch(e) {
+    exitBridgeMode();
+    _showBridgeError('Network error: ' + e.message);
+  }
+}
+
+function _updateSurveyDisplay(geom) {
+  if (lrs.survey) { map.removeLayer(lrs.survey); lrs.survey = null; }
+  if (lrs.vertices) { map.removeLayer(lrs.vertices); lrs.vertices = null; }
+
+  var surveyStyle = {color:'#1d4ed8', weight:2.5, fillColor:'#3b82f6', fillOpacity:.17};
+  var polys = geomToPolys(geom, surveyStyle);
+  if (polys.length) {
+    lrs.survey = L.featureGroup(polys).addTo(map);
+    lrs.survey.eachLayer(function(l) {
+      l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!editMode && !_bridgeMode) toggleEdit(); });
+    });
+  }
+
+  lrs.vertices = _buildVertexLayer(geom).addTo(map);
+}
+
 function resetPoly() {
   if (!previewData) return;
   saveEdit();  // exit edit mode cleanly if active
   clearPolyEdit();
   renderMap(previewData);
+  redrawRings();
   resetLegend();
   try { renderStatus(previewData.stats); } catch(e) {}
 }
@@ -1319,6 +1651,29 @@ function onExportDone(payload) {
 function closeExport() {
   document.getElementById('xov').style.display = 'none';
 }
+
+// ── Leaflet.draw midpoint diamond patch ───────────────────────────────────────
+// Both vertex and midpoint handles use the same CSS class.  The only way to
+// distinguish them is via prototype patching.  Note: _createMiddleMarker does
+// NOT return the marker — it assigns m1._middleRight / m2._middleLeft instead.
+(function() {
+  var klass = L.Edit && (L.Edit.PolyVerticesEdit || L.Edit.Poly);
+  if (!klass) return;
+  var proto = klass.prototype;
+  if (!proto || !proto._createMiddleMarker) return;
+  var orig = proto._createMiddleMarker;
+  proto._createMiddleMarker = function(m1, m2) {
+    orig.call(this, m1, m2);
+    // Leaflet.draw stores the created marker on the adjacent vertex markers
+    var mid = m1._middleRight;
+    if (mid && mid.setIcon) {
+      mid.setIcon(L.divIcon({
+        iconSize: [8, 8], iconAnchor: [4, 4],
+        className: 'leaflet-div-icon leaflet-editing-icon ld-mid'
+      }));
+    }
+  };
+})();
 
 init();
 </script>
