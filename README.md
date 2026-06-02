@@ -79,7 +79,11 @@ The single-page Leaflet map interface lets you:
 - **Tune flight parameters** — subcategory (A2/A3 pills), drone, height (live GSD display), and warning radius (linked to 3× height by default; click the "3:1" label to restore the link after manual override).
 - **Tune polygon** — offset (expand/contract), simplify (Auto pill + −/+ step buttons), keep-out toggle.
 - **Preview the survey** — click **↻ Update** or edit any parameter to see the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all toggleable from the legend.
-- **Edit the polygon** — double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to save. Click **↻ Reset polygon** to revert.
+- **Edit the polygon** — double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to save. In edit mode, vertex handles are white squares and midpoint handles are smaller white diamonds. Click **↻ Reset polygon** to revert.
+- **Bridge / Cut** — in edit mode, right-click any vertex to enter Bridge/Cut mode (the vertex turns orange). Left-click up to three more vertices to define the operation:
+  - **3 vertices on the same polygon** → triangle cut (subtracts the triangle from the polygon)
+  - **2 vertices on each of two separate polygons** → bridge (connects them into a single continuous polygon with a quadrilateral corridor)
+  - Selected vertices highlight orange as you pick them; a dashed preview line shows the shape. Right-click anywhere or press **Esc** to cancel. The **♦ Bridge / Cut** button in the Polygon section is an alternative entry point.
 - **Export** — click **↓ Export KMZ** to write the full job (KMZ, DSM, homes KML, HTML preview, manifest) to disk.
 - **New job** — click **＋ New job** to reset the editor for a new area without restarting the server.
 
