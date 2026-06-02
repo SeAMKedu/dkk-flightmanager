@@ -371,20 +371,25 @@ def create_app(config: AppConfig) -> FastAPI:
         if not job_dir.is_dir():
             raise HTTPException(404, detail=f"Job '{name}' not found")
         params_path = job_dir / "job_params.json"
-        if not params_path.exists():
-            raise HTTPException(404, detail=f"Job '{name}' has no saved params (not yet exported via browser UI)")
-        try:
-            params = json.loads(params_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
         manifest_path = job_dir / "manifest.json"
-        stale: list[str] = []
+        manifest: dict = {}
         if manifest_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                stale = _check_cache_staleness(manifest, _config.cache)
             except Exception:
                 pass
+        if params_path.exists():
+            try:
+                params = json.loads(params_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+        elif manifest:
+            params = _params_from_manifest(name, manifest)
+        else:
+            raise HTTPException(404, detail=f"Job '{name}' has no readable data")
+        stale: list[str] = []
+        if manifest:
+            stale = _check_cache_staleness(manifest, _config.cache)
         return {"params": params, "cache_stale": stale}
 
     @app.patch("/api/jobs/{name}")
@@ -426,8 +431,9 @@ def create_app(config: AppConfig) -> FastAPI:
         if not src_dir.is_dir():
             raise HTTPException(404, detail=f"Job '{name}' not found")
         params_path = src_dir / "job_params.json"
-        if not params_path.exists():
-            raise HTTPException(404, detail=f"Job '{name}' has no saved params to clone")
+        manifest_path = src_dir / "manifest.json"
+        if not params_path.exists() and not manifest_path.exists():
+            raise HTTPException(404, detail=f"Job '{name}' has no data to clone")
         # Find a unique clone name
         base = f"{name}-copy"
         clone_name = base
@@ -437,10 +443,18 @@ def create_app(config: AppConfig) -> FastAPI:
             counter += 1
         clone_dir = output_dir / clone_name
         clone_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            params = json.loads(params_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        if params_path.exists():
+            try:
+                params = json.loads(params_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise HTTPException(500, detail=str(exc))
+        else:
+            manifest_src = src_dir / "manifest.json"
+            try:
+                src_manifest = json.loads(manifest_src.read_text(encoding="utf-8"))
+                params = _params_from_manifest(name, src_manifest)
+            except Exception as exc:
+                raise HTTPException(500, detail=str(exc))
         params["job_name"] = clone_name
         params["saved_at"] = datetime.now(timezone.utc).isoformat()
         (clone_dir / "job_params.json").write_text(
@@ -673,6 +687,37 @@ def _read_job_card(job_dir: Path) -> dict | None:
     }
 
 
+def _params_from_manifest(name: str, manifest: dict) -> dict:
+    """Reconstruct best-effort job_params from a manifest (CLI-created jobs)."""
+    parcels = manifest.get("parcels", {})
+    props = manifest.get("properties", {})
+    flight = manifest.get("flight", {})
+    safety = manifest.get("home_safety", {})
+    return {
+        "job_name": name,
+        "saved_at": None,
+        "inputs": {
+            "parcel_ids": parcels.get("parcel_ids", []),
+            "property_ids": props.get("property_ids", []),
+        },
+        "flight": {
+            "drone": flight.get("drone"),
+            "height_m": flight.get("derived_height_m"),
+            "subcategory": safety.get("operating_subcategory", "A3"),
+        },
+        "polygon": {
+            "offset_m": 0.0,
+            "simplify": "auto",
+            "keepout": True,
+        },
+        "safety": {
+            "preview_radius_m": safety.get("preview_radius_m"),
+        },
+        "custom_polygon_4326": None,
+        "last_preview_geojson": None,
+    }
+
+
 def _check_cache_staleness(manifest: dict, cache_config: "CacheConfig") -> list[str]:
     """Return list of tile IDs missing from the local cache."""
     from jobgen.cache import check_tile_exists
@@ -703,7 +748,7 @@ _UI_HTML = r"""\
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#f1f5f9}
 #hdr{background:#1e293b;color:#f8fafc;padding:9px 14px;display:flex;align-items:center;gap:10px;flex-shrink:0}
 #hdr h1{font-size:14px;font-weight:700;letter-spacing:-.01em}
-#main{display:flex;flex:1;overflow:hidden}
+#main{display:flex;flex:1;overflow:visible}
 #sb{width:272px;background:#f8fafc;border-right:1px solid #e2e8f0;overflow-y:auto;padding:8px 7px;flex-shrink:0;display:flex;flex-direction:column;gap:7px}
 #mc{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative}
 #map{flex:1;z-index:0}
@@ -788,6 +833,51 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .bridge-btn:not(:disabled):hover{background:#6d28d9}
 .bridge-btn.active{background:#dc2626}
 .bridge-btn.active:not(:disabled):hover{background:#b91c1c}
+/* Jobs panel */
+#jp{width:260px;flex-shrink:0;background:#0f172a;display:flex;flex-direction:column;position:relative;transition:margin-left .2s ease}
+#jp.closed{margin-left:-260px}
+#jp-inner{width:260px;height:100%;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:0}
+#jp-hdr{padding:8px 10px 6px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:6px;flex-shrink:0}
+#jp-hdr span{color:#94a3b8;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+#jp-filter{background:#1e293b;border:1px solid #334155;border-radius:4px;color:#f8fafc;font-size:11px;padding:3px 6px;flex:1;min-width:0;outline:none}
+#jp-filter:focus{border-color:#3b82f6}
+#jp-newjob{margin:6px 8px;padding:6px 10px;background:#1e293b;border:1px dashed #334155;border-radius:4px;color:#94a3b8;font-size:11px;font-weight:600;cursor:pointer;text-align:left;flex-shrink:0;transition:background .12s,color .12s}
+#jp-newjob:hover{background:#334155;color:#f8fafc}
+#jp-list{flex:1;overflow-y:auto;padding:4px 6px 8px}
+#jp-tog{position:absolute;right:-16px;top:50%;transform:translateY(-50%);width:16px;height:44px;background:#0f172a;border:none;border-radius:0 4px 4px 0;color:#64748b;cursor:pointer;font-size:8px;display:flex;align-items:center;justify-content:center;z-index:10;transition:color .12s}
+#jp-tog:hover{color:#f8fafc}
+.jcard{background:#1e293b;border:1px solid #334155;border-radius:5px;margin-bottom:5px;display:flex;align-items:center;gap:0;cursor:pointer;transition:border-color .12s,background .12s;overflow:hidden;position:relative}
+.jcard:hover{border-color:#475569;background:#263548}
+.jcard.active{border-color:#3b82f6;border-left:3px solid #3b82f6}
+.jcard.failed{opacity:.55;cursor:default}
+.jcard-thumb{width:48px;height:48px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:3px;background:#0f172a}
+.jcard-thumb svg{width:42px;height:42px;border-radius:3px}
+.jcard-body{flex:1;min-width:0;padding:5px 4px}
+.jcard-name{font-size:11px;font-weight:600;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jcard-meta{font-size:9px;color:#64748b;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jcard-right{display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 4px 4px 0;flex-shrink:0}
+.jbadge{font-size:9px;font-weight:700;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.jbadge.ok{background:#15803d;color:#fff}
+.jbadge.wrn{background:#d97706;color:#fff}
+.jbadge.fail{background:#dc2626;color:#fff}
+.jcard-menu-btn{background:none;border:none;color:#475569;cursor:pointer;font-size:15px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:3px;padding:0;line-height:1;transition:color .12s}
+.jcard-menu-btn:hover{color:#f8fafc}
+.jmenu{position:absolute;right:4px;top:4px;background:#1e293b;border:1px solid #334155;border-radius:5px;box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:200;min-width:110px;overflow:hidden}
+.jmenu-item{display:block;width:100%;padding:7px 12px;background:none;border:none;color:#f8fafc;font-size:11px;text-align:left;cursor:pointer;transition:background .1s}
+.jmenu-item:hover{background:#334155}
+.jmenu-item.danger{color:#fca5a5}
+.jmenu-item.danger:hover{background:#7f1d1d}
+.jcard-rename-input{background:#0f172a;border:1px solid #3b82f6;border-radius:3px;color:#f8fafc;font-size:11px;font-weight:600;padding:1px 4px;width:100%;outline:none}
+.jcard-del-yes{background:#dc2626;color:#fff;border:none;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-weight:600}
+.jcard-del-no{background:#334155;color:#f8fafc;border:none;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-weight:600}
+#stale-notice{display:none;background:#1e293b;border:1px solid #fde68a;border-radius:4px;padding:5px 8px;font-size:10px;color:#fde68a;margin-bottom:6px}
+/* Confirm modal */
+#confirm-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center}
+#confirm-card{background:#fff;border-radius:8px;padding:18px 20px;max-width:340px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+#confirm-msg{font-size:13px;color:#1e293b;margin-bottom:14px;line-height:1.5}
+#confirm-card .btn-pair{display:flex;gap:6px}
+#confirm-discard{background:#dc2626;color:#fff;border:none;border-radius:4px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;flex:1}
+#confirm-cancel{background:#e2e8f0;color:#374151;border:none;border-radius:4px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;flex:1}
 /* Leaflet.draw midpoint handles — diamond via ::before so Leaflet's own
    translate3d positioning transform on the icon element is not overridden.
    top/left 50% + translate(-50%,-50%) centres the diamond on the anchor point. */
@@ -800,15 +890,25 @@ button:disabled{opacity:.4;cursor:not-allowed}
   <h1>dkk-jobmaker</h1>
 </div>
 <div id="main">
+  <div id="jp">
+    <div id="jp-inner">
+      <div id="jp-hdr">
+        <span>Jobs</span>
+        <input type="text" id="jp-filter" placeholder="Filter&#8230;">
+      </div>
+      <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
+      <div id="jp-list"></div>
+    </div>
+    <button id="jp-tog" onclick="toggleJp()" title="Toggle jobs panel">&#9664;</button>
+  </div>
+
   <div id="sb">
+    <div id="stale-notice"></div>
 
     <div class="sec">
       <h3>Job</h3>
-      <div class="btn-pair">
-        <button id="njb" onclick="newJob()">&#43; New job</button>
-        <button id="ub" onclick="startPreview()">&#8635; Update</button>
-      </div>
-      <button id="xb" onclick="startExport()" disabled style="margin-top:5px">&#8595; Export KMZ</button>
+      <button id="ub" onclick="startPreview()" style="margin-top:3px">&#8635; Update</button>
+      <button id="xb" onclick="startExport()" disabled style="margin-top:5px">Save</button>
       <div id="pgwrap">
         <div id="pgtrack"><div id="pgfill"></div></div>
         <div id="pgmsg"></div>
@@ -920,9 +1020,19 @@ button:disabled{opacity:.4;cursor:not-allowed}
 
 <div id="xov">
   <div id="xcard">
-    <h2>&#10003; Export complete</h2>
+    <h2>&#10003; Saved</h2>
     <div id="xfiles"></div>
     <button id="xcls" onclick="closeExport()">Close</button>
+  </div>
+</div>
+
+<div id="confirm-modal">
+  <div id="confirm-card">
+    <div id="confirm-msg"></div>
+    <div class="btn-pair">
+      <button id="confirm-discard">Discard changes</button>
+      <button id="confirm-cancel" onclick="hideConfirmModal()">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -945,6 +1055,11 @@ var isRunning = false;
 var currentSSE = null;
 var editMode = false;
 var _bridgeMode = false;
+// Jobs panel state
+var _dirty = false;
+var _activeJob = null;
+var _jpOpen = localStorage.getItem('jp-open') !== 'false';
+var _jobsCache = [];
 var _bridgePts = [];        // [{coord:[lng,lat], polyIdx}]
 var _bridgeVerts = [];      // all vertices of current survey geometry
 var _bridgeGroup = null;
@@ -969,7 +1084,7 @@ map.addControl(new L.Control.Draw({draw:false, edit:{featureGroup:editLayers, re
 map.on(L.Draw.Event.EDITED, function(e) {
   e.layers.eachLayer(function(l) {
     editedPoly = layerGeom(l);
-    polyModified = true;
+    polyModified = true; markDirty();
     document.getElementById('modbadge').style.display = 'block';
   });
   editMode = false;
@@ -1028,6 +1143,9 @@ async function init() {
   }
   renderStatus(null);
   focusArea();
+  // Jobs panel
+  setJpOpen(_jpOpen);
+  loadJobsList();
 }
 
 function defaultJobName() {
@@ -1081,6 +1199,7 @@ document.getElementById('hgt').addEventListener('input', function() {
 });
 document.getElementById('dsel').addEventListener('change', updateGsd);
 document.getElementById('warn-radius').addEventListener('input', function() {
+  markDirty();
   setRadiusLinked(false);
   redrawRings();
 });
@@ -1153,6 +1272,7 @@ function idsKey() {
 }
 
 function scheduleAutoUpdate(force) {
+  markDirty();
   if (!force && !previewData) return;
   if (_autoTimer) clearTimeout(_autoTimer);
   _autoTimer = setTimeout(function() { _autoTimer = null; startPreview(); }, 400);
@@ -1180,6 +1300,9 @@ document.getElementById('kids').addEventListener('blur', onIdBlur);
 // New Job — reset editor to a blank slate
 function newJob() {
   if (isRunning) return;
+  confirmIfDirty(_doNewJob);
+}
+function _doNewJob() {
   // Cancel any pending auto-update
   if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
   // Reset IDs and job name
@@ -1195,14 +1318,18 @@ function newJob() {
   _detachEditListeners();
   // Reset state
   previewData = null; editedPoly = null; polyModified = false; _lastPreviewedIds = '';
+  _activeJob = null; _dirty = false;
   clearPolyEdit();
   clearError();
+  hideStaleNotice();
   document.getElementById('xb').disabled = true;
   document.getElementById('rstbtn').disabled = true;
   document.getElementById('bridge-btn').disabled = true;
   renderStatus(null);
   setRadiusLinked(true);
   document.getElementById('legend').classList.add('inactive');
+  // Deselect panel card
+  document.querySelectorAll('.jcard').forEach(function(c){ c.classList.remove('active'); });
   focusArea();
   map.setView([64.5, 26.0], 5);
 }
@@ -1332,7 +1459,7 @@ async function startPreview() {
   await runJob('/api/preview', p, 'Preview', onPreviewDone);
 }
 
-// ── Export ────────────────────────────────────────────────────────────────────
+// ── Save (formerly Export) ────────────────────────────────────────────────────
 async function startExport() {
   if (isRunning) return;
   clearError();
@@ -1342,7 +1469,7 @@ async function startExport() {
     job_name: jn,
     custom_polygon: polyModified ? editedPoly : null
   });
-  await runJob('/api/export', p, 'Export', onExportDone);
+  await runJob('/api/export', p, 'Saving…', onSaveDone);
 }
 
 // ── Job runner ────────────────────────────────────────────────────────────────
@@ -1634,7 +1761,7 @@ function saveEdit() {
       l.editing.disable();
       if (!editedPoly) {
         editedPoly = layerGeom(l);
-        polyModified = true;
+        polyModified = true; markDirty();
         document.getElementById('modbadge').style.display = 'block';
       }
     }
@@ -1936,7 +2063,7 @@ async function _commitBridge() {
     }
     _detachEditListeners();
     editedPoly = data.geometry;
-    polyModified = true;
+    polyModified = true; markDirty();
     document.getElementById('modbadge').style.display = 'block';
     document.getElementById('rstbtn').disabled = false;
     _updateSurveyDisplay(data.geometry);
@@ -1972,9 +2099,11 @@ function resetPoly() {
   try { renderStatus(previewData.stats); } catch(e) {}
 }
 
-// ── Export result ─────────────────────────────────────────────────────────────
-function onExportDone(payload) {
-  console.log('[export done]', payload);
+// ── Save result ───────────────────────────────────────────────────────────────
+function onSaveDone(payload) {
+  console.log('[save done]', payload);
+  _activeJob = payload.job_name || null;
+  _dirty = false;
   var files = payload.output_files || {};
   var labels = {kmz:'KMZ route',homes_kml:'Homes KML',dsm_tif:'DSM GeoTIFF',
                 preview_html:'Map preview',manifest:'Manifest JSON'};
@@ -1985,6 +2114,7 @@ function onExportDone(payload) {
     '<div style="color:#64748b;font-size:12px">No output files found.</div>';
   document.getElementById('xov').style.display = 'flex';
   if (payload.stats) renderStatus(payload.stats);
+  loadJobsList();
 }
 function closeExport() {
   document.getElementById('xov').style.display = 'none';
@@ -2015,6 +2145,321 @@ function _patchMidpointIcons() {
       if (op && op < 1) { el.classList.add('ld-mid'); }
     });
   }
+}
+
+// ── Dirty tracking ────────────────────────────────────────────────────────────
+function markDirty() { _dirty = true; }
+
+function confirmIfDirty(onConfirm) {
+  if (!_dirty) { onConfirm(); return; }
+  document.getElementById('confirm-msg').textContent =
+    'You have unsaved changes. Discard them and continue?';
+  document.getElementById('confirm-modal').style.display = 'flex';
+  document.getElementById('confirm-discard').onclick = function() {
+    hideConfirmModal(); _dirty = false; onConfirm();
+  };
+}
+function hideConfirmModal() {
+  document.getElementById('confirm-modal').style.display = 'none';
+}
+window.addEventListener('beforeunload', function(e) {
+  if (_dirty) { e.preventDefault(); e.returnValue = ''; }
+});
+
+// ── Jobs panel ────────────────────────────────────────────────────────────────
+function setJpOpen(open) {
+  _jpOpen = open;
+  localStorage.setItem('jp-open', open ? 'true' : 'false');
+  document.getElementById('jp').classList.toggle('closed', !open);
+  document.getElementById('jp-tog').innerHTML = open ? '&#9664;' : '&#9654;';
+  document.getElementById('jp-tog').title = open ? 'Hide jobs panel' : 'Show jobs panel';
+}
+function toggleJp() { setJpOpen(!_jpOpen); }
+
+document.getElementById('jp-filter').addEventListener('input', function() {
+  renderJobsList(_jobsCache);
+});
+
+async function loadJobsList() {
+  try {
+    var r = await fetch('/api/jobs');
+    if (!r.ok) return;
+    var data = await r.json();
+    _jobsCache = data.jobs || [];
+    // Auto-open panel on first ever load if jobs exist
+    if (_jobsCache.length > 0 && localStorage.getItem('jp-open') === null) {
+      setJpOpen(true);
+    }
+    renderJobsList(_jobsCache);
+    // Highlight active job card
+    if (_activeJob) {
+      document.querySelectorAll('.jcard').forEach(function(c){
+        c.classList.toggle('active', c.dataset.name === _activeJob);
+      });
+    }
+  } catch(e) { console.error('[loadJobsList]', e); }
+}
+
+function renderJobsList(jobs) {
+  var list = document.getElementById('jp-list');
+  var filter = (document.getElementById('jp-filter').value || '').toLowerCase();
+  list.innerHTML = '';
+  var filtered = jobs.filter(function(j){ return !filter || j.name.toLowerCase().includes(filter); });
+  if (!filtered.length) {
+    list.innerHTML = '<div style="padding:16px 8px;color:#475569;font-size:11px;text-align:center">'
+      + (filter ? 'No matches' : 'No saved jobs yet') + '</div>';
+    return;
+  }
+  filtered.forEach(function(j) { list.appendChild(buildJobCard(j)); });
+}
+
+function buildJobCard(j) {
+  var card = document.createElement('div');
+  card.className = 'jcard' + (j.name === _activeJob ? ' active' : '') + (j.status === 'failed' ? ' failed' : '');
+  card.dataset.name = j.name;
+  var date = j.saved_at || j.run_at || '';
+  var dateStr = date ? new Date(date).toLocaleString('fi-FI',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+  var meta = [dateStr, j.area_ha != null ? j.area_ha.toFixed(1)+' ha' : '', j.drone||''].filter(Boolean).join(' · ');
+  var badge = j.status === 'failed' ? '<span class="jbadge fail">!</span>'
+    : j.flight_ready === true  ? '<span class="jbadge ok">&#10003;</span>'
+    : j.needs_review === true  ? '<span class="jbadge wrn">!</span>'
+    : '';
+  var thumb = j.thumbnail_svg || '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#1e293b"/><text x="32" y="40" text-anchor="middle" font-size="28" fill="#334155">?</text></svg>';
+  card.innerHTML =
+    '<div class="jcard-thumb">' + thumb + '</div>'
+    + '<div class="jcard-body">'
+    +   '<div class="jcard-name">' + escHtml(j.name) + '</div>'
+    +   '<div class="jcard-meta">' + escHtml(meta) + '</div>'
+    + '</div>'
+    + '<div class="jcard-right">' + badge
+    +   '<button class="jcard-menu-btn" title="Actions" onclick="toggleCardMenu(event,\'' + escHtml(j.name) + '\',\'' + j.status + '\')">&#8942;</button>'
+    + '</div>';
+  if (j.status !== 'failed') {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.jcard-menu-btn') || e.target.closest('.jmenu')) return;
+      openJob(j.name);
+    });
+  }
+  return card;
+}
+
+// ── Card menu ─────────────────────────────────────────────────────────────────
+var _openMenu = null;
+function toggleCardMenu(e, name, status) {
+  e.stopPropagation();
+  closeCardMenu();
+  var btn = e.currentTarget;
+  var menu = document.createElement('div');
+  menu.className = 'jmenu';
+  var items = status === 'failed'
+    ? [['Delete', function(){ confirmDeleteJob(name); }]]
+    : [
+        ['Open',   function(){ openJob(name); }],
+        ['Clone',  function(){ cloneJob(name); }],
+        ['Rename', function(){ startRename(name); }],
+        ['Delete', function(){ confirmDeleteJob(name); }],
+      ];
+  items.forEach(function(it) {
+    var mi = document.createElement('button');
+    mi.className = 'jmenu-item' + (it[0] === 'Delete' ? ' danger' : '');
+    mi.textContent = it[0];
+    mi.addEventListener('click', function(ev) { ev.stopPropagation(); closeCardMenu(); it[1](); });
+    menu.appendChild(mi);
+  });
+  // Position relative to the card's right area
+  btn.closest('.jcard-right').appendChild(menu);
+  _openMenu = menu;
+  setTimeout(function() { document.addEventListener('click', closeCardMenu, {once:true}); }, 0);
+}
+function closeCardMenu() {
+  if (_openMenu) { _openMenu.remove(); _openMenu = null; }
+}
+
+// ── Open job ──────────────────────────────────────────────────────────────────
+function openJob(name) {
+  confirmIfDirty(function() { _doOpenJob(name); });
+}
+async function _doOpenJob(name) {
+  try {
+    var r = await fetch('/api/jobs/' + encodeURIComponent(name));
+    if (!r.ok) { showError('Could not load job: HTTP ' + r.status); return; }
+    var data = await r.json();
+    var p = data.params;
+    // Cancel any pending timer
+    if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
+    // Clear map first
+    Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
+    lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+    editLayers.clearLayers();
+    editMode = false; _detachEditListeners();
+    // Restore form
+    _restoreFormFromParams(p);
+    document.getElementById('jname').value = name;
+    updatePathHint();
+    _activeJob = name;
+    _dirty = false;
+    clearError();
+    // Highlight card
+    document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.name === name); });
+    // Restore map from stored preview (instant)
+    if (p && p.last_preview_geojson) {
+      previewData = p.last_preview_geojson;
+      _lastPreviewedIds = ((p.inputs && p.inputs.parcel_ids)||[]).join(',')
+        + '||' + ((p.inputs && p.inputs.property_ids)||[]).join(',');
+      try {
+        renderMap(previewData);
+        redrawRings();
+        resetLegend();
+        renderStatus(previewData.stats);
+        document.getElementById('xb').disabled = false;
+        document.getElementById('rstbtn').disabled = false;
+        document.getElementById('bridge-btn').disabled = true;
+      } catch(ex) { console.error('[openJob] render error', ex); }
+    } else {
+      previewData = null;
+      document.getElementById('xb').disabled = true;
+      document.getElementById('rstbtn').disabled = true;
+      document.getElementById('bridge-btn').disabled = true;
+      renderStatus(null);
+      document.getElementById('legend').classList.add('inactive');
+      map.setView([64.5, 26.0], 5);
+      focusArea();
+    }
+    // Cache staleness notice
+    if (data.cache_stale && data.cache_stale.length) showStaleNotice(data.cache_stale);
+    else hideStaleNotice();
+  } catch(ex) { showError('Failed to open job: ' + ex.message); }
+}
+
+function _restoreFormFromParams(p) {
+  if (!p) return;
+  if (p.inputs) {
+    document.getElementById('pids').value = (p.inputs.parcel_ids||[]).join('\n');
+    document.getElementById('kids').value = (p.inputs.property_ids||[]).join('\n');
+  }
+  if (p.flight) {
+    if (p.flight.drone) document.getElementById('dsel').value = p.flight.drone;
+    if (p.flight.height_m != null) {
+      document.getElementById('hgt').value = p.flight.height_m;
+      updateGsd();
+    }
+    if (p.flight.subcategory) setSub(p.flight.subcategory, true);
+  }
+  if (p.polygon) {
+    if (p.polygon.offset_m != null) document.getElementById('offset').value = p.polygon.offset_m;
+    if (p.polygon.simplify === 'auto') setSimpAuto(true);
+    else if (p.polygon.simplify != null) setSimpManual(parseFloat(p.polygon.simplify)||0, true);
+    if (p.polygon.keepout != null) document.getElementById('kochk').checked = p.polygon.keepout;
+  }
+  if (p.safety && p.safety.preview_radius_m != null) {
+    document.getElementById('warn-radius').value = p.safety.preview_radius_m;
+    setRadiusLinked(false);
+  } else {
+    setRadiusLinked(true);
+  }
+  if (p.custom_polygon_4326) {
+    editedPoly = p.custom_polygon_4326; polyModified = true;
+    document.getElementById('modbadge').style.display = 'block';
+  } else {
+    editedPoly = null; polyModified = false;
+    document.getElementById('modbadge').style.display = 'none';
+  }
+}
+
+// ── Clone ─────────────────────────────────────────────────────────────────────
+async function cloneJob(name) {
+  try {
+    var r = await fetch('/api/jobs/' + encodeURIComponent(name) + '/clone', {method:'POST'});
+    if (!r.ok) {
+      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(e.detail || 'Clone failed'); return;
+    }
+    var data = await r.json();
+    await loadJobsList();
+    openJob(data.name);
+  } catch(e) { showError('Clone failed: ' + e.message); }
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+function confirmDeleteJob(name) {
+  var card = document.querySelector('.jcard[data-name="' + CSS.escape(name) + '"]');
+  if (!card) return;
+  card.innerHTML =
+    '<div style="padding:6px 10px;font-size:11px;color:#fca5a5;flex:1">Delete <b>' + escHtml(name) + '</b>?</div>'
+    + '<div style="display:flex;gap:4px;padding:6px 8px;flex-shrink:0">'
+    + '<button class="jcard-del-yes" onclick="deleteJob(\'' + escHtml(name).replace(/'/g,"\\'") + '\')">Delete</button>'
+    + '<button class="jcard-del-no" onclick="loadJobsList()">Cancel</button>'
+    + '</div>';
+  card.style.alignItems = 'center';
+}
+async function deleteJob(name) {
+  try {
+    var r = await fetch('/api/jobs/' + encodeURIComponent(name), {method:'DELETE'});
+    if (!r.ok) {
+      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(e.detail || 'Delete failed'); return;
+    }
+    if (_activeJob === name) { _activeJob = null; _dirty = false; _doNewJob(); }
+    await loadJobsList();
+  } catch(e) { showError('Delete failed: ' + e.message); }
+}
+
+// ── Rename ────────────────────────────────────────────────────────────────────
+function startRename(name) {
+  var card = document.querySelector('.jcard[data-name="' + CSS.escape(name) + '"]');
+  if (!card) return;
+  var nameEl = card.querySelector('.jcard-name');
+  if (!nameEl) return;
+  var input = document.createElement('input');
+  input.className = 'jcard-rename-input';
+  input.value = name;
+  nameEl.replaceWith(input);
+  input.focus(); input.select();
+  var committed = false;
+  function commit() {
+    if (committed) return; committed = true;
+    var newName = input.value.trim();
+    if (!newName || newName === name) { loadJobsList(); return; }
+    doRename(name, newName);
+  }
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { committed = true; loadJobsList(); }
+  });
+}
+async function doRename(oldName, newName) {
+  try {
+    var r = await fetch('/api/jobs/' + encodeURIComponent(oldName), {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({new_name: newName})
+    });
+    if (!r.ok) {
+      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(e.detail || 'Rename failed'); await loadJobsList(); return;
+    }
+    if (_activeJob === oldName) {
+      _activeJob = newName;
+      document.getElementById('jname').value = newName;
+      updatePathHint();
+    }
+    await loadJobsList();
+  } catch(e) { showError('Rename failed: ' + e.message); await loadJobsList(); }
+}
+
+// ── Staleness notice ──────────────────────────────────────────────────────────
+function showStaleNotice(stale) {
+  var el = document.getElementById('stale-notice');
+  el.textContent = 'Cached tiles may be stale (' + stale.length + ' missing) — preview will re-fetch.';
+  el.style.display = 'block';
+}
+function hideStaleNotice() {
+  var el = document.getElementById('stale-notice');
+  el.style.display = 'none'; el.textContent = '';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 init();
