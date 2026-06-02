@@ -658,9 +658,10 @@ var isRunning = false;
 var currentSSE = null;
 var editMode = false;
 var _bridgeMode = false;
-var _bridgePts = [];   // [{coord:[lng,lat], polyIdx}]
-var _bridgeVerts = []; // all vertices of current survey geometry
+var _bridgePts = [];        // [{coord:[lng,lat], polyIdx}]
+var _bridgeVerts = [];      // all vertices of current survey geometry
 var _bridgeGroup = null;
+var _bridgeStyledEls = [];  // Leaflet.draw handle elements coloured during picking
 var _editCHandler = null;  // container-level contextmenu capture (edit mode)
 var _editKHandler = null;  // container-level click capture (bridge picking)
 var _editVHandler = null;  // draw:editvertex → re-patch midpoint icons
@@ -1412,6 +1413,7 @@ function _attachEditListeners() {
     var dup = _bridgePts.some(function(p){ return p.coord[0]===v.coord[0]&&p.coord[1]===v.coord[1]; });
     if (dup) return;
     _bridgePts.push(v);
+    _highlightBridgeVertex(v);
     _checkAndCommit();
   };
 
@@ -1450,6 +1452,7 @@ function _buildVertexLayer(geom) {
 function _enterBridgeModeWithVertex(v) {
   enterBridgeMode();   // sets up state, disables box-zoom, refreshes _bridgeVerts
   _bridgePts.push(v);
+  _highlightBridgeVertex(v);
   _checkAndCommit();
 }
 
@@ -1514,12 +1517,50 @@ function enterBridgeMode() {
   _updateBridgePreview();
 }
 
+// Find the nearest Leaflet.draw vertex handle element to a map container point.
+// Excludes midpoint elements (.ld-mid) — only vertex squares.
+function _findEditIconAt(cp) {
+  var mr = map.getContainer().getBoundingClientRect();
+  var best = null, bestD = 30;
+  document.querySelectorAll('.leaflet-editing-icon:not(.ld-mid)').forEach(function(el) {
+    var r = el.getBoundingClientRect();
+    var cx = r.left + r.width / 2 - mr.left;
+    var cy = r.top  + r.height / 2 - mr.top;
+    var d  = Math.sqrt(Math.pow(cx - cp.x, 2) + Math.pow(cy - cp.y, 2));
+    if (d < bestD) { bestD = d; best = el; }
+  });
+  return best;
+}
+
+// Colour the vertex handle nearest to vertex v in the bridge-selection orange.
+function _highlightBridgeVertex(v) {
+  var cp = map.latLngToContainerPoint(L.latLng(v.coord[1], v.coord[0]));
+  var el = _findEditIconAt(cp);
+  if (el && _bridgeStyledEls.indexOf(el) === -1) {
+    el.style.background  = '#f97316';
+    el.style.borderColor = '#c2410c';
+    el.style.boxShadow   = '0 0 0 2px #fed7aa';
+    _bridgeStyledEls.push(el);
+  }
+}
+
+// Restore all coloured vertex handles to their default appearance.
+function _restoreBridgeVertices() {
+  _bridgeStyledEls.forEach(function(el) {
+    el.style.background  = '';
+    el.style.borderColor = '';
+    el.style.boxShadow   = '';
+  });
+  _bridgeStyledEls = [];
+}
+
 function exitBridgeMode() {
   if (!_bridgeMode) return;
   _bridgeMode = false;
   _bridgePts = [];
   _bridgeVerts = [];
   if (_bridgeGroup) { map.removeLayer(_bridgeGroup); _bridgeGroup = null; }
+  _restoreBridgeVertices();
   map.boxZoom.enable();
   var hint = document.getElementById('bridge-hint');
   hint.style.display = 'none';
