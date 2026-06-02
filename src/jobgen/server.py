@@ -501,8 +501,11 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .bridge-btn:not(:disabled):hover{background:#6d28d9}
 .bridge-btn.active{background:#dc2626}
 .bridge-btn.active:not(:disabled):hover{background:#b91c1c}
-/* Leaflet.draw midpoint handles — diamond shape to distinguish from vertex squares */
-.ld-mid{transform:rotate(45deg) scale(0.7)!important;background:#dbeafe!important;border:1.5px solid #60a5fa!important}
+/* Leaflet.draw midpoint handles — diamond via ::before so Leaflet's own
+   translate3d positioning transform on the icon element is not overridden.
+   top/left 50% + translate(-50%,-50%) centres the diamond on the anchor point. */
+.ld-mid{background:transparent!important;border:none!important;overflow:visible!important}
+.ld-mid::before{content:''!important;position:absolute!important;width:7px!important;height:7px!important;top:50%!important;left:50%!important;transform:translate(-50%,-50%) rotate(45deg)!important;background:#fff!important;border:1px solid #94a3b8!important;box-sizing:border-box!important}
 </style>
 </head>
 <body>
@@ -660,6 +663,7 @@ var _bridgeVerts = []; // all vertices of current survey geometry
 var _bridgeGroup = null;
 var _editCHandler = null;  // container-level contextmenu capture (edit mode)
 var _editKHandler = null;  // container-level click capture (bridge picking)
+var _editVHandler = null;  // draw:editvertex → re-patch midpoint icons
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
@@ -1322,6 +1326,11 @@ function toggleEdit() {
     editLayers.addLayer(clone);
     if (clone.editing) clone.editing.enable();
   });
+  // Midpoint markers are in the DOM now; tag them for diamond CSS
+  setTimeout(_patchMidpointIcons, 0);
+  // Re-patch after every vertex edit (midpoint promoted, new midpoints added)
+  _editVHandler = function() { setTimeout(_patchMidpointIcons, 0); };
+  map.on('draw:editvertex', _editVHandler);
   _attachEditListeners();
   document.getElementById('bridge-btn').disabled = false;
 }
@@ -1346,6 +1355,7 @@ function saveEdit() {
   if (lrs.survey) lrs.survey.addTo(map);
   exitBridgeMode();
   _detachEditListeners();
+  if (_editVHandler) { map.off('draw:editvertex', _editVHandler); _editVHandler = null; }
   document.getElementById('bridge-btn').disabled = true;
 }
 
@@ -1652,28 +1662,32 @@ function closeExport() {
   document.getElementById('xov').style.display = 'none';
 }
 
-// ── Leaflet.draw midpoint diamond patch ───────────────────────────────────────
-// Both vertex and midpoint handles use the same CSS class.  The only way to
-// distinguish them is via prototype patching.  Note: _createMiddleMarker does
-// NOT return the marker — it assigns m1._middleRight / m2._middleLeft instead.
-(function() {
-  var klass = L.Edit && (L.Edit.PolyVerticesEdit || L.Edit.Poly);
-  if (!klass) return;
-  var proto = klass.prototype;
-  if (!proto || !proto._createMiddleMarker) return;
-  var orig = proto._createMiddleMarker;
-  proto._createMiddleMarker = function(m1, m2) {
-    orig.call(this, m1, m2);
-    // Leaflet.draw stores the created marker on the adjacent vertex markers
-    var mid = m1._middleRight;
-    if (mid && mid.setIcon) {
-      mid.setIcon(L.divIcon({
-        iconSize: [8, 8], iconAnchor: [4, 4],
-        className: 'leaflet-div-icon leaflet-editing-icon ld-mid'
-      }));
-    }
-  };
-})();
+// ── Leaflet.draw midpoint diamond styling ─────────────────────────────────────
+// Vertex and midpoint handles share the same CSS class.  Leaflet.draw sets
+// opacity 0.6 on midpoint marker elements and leaves vertex elements at the
+// default (no inline opacity style).  After editing.enable() we query the DOM
+// and add .ld-mid to midpoint elements so CSS can target them distinctly.
+function _patchMidpointIcons() {
+  // Called on edit-mode enter and after every draw:editvertex event so that
+  // promoted midpoints lose the class and newly created midpoints gain it.
+  var all = document.querySelectorAll('.leaflet-editing-icon');
+  // Clear first — handles the case where a midpoint was just promoted to vertex
+  all.forEach(function(el) { el.classList.remove('ld-mid'); });
+  // Re-tag midpoints: Leaflet.draw sets opacity:0.6 inline on midpoint elements;
+  // vertex handles have no inline opacity (or opacity:1).
+  var found = 0;
+  all.forEach(function(el) {
+    var op = parseFloat(el.style.opacity);
+    if (!isNaN(op) && op < 1) { el.classList.add('ld-mid'); found++; }
+  });
+  // Fallback: check parent element opacity
+  if (!found) {
+    all.forEach(function(el) {
+      var op = el.parentElement && parseFloat(el.parentElement.style.opacity);
+      if (op && op < 1) { el.classList.add('ld-mid'); }
+    });
+  }
+}
 
 init();
 </script>
