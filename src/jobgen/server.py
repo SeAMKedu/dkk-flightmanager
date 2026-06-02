@@ -1159,7 +1159,7 @@ function renderMap(data) {
   if (data.buildings && data.buildings.length) {
     var bg = L.layerGroup();
     data.buildings.forEach(function(b) {
-      var c = b.is_keepout ? '#dc2626' : '#d97706';
+      var c = b.is_keepout ? '#dc2626' : '#FFBB00';
       var pt = centroid(b.geojson);
       if (pt) L.circleMarker(pt, {radius:5,color:c,fillColor:c,fillOpacity:.85,weight:1.5}).addTo(bg);
     });

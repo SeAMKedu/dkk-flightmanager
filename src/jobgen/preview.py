@@ -198,7 +198,6 @@ def build_map_preview(
     keepout_codes = set(home_safety.residential_kohdeluokka)
     if home_safety.operating_subcategory == "A3":
         keepout_codes |= set(home_safety.a3_additional_kohdeluokka)
-    shown_codes = keepout_codes | set(home_safety.a3_additional_kohdeluokka)
 
     # Survey polygon — wrap as a GeoJSON Feature so Leaflet renders it correctly
     survey_geojson = json.dumps({
@@ -207,11 +206,9 @@ def build_map_preview(
         "properties": {},
     })
 
-    # Building pins
+    # Building pins — show all buildings; red = keep-out, yellow = informational
     pins = []
     for b in buildings:
-        if b.kohdeluokka not in shown_codes:
-            continue
         c = b.geometry.centroid
         colour = _RED if b.kohdeluokka in keepout_codes else _YELLOW
         label = _building_label(b.kohdeluokka)
@@ -327,6 +324,8 @@ def _building_label(kohdeluokka: int) -> str:
         42220: "Commercial", 42221: "Commercial", 42222: "Commercial",
         42230: "Holiday cottage", 42231: "Holiday cottage", 42232: "Holiday cottage",
         42240: "Industrial", 42241: "Industrial", 42242: "Industrial",
+        42260: "Agricultural", 42261: "Agricultural", 42262: "Agricultural",
+        42270: "Other building",
     }
     return mapping_kl.get(kohdeluokka, f"Building {kohdeluokka}")
 
