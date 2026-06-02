@@ -131,6 +131,27 @@ def _init_db(db: Path) -> None:
                 PRIMARY KEY (dataset, tile_id)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS parcels (
+                parcel_id        TEXT NOT NULL,
+                lpis_year        INTEGER NOT NULL,
+                tunnus           INTEGER NOT NULL,
+                area_ha          REAL NOT NULL,
+                geometry_wkt     TEXT NOT NULL,
+                fetch_timestamp  TEXT NOT NULL,
+                PRIMARY KEY (parcel_id, lpis_year)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS properties (
+                property_id      TEXT NOT NULL,
+                display_id       TEXT NOT NULL,
+                area_ha          REAL NOT NULL,
+                geometry_wkt     TEXT NOT NULL,
+                fetch_timestamp  TEXT NOT NULL,
+                PRIMARY KEY (property_id)
+            )
+        """)
         conn.commit()
 
 
@@ -181,12 +202,16 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _is_expired(record: TileRecord, ttl_days: int) -> bool:
-    fetched = datetime.fromisoformat(record.fetch_timestamp)
+def _is_ts_expired(fetch_timestamp: str, ttl_days: int) -> bool:
+    fetched = datetime.fromisoformat(fetch_timestamp)
     if fetched.tzinfo is None:
         fetched = fetched.replace(tzinfo=timezone.utc)
     age_days = (datetime.now(timezone.utc) - fetched).days
     return age_days > ttl_days
+
+
+def _is_expired(record: TileRecord, ttl_days: int) -> bool:
+    return _is_ts_expired(record.fetch_timestamp, ttl_days)
 
 
 def _tile_lock(dataset: str, tile_id: str) -> threading.Lock:
@@ -326,3 +351,130 @@ def tile_provenance(records: list[TileRecord]) -> dict:
         "source_urls": list({r.source_url for r in records if r.source_url}),
         "dataset_versions": list({r.dataset_version for r in records if r.dataset_version}),
     }
+
+
+# ---------------------------------------------------------------------------
+# Parcel cache (keyed by parcel_id + lpis_year, not tile grid)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ParcelRecord:
+    parcel_id: str
+    lpis_year: int
+    tunnus: int
+    area_ha: float
+    geometry_wkt: str    # WKT in EPSG:3067
+    fetch_timestamp: str  # ISO 8601 UTC
+
+
+def get_parcel_cache(
+    cache_config: "CacheConfig",
+    parcel_id: str,
+    lpis_year: int,
+) -> ParcelRecord | None:
+    """Return cached parcel record, or None if missing/expired."""
+    db = _db_path(Path(cache_config.cache_dir))
+    _init_db(db)
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT parcel_id, lpis_year, tunnus, area_ha, geometry_wkt, fetch_timestamp "
+            "FROM parcels WHERE parcel_id=? AND lpis_year=?",
+            (parcel_id, lpis_year),
+        ).fetchone()
+    if row is None:
+        return None
+    record = ParcelRecord(
+        parcel_id=row[0], lpis_year=row[1], tunnus=row[2],
+        area_ha=row[3], geometry_wkt=row[4], fetch_timestamp=row[5],
+    )
+    if _is_ts_expired(record.fetch_timestamp, cache_config.parcels_ttl_days):
+        return None
+    return record
+
+
+def put_parcel_cache(
+    cache_config: "CacheConfig",
+    parcel_id: str,
+    lpis_year: int,
+    tunnus: int,
+    area_ha: float,
+    geometry_wkt: str,
+) -> None:
+    """Insert or replace a parcel record in the cache."""
+    db = _db_path(Path(cache_config.cache_dir))
+    _init_db(db)
+    fetch_ts = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO parcels
+               (parcel_id, lpis_year, tunnus, area_ha, geometry_wkt, fetch_timestamp)
+               VALUES (?,?,?,?,?,?)""",
+            (parcel_id, lpis_year, tunnus, area_ha, geometry_wkt, fetch_ts),
+        )
+        conn.commit()
+    log.debug("Cached parcel %s year=%d", parcel_id, lpis_year)
+
+
+@dataclass
+class PropertyRecord:
+    property_id: str   # 14-digit numeric kiinteistötunnus
+    display_id: str    # dash form e.g. "399-891-1-1"
+    area_ha: float
+    geometry_wkt: str  # WKT in EPSG:3067 (unioned if multiple palstat)
+    fetch_timestamp: str
+
+
+def get_property_cache(
+    cache_config: "CacheConfig",
+    property_id: str,
+) -> PropertyRecord | None:
+    """Return cached property record, or None if missing/expired."""
+    db = _db_path(Path(cache_config.cache_dir))
+    _init_db(db)
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT property_id, display_id, area_ha, geometry_wkt, fetch_timestamp "
+            "FROM properties WHERE property_id=?",
+            (property_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    record = PropertyRecord(
+        property_id=row[0], display_id=row[1], area_ha=row[2],
+        geometry_wkt=row[3], fetch_timestamp=row[4],
+    )
+    if _is_ts_expired(record.fetch_timestamp, cache_config.properties_ttl_days):
+        return None
+    return record
+
+
+def put_property_cache(
+    cache_config: "CacheConfig",
+    property_id: str,
+    display_id: str,
+    area_ha: float,
+    geometry_wkt: str,
+) -> None:
+    """Insert or replace a property record in the cache."""
+    db = _db_path(Path(cache_config.cache_dir))
+    _init_db(db)
+    fetch_ts = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO properties
+               (property_id, display_id, area_ha, geometry_wkt, fetch_timestamp)
+               VALUES (?,?,?,?,?)""",
+            (property_id, display_id, area_ha, geometry_wkt, fetch_ts),
+        )
+        conn.commit()
+    log.debug("Cached property %s", property_id)
+
+
+def check_tile_exists(cache_config: "CacheConfig", dataset: str, tile_id: str) -> bool:
+    """Return True if the tile is in the cache index and its file exists on disk."""
+    db = _db_path(Path(cache_config.cache_dir))
+    if not db.exists():
+        return False
+    record = _lookup(db, dataset, tile_id)
+    return record is not None and record.path.exists()

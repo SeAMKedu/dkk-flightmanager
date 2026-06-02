@@ -236,6 +236,8 @@ class CacheConfig(BaseModel):
     tile_size_m: int = Field(default=1000, gt=0)
     dem_ttl_days: int = Field(default=365, gt=0)
     buildings_ttl_days: int = Field(default=180, gt=0)
+    parcels_ttl_days: int = Field(default=400, gt=0)
+    properties_ttl_days: int = Field(default=400, gt=0)
     offline: bool = False
 
 

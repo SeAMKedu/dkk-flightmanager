@@ -125,6 +125,7 @@ def run_job(
             parcel_ids=parcel_ids,
             bbox=bbox_3067,
             config=config.parcels,
+            cache_config=config.cache,
         )
         if not parcels:
             raise ValueError("No parcels returned — check parcel IDs or bbox.")
@@ -141,6 +142,7 @@ def run_job(
             api_key,
             timeout_s=config.properties.timeout_s,
             page_size=config.properties.page_size,
+            cache_config=config.cache,
         )
         property_ids_used = [p.property_id for p in props]
         property_display_ids_used = [p.display_id for p in props]
@@ -589,7 +591,8 @@ def run_preview(
             _cb(progress_cb, "parcels", "Fetching parcels…", 10)
             log.info("Preview: fetching parcels …")
             parcels = fetch_parcels(
-                parcel_ids=parcel_ids, bbox=bbox_3067, config=config.parcels
+                parcel_ids=parcel_ids, bbox=bbox_3067, config=config.parcels,
+                cache_config=config.cache,
             )
             if not parcels:
                 raise ValueError("No parcels returned — check parcel IDs or bbox.")
@@ -604,6 +607,7 @@ def run_preview(
                 api_key,
                 timeout_s=config.properties.timeout_s,
                 page_size=config.properties.page_size,
+                cache_config=config.cache,
             )
             log.info("Preview: %d kiinteistö(t)", len(props))
             input_geoms.extend(props)

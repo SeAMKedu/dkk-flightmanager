@@ -16,8 +16,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -36,6 +38,7 @@ _active_job_id: str | None = None
 _job_queues: dict[str, asyncio.Queue] = {}
 _config: AppConfig | None = None
 _preview_cache: PreviewCache | None = None
+_last_preview_result: dict | None = None   # full run_preview() result, for job_params.json
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +147,7 @@ def create_app(config: AppConfig) -> FastAPI:
                 print(f"[preview] callback error: {e}")
 
         def run() -> None:
-            global _active_job_id, _preview_cache
+            global _active_job_id, _preview_cache, _last_preview_result
             try:
                 result, new_cache = run_preview(
                     cfg,
@@ -154,6 +157,7 @@ def create_app(config: AppConfig) -> FastAPI:
                     _cache=_preview_cache,
                 )
                 _preview_cache = new_cache
+                _last_preview_result = result
                 print(f"[preview] job {job_id[:8]} done")
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
@@ -219,6 +223,7 @@ def create_app(config: AppConfig) -> FastAPI:
                     custom_polygon_4326=custom_poly,
                 )
                 job_dir = Path(output_dir) / req.job_name
+                _write_job_params(job_dir, req, manifest)
                 output_files = {
                     k: str(p)
                     for k, p in {
@@ -350,6 +355,112 @@ def create_app(config: AppConfig) -> FastAPI:
         except Exception as exc:
             raise HTTPException(400, detail=str(exc))
 
+    # -----------------------------------------------------------------------
+    # Job management endpoints
+    # -----------------------------------------------------------------------
+
+    @app.get("/api/jobs")
+    async def list_jobs():
+        output_dir = Path(_config.output.output_dir).resolve()
+        return {"jobs": _scan_jobs(output_dir)}
+
+    @app.get("/api/jobs/{name}")
+    async def get_job(name: str):
+        output_dir = Path(_config.output.output_dir).resolve()
+        job_dir = output_dir / name
+        if not job_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{name}' not found")
+        params_path = job_dir / "job_params.json"
+        if not params_path.exists():
+            raise HTTPException(404, detail=f"Job '{name}' has no saved params (not yet exported via browser UI)")
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+        manifest_path = job_dir / "manifest.json"
+        stale: list[str] = []
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                stale = _check_cache_staleness(manifest, _config.cache)
+            except Exception:
+                pass
+        return {"params": params, "cache_stale": stale}
+
+    @app.patch("/api/jobs/{name}")
+    async def rename_job(name: str, body: dict):
+        new_name: str = body.get("new_name", "").strip()
+        if not new_name:
+            raise HTTPException(400, detail="new_name is required")
+        if new_name == name:
+            return {"name": name}
+        output_dir = Path(_config.output.output_dir).resolve()
+        old_dir = output_dir / name
+        new_dir = output_dir / new_name
+        if not old_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{name}' not found")
+        if new_dir.exists():
+            raise HTTPException(409, detail=f"Job '{new_name}' already exists")
+        # Rename prefixed output files
+        for f in old_dir.iterdir():
+            if f.name.startswith(f"{name}.") or f.name.startswith(f"{name}_"):
+                suffix = f.name[len(name):]
+                f.rename(old_dir / f"{new_name}{suffix}")
+        # Update job_name in JSON files
+        for json_file in (old_dir / "manifest.json", old_dir / "job_params.json"):
+            if json_file.exists():
+                try:
+                    data = json.loads(json_file.read_text(encoding="utf-8"))
+                    if "job_name" in data:
+                        data["job_name"] = new_name
+                    json_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+        old_dir.rename(new_dir)
+        return {"name": new_name}
+
+    @app.post("/api/jobs/{name}/clone")
+    async def clone_job(name: str):
+        output_dir = Path(_config.output.output_dir).resolve()
+        src_dir = output_dir / name
+        if not src_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{name}' not found")
+        params_path = src_dir / "job_params.json"
+        if not params_path.exists():
+            raise HTTPException(404, detail=f"Job '{name}' has no saved params to clone")
+        # Find a unique clone name
+        base = f"{name}-copy"
+        clone_name = base
+        counter = 2
+        while (output_dir / clone_name).exists():
+            clone_name = f"{base}{counter}"
+            counter += 1
+        clone_dir = output_dir / clone_name
+        clone_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(500, detail=str(exc))
+        params["job_name"] = clone_name
+        params["saved_at"] = datetime.now(timezone.utc).isoformat()
+        (clone_dir / "job_params.json").write_text(
+            json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        # Copy thumbnail if present
+        thumb_src = src_dir / "thumbnail.svg"
+        if thumb_src.exists():
+            shutil.copy2(thumb_src, clone_dir / "thumbnail.svg")
+        return {"name": clone_name}
+
+    @app.delete("/api/jobs/{name}")
+    async def delete_job(name: str):
+        output_dir = Path(_config.output.output_dir).resolve()
+        job_dir = output_dir / name
+        if not job_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{name}' not found")
+        shutil.rmtree(job_dir)
+        return {"deleted": name}
+
     return app
 
 
@@ -396,6 +507,182 @@ def _prepare_config(req: PreviewRequest) -> AppConfig:
         cfg.home_safety.preview_radius_m = req.preview_radius_m
 
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Job persistence helpers
+# ---------------------------------------------------------------------------
+
+
+def _survey_geojson_for_job(req: "ExportRequest") -> dict | None:
+    """Return the survey GeoJSON geometry to use for thumbnail generation."""
+    if req.custom_polygon:
+        return req.custom_polygon
+    if _last_preview_result:
+        return _last_preview_result.get("survey")
+    return None
+
+
+def _make_thumbnail_svg(survey_geojson: dict | None) -> str | None:
+    """Return a tiny SVG string from a GeoJSON Polygon/MultiPolygon geometry."""
+    if survey_geojson is None:
+        return None
+    try:
+        geom_type = survey_geojson.get("type", "")
+        if geom_type == "Polygon":
+            rings = [survey_geojson["coordinates"][0]]
+        elif geom_type == "MultiPolygon":
+            rings = [poly[0] for poly in survey_geojson["coordinates"]]
+        else:
+            return None
+
+        all_lons = [c[0] for ring in rings for c in ring]
+        all_lats = [c[1] for ring in rings for c in ring]
+        lon_min, lon_max = min(all_lons), max(all_lons)
+        lat_min, lat_max = min(all_lats), max(all_lats)
+        lon_span = lon_max - lon_min or 1e-9
+        lat_span = lat_max - lat_min or 1e-9
+        size = 64
+        pad = 4
+
+        def to_svg(lon: float, lat: float) -> tuple[float, float]:
+            x = pad + (lon - lon_min) / lon_span * (size - 2 * pad)
+            y = pad + (1.0 - (lat - lat_min) / lat_span) * (size - 2 * pad)
+            return x, y
+
+        paths = []
+        for ring in rings:
+            pts = " ".join(f"{to_svg(c[0], c[1])[0]:.1f},{to_svg(c[0], c[1])[1]:.1f}" for c in ring)
+            paths.append(f'<polygon points="{pts}" fill="#3b82f6" fill-opacity="0.7" stroke="#1d4ed8" stroke-width="1"/>')
+
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
+            f'width="{size}" height="{size}">'
+            f'<rect width="{size}" height="{size}" fill="#f8fafc"/>'
+            + "".join(paths)
+            + "</svg>"
+        )
+    except Exception:
+        return None
+
+
+def _write_job_params(job_dir: Path, req: "ExportRequest", manifest: dict) -> None:
+    """Write job_params.json and thumbnail.svg alongside the manifest."""
+    params = {
+        "job_name": req.job_name,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "inputs": {
+            "parcel_ids": req.parcel_ids,
+            "property_ids": req.property_ids,
+        },
+        "flight": {
+            "drone": req.drone,
+            "height_m": req.height_m,
+            "subcategory": req.subcategory,
+        },
+        "polygon": {
+            "offset_m": req.offset_m,
+            "simplify": req.simplify,
+            "keepout": req.keepout,
+        },
+        "safety": {
+            "preview_radius_m": req.preview_radius_m,
+        },
+        "custom_polygon_4326": req.custom_polygon,
+        "last_preview_geojson": _last_preview_result,
+    }
+    params_path = job_dir / "job_params.json"
+    params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    survey = _survey_geojson_for_job(req)
+    svg = _make_thumbnail_svg(survey)
+    if svg:
+        (job_dir / "thumbnail.svg").write_text(svg, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Job list API helpers
+# ---------------------------------------------------------------------------
+
+
+def _scan_jobs(output_dir: Path) -> list[dict]:
+    """Scan output_dir for job subdirectories; return sorted list of job cards."""
+    jobs = []
+    if not output_dir.is_dir():
+        return jobs
+    for job_dir in sorted(output_dir.iterdir()):
+        if not job_dir.is_dir():
+            continue
+        card = _read_job_card(job_dir)
+        if card:
+            jobs.append(card)
+    jobs.sort(key=lambda j: j.get("saved_at") or j.get("modified_at") or "", reverse=True)
+    return jobs
+
+
+def _read_job_card(job_dir: Path) -> dict | None:
+    """Build a summary card dict for one job directory."""
+    name = job_dir.name
+    manifest_path = job_dir / "manifest.json"
+    params_path = job_dir / "job_params.json"
+    thumb_path = job_dir / "thumbnail.svg"
+
+    if not manifest_path.exists() and not params_path.exists():
+        return {
+            "name": name,
+            "status": "failed",
+            "saved_at": None,
+            "modified_at": job_dir.stat().st_mtime,
+        }
+
+    manifest: dict = {}
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    params: dict = {}
+    if params_path.exists():
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    thumbnail_svg = None
+    if thumb_path.exists():
+        try:
+            thumbnail_svg = thumb_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    g = manifest.get("geometry", {})
+    f = manifest.get("flight", {})
+    return {
+        "name": name,
+        "status": "ok",
+        "saved_at": params.get("saved_at"),
+        "run_at": manifest.get("run_timestamp"),
+        "area_ha": g.get("final_area_ha"),
+        "vertex_count": g.get("survey_vertex_count"),
+        "drone": f.get("drone"),
+        "drone_label": f.get("drone_label"),
+        "flight_ready": manifest.get("flight_ready"),
+        "needs_review": manifest.get("needs_review"),
+        "thumbnail_svg": thumbnail_svg,
+    }
+
+
+def _check_cache_staleness(manifest: dict, cache_config: "CacheConfig") -> list[str]:
+    """Return list of tile IDs missing from the local cache."""
+    from jobgen.cache import check_tile_exists
+    stale = []
+    provenance = manifest.get("cache_provenance", {})
+    for dataset in ("dem", "buildings"):
+        for tile_id in provenance.get(dataset, {}).get("tile_ids", []):
+            if not check_tile_exists(cache_config, dataset, tile_id):
+                stale.append(f"{dataset}/{tile_id}")
+    return stale
 
 
 # ---------------------------------------------------------------------------
