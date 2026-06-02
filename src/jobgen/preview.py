@@ -32,6 +32,96 @@ log = logging.getLogger(__name__)
 _DSM_MAX_PX = 512   # longest side of the thumbnail embedded in the HTML
 
 
+def build_preview_dsm_thumbnail(
+    tile_paths: list[Path],
+    survey_4326,
+    margin_m: int = 150,
+) -> tuple[str, tuple[float, float, float, float]] | tuple[None, None]:
+    """Build a display-only DSM thumbnail from cached DEM tiles entirely in memory.
+
+    Unlike :func:`~jobgen.raster.build_site_dsm` this skips geoid correction
+    (irrelevant for visual display), writes no files, and downsamples directly
+    to thumbnail resolution so it is fast enough for the web UI live preview.
+
+    Returns ``(base64-PNG, (west, south, east, north))`` in EPSG:4326, or
+    ``(None, None)`` if tiles are unavailable or empty.
+    """
+    import math
+
+    import numpy as np
+    import rasterio
+    import rasterio.merge
+    from rasterio.crs import CRS
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds as transform_from_bounds
+    from rasterio.warp import Resampling, reproject
+
+    if not tile_paths:
+        return None, None
+
+    _NODATA = -9999.0
+    _SRC_CRS = CRS.from_epsg(3067)
+    _DST_CRS = CRS.from_epsg(4326)
+
+    datasets = [rasterio.open(p) for p in tile_paths]
+    try:
+        mosaic, mosaic_transform = rasterio.merge.merge(datasets)
+    finally:
+        for ds in datasets:
+            ds.close()
+
+    bounds = survey_4326.bounds  # (minx, miny, maxx, maxy) in 4326
+    mid_lat = (bounds[1] + bounds[3]) / 2
+    deg_per_m_lat = 1.0 / 111_132.0
+    deg_per_m_lon = 1.0 / (111_132.0 * math.cos(math.radians(mid_lat)))
+    margin_lat = margin_m * deg_per_m_lat
+    margin_lon = margin_m * deg_per_m_lon
+
+    dst_left   = bounds[0] - margin_lon
+    dst_bottom = bounds[1] - margin_lat
+    dst_right  = bounds[2] + margin_lon
+    dst_top    = bounds[3] + margin_lat
+
+    # Thumbnail dimensions preserving aspect ratio
+    aspect = (dst_right - dst_left) / max(dst_top - dst_bottom, 1e-9)
+    if aspect >= 1:
+        tw, th = _DSM_MAX_PX, max(1, int(round(_DSM_MAX_PX / aspect)))
+    else:
+        tw, th = max(1, int(round(_DSM_MAX_PX * aspect))), _DSM_MAX_PX
+
+    dst_transform = transform_from_bounds(dst_left, dst_bottom, dst_right, dst_top, tw, th)
+    dst_data = np.full((1, th, tw), _NODATA, dtype="float32")
+    reproject(
+        source=mosaic, destination=dst_data,
+        src_transform=mosaic_transform, src_crs=_SRC_CRS,
+        src_nodata=_NODATA, dst_transform=dst_transform, dst_crs=_DST_CRS,
+        dst_nodata=_NODATA, resampling=Resampling.average,
+    )
+
+    valid_mask = dst_data[0] != _NODATA
+    valid = dst_data[0][valid_mask]
+    if len(valid) == 0:
+        return None, None
+
+    lo, hi = float(valid.min()), float(valid.max())
+    gray = np.zeros((th, tw), dtype=np.uint8)
+    if hi > lo:
+        gray[valid_mask] = ((dst_data[0][valid_mask] - lo) / (hi - lo) * 255).astype(np.uint8)
+    else:
+        gray[valid_mask] = 128
+
+    rgba = np.zeros((4, th, tw), dtype=np.uint8)
+    rgba[0] = gray; rgba[1] = gray; rgba[2] = gray
+    rgba[3] = np.where(valid_mask, 255, 0).astype(np.uint8)
+
+    with MemoryFile() as mem:
+        with mem.open(driver="PNG", dtype="uint8", count=4, width=tw, height=th) as dst:
+            dst.write(rgba)
+        png_bytes = mem.read()
+
+    return base64.b64encode(png_bytes).decode(), (dst_left, dst_bottom, dst_right, dst_top)
+
+
 def _dsm_thumbnail_b64(dsm_path: Path) -> tuple[str, tuple[float, float, float, float]] | tuple[None, None]:
     """Return (base64-PNG, (west, south, east, north)) for the DSM, or (None, None)."""
     import numpy as np
@@ -398,14 +488,12 @@ eyeTog('eye-dsm',
       <span>{home_buffer_m:.0f} m keep-out</span>
     </div>
     <div class="leg-row">
-      <div></div>
-      <div class="leg-icon"><div class="dot" style="background:{_RED};"></div></div>
-      <span>Keep-out building</span>
-    </div>
-    <div class="leg-row">
-      <div></div>
-      <div class="leg-icon"><div class="dot" style="background:{_YELLOW};"></div></div>
-      <span>Nearby building</span>
+      <button class="eye-btn" id="eye-pins" title="Toggle buildings"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+      <div class="leg-icon" style="display:flex;gap:2px">
+        <div class="dot" style="background:{_RED};"></div>
+        <div class="dot" style="background:{_YELLOW};"></div>
+      </div>
+      <span>Buildings</span>
     </div>
   </div>
   {reasons_html}
@@ -499,12 +587,13 @@ parcels.forEach(function(f) {{
 }})();
 
 // 6. Pin markers — always on top via pinsPane
+var pinsGroup = L.layerGroup().addTo(map);
 pins.forEach(function(p) {{
   L.circleMarker([p.lat, p.lon], {{
     radius: 7, color: '#fff', weight: 1.5,
     fillColor: p.colour, fillOpacity: 0.9,
     pane: 'pinsPane'
-  }}).bindPopup(p.label).addTo(map);
+  }}).bindPopup(p.label).addTo(pinsGroup);
 }});
 
 // Zone overlays (above everything except pins)
@@ -535,6 +624,9 @@ eyeTog('eye-red-c',
 eyeTog('eye-vertices',
   function() {{ vertexGroup.addTo(map); }},
   function() {{ map.removeLayer(vertexGroup); }});
+eyeTog('eye-pins',
+  function() {{ pinsGroup.addTo(map); }},
+  function() {{ map.removeLayer(pinsGroup); }});
 {dsm_js}
 </script>
 </body>

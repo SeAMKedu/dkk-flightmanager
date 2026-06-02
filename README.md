@@ -10,7 +10,7 @@ bounding box, produces a ready-to-fly DJI Pilot 2 mapping job:
 | `<name>.kmz` | WPML mapping route with embedded terrain-follow DSM — import into DJI Pilot 2 |
 | `<name>_dsm.tif` | Terrain-follow DSM (also embedded in the KMZ, kept separately as a backup) |
 | `<name>_homes.kml` | Building pins — import as a Pilot 2 custom map layer |
-| `<name>_map.html` | Browser map preview — review before driving to the field |
+| `<name>_map.html` | Browser map preview — survey polygon, buildings, keep-out circles, warning radius circles, UAS zones, DSM elevation overlay; all layers toggleable |
 | `manifest.json` | Full provenance record with flight stats and safety flags |
 | `run.log` | Structured log for this run |
 
@@ -64,7 +64,30 @@ The MML API key is free — obtain one at https://www.maanmittauslaitos.fi/rajap
 
 `jobgen` reads the `.env` file automatically on startup, so no extra steps are needed. Ruokavirasto parcel data is open and requires no key.
 
-## Usage
+## Browser UI
+
+The recommended way to use the tool is the built-in browser UI:
+
+```bash
+jobgen serve                         # opens http://localhost:8765 automatically
+jobgen serve --port 8080 --no-open   # custom port, no auto-open
+```
+
+The single-page Leaflet map interface lets you:
+
+- **Enter area IDs** — paste Ruokavirasto parcel IDs or MML kiinteistötunnus values; the map updates automatically when you leave the field.
+- **Tune flight parameters** — subcategory (A2/A3 pills), drone, height (live GSD display), and warning radius (linked to 3× height by default; click the "3:1" label to restore the link after manual override).
+- **Tune polygon** — offset (expand/contract), simplify (Auto pill + −/+ step buttons), keep-out toggle.
+- **Preview the survey** — click **↻ Update** or edit any parameter to see the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all toggleable from the legend.
+- **Edit the polygon** — double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to save. Click **↻ Reset polygon** to revert.
+- **Export** — click **↓ Export KMZ** to write the full job (KMZ, DSM, homes KML, HTML preview, manifest) to disk.
+- **New job** — click **＋ New job** to reset the editor for a new area without restarting the server.
+
+The preview is fast on repeat runs because fetched parcel and building data is cached in memory between calls — only geometry and zone checks rerun when you change flight parameters.
+
+---
+
+## CLI Usage
 
 ### Specifying the survey area
 
@@ -231,15 +254,26 @@ jobgen cache status
 jobgen cache refresh --older-than 30
 ```
 
-## Operator workflow (on the RC)
+## Operator workflow
+
+### Planning (office / laptop)
+
+1. Run `jobgen serve` and open http://localhost:8765.
+2. Paste parcel or property IDs — the survey polygon appears automatically.
+3. Adjust height, subcategory, simplify, and offset as needed.
+4. Review the map: survey polygon, keep-out circles, warning radius circles, buildings, UAS zones, and DSM elevation overlay (toggle layers via the legend).
+5. Edit the polygon if needed (double-click to enter, double-click background to save).
+6. Click **↓ Export KMZ** when satisfied.
+7. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
+
+### On the RC
 
 1. Copy `<name>.kmz` and `<name>_homes.kml` to the RC via USB.
 2. Open DJI Pilot 2 → **Routes** → import `<name>.kmz`.
    The DSM is embedded in the KMZ — Pilot 2 links it automatically.
 3. In the map view → **Custom layers** → import `<name>_homes.kml` to see building pins.
-4. Open `<name>_map.html` in a browser for a visual pre-flight review.
-5. Verify the height readout over the field looks correct.
-6. **Never fly a job with `flight_ready: false` or `needs_review: true` in the manifest
+4. Verify the height readout over the field looks correct.
+5. **Never fly a job with `flight_ready: false` or `needs_review: true` in the manifest
    without a human check** — these flags indicate home-distance, zone, or geometry issues.
 
 ## Subcategory and keep-out distances

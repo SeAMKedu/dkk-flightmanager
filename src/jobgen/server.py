@@ -1,0 +1,1327 @@
+"""Browser UI server — launched with `jobgen serve`.
+
+Endpoints:
+  GET  /                        → single-page HTML UI
+  GET  /api/drones              → list drone profiles
+  GET  /api/config              → config defaults for form prefill
+  POST /api/preview             → start geometry+zone preview job (no files written)
+  POST /api/export              → start full pipeline job (writes files)
+  GET  /api/progress/{job_id}  → SSE progress stream
+
+Single-job-at-a-time: 409 returned if a job is already running.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Callable
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
+from pydantic import BaseModel
+
+from jobgen.config import AppConfig
+from jobgen.pipeline import PreviewCache, run_job, run_preview
+
+log = logging.getLogger(__name__)
+
+_executor = ThreadPoolExecutor(max_workers=1)
+_job_lock = threading.Lock()
+_active_job_id: str | None = None
+_job_queues: dict[str, asyncio.Queue] = {}
+_config: AppConfig | None = None
+_preview_cache: PreviewCache | None = None
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+
+class PreviewRequest(BaseModel):
+    parcel_ids: list[str] = []
+    property_ids: list[str] = []
+    drone: str | None = None
+    height_m: float | None = None
+    subcategory: str = "A3"
+    offset_m: float = 0.0
+    simplify: str = "auto"
+    keepout: bool = True
+    preview_radius_m: float | None = None
+
+
+class ExportRequest(PreviewRequest):
+    job_name: str
+    custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
+
+
+# ---------------------------------------------------------------------------
+# App factory
+# ---------------------------------------------------------------------------
+
+
+def create_app(config: AppConfig) -> FastAPI:
+    global _config
+    _config = config
+
+    app = FastAPI(title="dkk-jobmaker", docs_url=None, redoc_url=None)
+
+    @app.get("/", response_class=HTMLResponse)
+    async def ui():
+        return _UI_HTML
+
+    @app.get("/api/drones")
+    async def get_drones():
+        return [
+            {
+                "name": d.name,
+                "label": d.label,
+                "focal_length_mm": d.focal_length_mm,
+                "pixel_pitch_um": d.pixel_pitch_um,
+                "battery_minutes": d.battery_minutes,
+            }
+            for d in _config.drones
+        ]
+
+    @app.get("/api/config")
+    async def get_config():
+        drone = _config.active_drone()
+        return {
+            "default_drone": _config.default_drone,
+            "output_dir": str(Path(_config.output.output_dir).resolve()),
+            "subcategory": _config.home_safety.operating_subcategory,
+            "height_m": int(drone.height_from_gsd(_config.flight.target_gsd_cm)),
+            "offset_m": _config.polygon.survey_offset_m,
+            "simplify": (
+                "auto" if _config.polygon.simplify_mode == "auto"
+                else str(_config.polygon.simplify_tolerance_m)
+            ),
+            "keepout": _config.home_safety.offset_enabled,
+        }
+
+    @app.post("/api/preview")
+    async def start_preview(req: PreviewRequest):
+        global _active_job_id
+        with _job_lock:
+            if _active_job_id is not None:
+                raise HTTPException(409, detail="A job is already running — please wait.")
+            import uuid
+            job_id = str(uuid.uuid4())
+            _active_job_id = job_id
+
+        queue: asyncio.Queue = asyncio.Queue()
+        _job_queues[job_id] = queue
+        loop = asyncio.get_running_loop()
+        cfg = _prepare_config(req)
+
+        cached = _preview_cache is not None and _preview_cache.covers(
+            req.parcel_ids or None, req.property_ids or None,
+            2.0 * cfg.home_safety.home_buffer_m,
+        )
+        print(
+            f"[preview] job {job_id[:8]} starting — parcels={req.parcel_ids} props={req.property_ids}"
+            + (" (cached parcels+buildings)" if cached else "")
+        )
+
+        def cb(stage: str, msg: str, pct: int) -> None:
+            print(f"[preview] {pct:3d}% {stage}: {msg}")
+            try:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct}
+                )
+            except Exception as e:
+                print(f"[preview] callback error: {e}")
+
+        def run() -> None:
+            global _active_job_id, _preview_cache
+            try:
+                result, new_cache = run_preview(
+                    cfg,
+                    parcel_ids=req.parcel_ids or None,
+                    property_ids=req.property_ids or None,
+                    progress_cb=cb,
+                    _cache=_preview_cache,
+                )
+                _preview_cache = new_cache
+                print(f"[preview] job {job_id[:8]} done")
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"stage": "done", "pct": 100, "payload": result},
+                )
+            except Exception as exc:
+                import traceback
+                print(f"[preview] job {job_id[:8]} FAILED: {exc}")
+                traceback.print_exc()
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"stage": "error", "pct": 0, "msg": str(exc)},
+                )
+            finally:
+                with _job_lock:
+                    _active_job_id = None
+
+        loop.run_in_executor(_executor, run)
+        return {"job_id": job_id}
+
+    @app.post("/api/export")
+    async def start_export(req: ExportRequest):
+        global _active_job_id
+        with _job_lock:
+            if _active_job_id is not None:
+                raise HTTPException(409, detail="A job is already running — please wait.")
+            import uuid
+            job_id = str(uuid.uuid4())
+            _active_job_id = job_id
+
+        queue: asyncio.Queue = asyncio.Queue()
+        _job_queues[job_id] = queue
+        loop = asyncio.get_running_loop()
+        cfg = _prepare_config(req)
+
+        custom_poly = None
+        if req.custom_polygon:
+            from shapely.geometry import shape
+            custom_poly = shape(req.custom_polygon)
+
+        print(f"[export] job {job_id[:8]} '{req.job_name}' starting")
+
+        def cb(stage: str, msg: str, pct: int) -> None:
+            print(f"[export] {pct:3d}% {stage}: {msg}")
+            try:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct}
+                )
+            except Exception as e:
+                print(f"[export] callback error: {e}")
+
+        output_dir = str(Path(_config.output.output_dir).resolve())
+
+        def run() -> None:
+            global _active_job_id
+            try:
+                manifest = run_job(
+                    req.job_name,
+                    cfg,
+                    parcel_ids=req.parcel_ids or None,
+                    property_ids=req.property_ids or None,
+                    progress_cb=cb,
+                    custom_polygon_4326=custom_poly,
+                )
+                job_dir = Path(output_dir) / req.job_name
+                output_files = {
+                    k: str(p)
+                    for k, p in {
+                        "kmz": job_dir / f"{req.job_name}.kmz",
+                        "homes_kml": job_dir / f"{req.job_name}_homes.kml",
+                        "dsm_tif": job_dir / f"{req.job_name}_dsm.tif",
+                        "preview_html": job_dir / f"{req.job_name}_map.html",
+                        "manifest": job_dir / "manifest.json",
+                    }.items()
+                    if p.exists()
+                }
+                g = manifest.get("geometry", {})
+                f = manifest.get("flight", {})
+                stats = {
+                    "original_area_ha": g.get("original_area_ha", 0),
+                    "final_area_ha": g.get("final_area_ha", 0),
+                    "area_lost_pct": g.get("area_lost_pct", 0),
+                    "survey_vertex_count": g.get("survey_vertex_count", 0),
+                    "flight_height_m": f.get("derived_height_m", 0),
+                    "target_gsd_cm": f.get("target_gsd_cm", 0),
+                    "drone": f.get("drone", ""),
+                    "drone_label": f.get("drone_label", ""),
+                    "needs_review": manifest.get("needs_review", False),
+                    "flight_ready": manifest.get("flight_ready", False),
+                    "review_reasons": manifest.get("review_reasons", []),
+                    "zones_checked": manifest.get("zones", {}).get("checked", False),
+                    "zones_clear": not manifest.get("zones", {}).get("intersecting_zones"),
+                    "zone_count": len(manifest.get("zones", {}).get("intersecting_zones", [])),
+                }
+                print(f"[export] job {job_id[:8]} done — {output_dir}/{req.job_name}")
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {
+                        "stage": "done",
+                        "pct": 100,
+                        "payload": {
+                            "output_files": output_files,
+                            "stats": stats,
+                            "output_dir": output_dir,
+                            "job_name": req.job_name,
+                        },
+                    },
+                )
+            except Exception as exc:
+                import traceback
+                print(f"[export] job {job_id[:8]} FAILED: {exc}")
+                traceback.print_exc()
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"stage": "error", "pct": 0, "msg": str(exc)},
+                )
+            finally:
+                with _job_lock:
+                    _active_job_id = None
+
+        loop.run_in_executor(_executor, run)
+        return {"job_id": job_id}
+
+    @app.get("/api/progress/{job_id}")
+    async def progress_stream(job_id: str):
+        queue = _job_queues.get(job_id)
+        if not queue:
+            raise HTTPException(404, detail="Job not found")
+
+        async def generate():
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    if event.get("stage") in ("done", "error"):
+                        _job_queues.pop(job_id, None)
+                        break
+                except asyncio.TimeoutError:
+                    yield 'data: {"stage":"keepalive"}\n\n'
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    return app
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _prepare_config(req: PreviewRequest) -> AppConfig:
+    import copy
+
+    cfg = copy.deepcopy(_config)
+
+    if req.drone:
+        if req.drone in [d.name for d in cfg.drones]:
+            cfg.default_drone = req.drone
+
+    if req.height_m is not None:
+        active = cfg.active_drone()
+        cfg.flight.target_gsd_cm = active.gsd_from_height(req.height_m)
+        cfg.flight.max_height_agl_m = max(cfg.flight.max_height_agl_m, req.height_m + 1)
+
+    sub = req.subcategory.upper()
+    if sub in ("A2", "A3"):
+        cfg.home_safety.operating_subcategory = sub
+        if sub == "A2" and req.height_m is not None:
+            cfg.home_safety.home_buffer_m = req.height_m
+
+    cfg.polygon.survey_offset_m = req.offset_m
+
+    if req.simplify == "auto":
+        cfg.polygon.simplify_mode = "auto"
+    else:
+        try:
+            tol = float(req.simplify)
+            cfg.polygon.simplify_mode = "fixed"
+            cfg.polygon.simplify_tolerance_m = max(0.0, tol)
+        except (ValueError, TypeError):
+            cfg.polygon.simplify_mode = "auto"
+
+    cfg.home_safety.offset_enabled = req.keepout
+
+    if req.preview_radius_m is not None:
+        cfg.home_safety.preview_radius_m = req.preview_radius_m
+
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Embedded HTML / CSS / JS UI
+# ---------------------------------------------------------------------------
+
+_UI_HTML = r"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>dkk-jobmaker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#f1f5f9}
+#hdr{background:#1e293b;color:#f8fafc;padding:9px 14px;display:flex;align-items:center;gap:10px;flex-shrink:0}
+#hdr h1{font-size:14px;font-weight:700;letter-spacing:-.01em}
+#main{display:flex;flex:1;overflow:hidden}
+#sb{width:272px;background:#f8fafc;border-right:1px solid #e2e8f0;overflow-y:auto;padding:8px 7px;flex-shrink:0;display:flex;flex-direction:column;gap:7px}
+#mc{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative}
+#map{flex:1;z-index:0}
+#legend{position:absolute;top:10px;right:10px;z-index:500;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;font-size:11px;display:block;box-shadow:0 2px 8px rgba(0,0,0,.12);min-width:148px;transition:opacity .2s}
+#legend.inactive{opacity:.35;pointer-events:none}
+#legend h4{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+@keyframes area-pulse{0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.5)}60%{box-shadow:0 0 0 5px rgba(59,130,246,.08)}}
+.area-focus{border-color:#3b82f6 !important;animation:area-pulse 1.4s ease 3}
+.leg-row{display:grid;grid-template-columns:20px 22px 1fr;align-items:center;margin:3px 0}
+.leg-eye{background:none;border:none;cursor:pointer;padding:0;width:20px;display:flex;align-items:center;justify-content:center;color:#374151;transition:color .15s}
+.leg-eye .eye-slash{display:none}
+.leg-eye.off{color:#9ca3af}
+.leg-eye.off .eye-open{display:none}
+.leg-eye.off .eye-slash{display:block}
+.leg-icon{display:flex;align-items:center;justify-content:center;gap:2px}
+.l-swatch{width:18px;height:10px;border-radius:2px}
+.l-dot{width:10px;height:10px;border-radius:50%}
+#sp{height:200px;background:#f8fafc;border-top:1px solid #e2e8f0;padding:10px 12px;overflow-y:auto;flex-shrink:0}
+.sec{background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px}
+.sec h3{font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+label{display:block;font-size:11px;font-weight:500;color:#475569;margin-bottom:2px;margin-top:6px}
+label:first-of-type{margin-top:0}
+input,select,textarea{width:100%;padding:5px 7px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;background:#fff;color:#1e293b;outline:none}
+input:focus,select:focus,textarea:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.15)}
+textarea{resize:vertical;min-height:44px;font-family:monospace;font-size:11px}
+.path-hint{font-size:10px;color:#64748b;margin-top:3px;word-break:break-all;line-height:1.4}
+.gsd-row{font-size:11px;color:#64748b;margin-top:3px}
+.ck-row{display:flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-top:7px;cursor:pointer;user-select:none}
+.ck-row input{width:auto;accent-color:#3b82f6;cursor:pointer}
+.btn-pair{display:flex;gap:5px;margin-top:5px}
+button{width:100%;padding:7px 10px;border:none;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;transition:background .12s,opacity .12s}
+button:disabled{opacity:.4;cursor:not-allowed}
+#ub{background:#0f172a;color:#f8fafc;flex:1}
+#ub:not(:disabled):hover{background:#1e293b}
+#njb{background:#475569;color:#f8fafc;flex:1}
+#njb:not(:disabled):hover{background:#334155}
+#xb{background:#16a34a;color:#fff;margin-top:5px}
+#xb:not(:disabled):hover{background:#15803d}
+.rst-btn{background:#7c3aed;color:#fff;font-size:11px}
+.rst-btn:not(:disabled):hover{background:#6d28d9}
+.pill-row{display:flex;gap:4px;margin-top:4px}
+.pill{flex:1;padding:4px 0;border:1px solid #cbd5e1;border-radius:20px;background:#fff;color:#475569;font-size:11px;font-weight:600;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+.pill.active{background:#0f172a;color:#f8fafc;border-color:#0f172a}
+.pill:hover:not(.active){background:#f1f5f9;border-color:#94a3b8}
+.simp-row{display:flex;align-items:center;gap:4px;margin-top:4px}
+.simp-pill{flex:1;padding:4px 10px;border:1px solid #cbd5e1;border-radius:20px;background:#fff;color:#475569;font-size:11px;font-weight:600;cursor:pointer;transition:background .12s,color .12s,border-color .12s;white-space:nowrap}
+.simp-pill.active{background:#0f172a;color:#f8fafc;border-color:#0f172a}
+.simp-pill:hover:not(.active){background:#f1f5f9;border-color:#94a3b8}
+.simp-step{width:26px;padding:4px 0;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#374151;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0;transition:background .12s}
+.simp-step:hover:not(:disabled){background:#f1f5f9}
+.simp-val{width:36px;flex-shrink:0;text-align:center;font-size:11px;color:#475569;font-weight:600}
+#pgwrap{margin-top:5px;opacity:0;transition:opacity .15s;pointer-events:none}
+#pgtrack{background:#e2e8f0;border-radius:3px;height:5px;overflow:hidden}
+#pgfill{background:#3b82f6;height:100%;width:0;transition:width .25s;border-radius:3px}
+#pgmsg{font-size:10px;color:#64748b;margin-top:3px;height:14px;overflow:hidden}
+#errdiv{display:none;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:6px 8px;font-size:11px;color:#dc2626;margin-top:5px;word-break:break-word}
+#modbadge{display:none;background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:3px 7px;border-radius:4px;font-size:10px;margin-top:4px}
+/* status panel */
+.sh{font-size:13px;font-weight:700;margin-bottom:7px}
+.sok{color:#16a34a}.swrn{color:#d97706}.serr{color:#dc2626}
+.sgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:7px}
+.sbox{background:#fff;border:1px solid #e2e8f0;border-radius:4px;padding:5px 7px}
+.slbl{font-size:9px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em}
+.sval{font-size:13px;font-weight:700;color:#1e293b;line-height:1.3}
+.rlist{margin-top:4px}
+.ritem{font-size:10px;color:#dc2626;padding:1px 0}
+/* export overlay */
+#xov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;align-items:center;justify-content:center}
+#xcard{background:#fff;border-radius:8px;padding:20px 22px;max-width:480px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.18)}
+#xcard h2{font-size:14px;font-weight:700;margin-bottom:10px;color:#166534}
+.frow{font-size:11px;color:#334155;padding:3px 0;font-family:monospace;word-break:break-all}
+.frow b{color:#64748b;font-family:sans-serif;font-size:10px;display:block;font-weight:600}
+#xcls{margin-top:14px;background:#1e293b;color:#fff}
+/* toast */
+#toast{position:fixed;bottom:14px;right:14px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 13px;box-shadow:0 4px 16px rgba(0,0,0,.12);width:220px;z-index:9999;display:none}
+#ttitle{font-size:11px;font-weight:700;color:#1e293b;margin-bottom:5px}
+#ttrack{background:#e2e8f0;border-radius:3px;height:6px;overflow:hidden}
+#tfill{background:#3b82f6;height:100%;width:0;transition:width .25s}
+#tmsg{font-size:10px;color:#64748b;margin-top:3px}
+</style>
+</head>
+<body>
+<div id="hdr">
+  <h1>dkk-jobmaker</h1>
+</div>
+<div id="main">
+  <div id="sb">
+
+    <div class="sec">
+      <h3>Job</h3>
+      <div class="btn-pair">
+        <button id="njb" onclick="newJob()">&#43; New job</button>
+        <button id="ub" onclick="startPreview()">&#8635; Update</button>
+      </div>
+      <button id="xb" onclick="startExport()" disabled style="margin-top:5px">&#8595; Export KMZ</button>
+      <div id="pgwrap">
+        <div id="pgtrack"><div id="pgfill"></div></div>
+        <div id="pgmsg"></div>
+      </div>
+      <div id="errdiv"></div>
+      <label style="margin-top:8px">Name</label>
+      <input type="text" id="jname" placeholder="job-20260602-1423">
+      <div class="path-hint" id="pathint">Output: —</div>
+    </div>
+
+    <div class="sec" id="area-sec">
+      <h3>Area</h3>
+      <label>Parcel IDs (peruslohkotunnus)</label>
+      <textarea id="pids" rows="2" placeholder="5241087453&#10;5241087453, 5241087454"></textarea>
+      <label>Property IDs (kiinteistötunnus)</label>
+      <textarea id="kids" rows="2" placeholder="214-407-3-22"></textarea>
+    </div>
+
+    <div class="sec">
+      <h3>Flight</h3>
+      <label>Subcategory</label>
+      <div class="pill-row">
+        <button class="pill active" id="sub-a3" onclick="setSub('A3')">A3</button>
+        <button class="pill"        id="sub-a2" onclick="setSub('A2')">A2</button>
+      </div>
+      <label>Drone</label>
+      <select id="dsel"></select>
+      <label>Height (m AGL)</label>
+      <input type="number" id="hgt" min="20" max="120" step="1" value="60">
+      <div class="gsd-row">GSD: <span id="gsdv">—</span> cm/px</div>
+      <label>Warning radius (m) <span id="warn-radius-hint" style="font-weight:400;color:#94a3b8;cursor:default" title="3× flight height">3:1</span></label>
+      <input type="number" id="warn-radius" min="0" max="2000" step="10" value="180">
+    </div>
+
+    <div class="sec">
+      <h3>Polygon</h3>
+      <label>Offset (m)</label>
+      <input type="number" id="offset" value="0" step="1">
+      <label>Simplify</label>
+      <div class="simp-row">
+        <button class="simp-pill active" id="simp-auto" onclick="setSimpAuto()">Auto</button>
+        <button class="simp-step" id="simp-minus" onclick="simpStep(-1)" disabled>&#8722;</button>
+        <span class="simp-val" id="simp-val">—</span>
+        <button class="simp-step" id="simp-plus"  onclick="simpStep(+1)" disabled>&#43;</button>
+      </div>
+      <label class="ck-row">
+        <input type="checkbox" id="kochk" checked>
+        Keep-out subtraction
+      </label>
+      <div id="modbadge">&#9888; Polygon manually edited</div>
+      <button class="rst-btn" id="rstbtn" onclick="resetPoly()" disabled style="margin-top:6px">&#8635; Reset polygon</button>
+    </div>
+
+
+  </div>
+
+  <div id="mc">
+    <div id="map"></div>
+    <div id="legend">
+      <h4>Layers</h4>
+      <div class="leg-row" id="leg-dsm-row" style="display:none">
+        <button class="leg-eye off" id="leg-dsm" title="DSM elevation"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:linear-gradient(to right,#000,#fff);border:1px solid #9ca3af;"></div></div>
+        <span>DSM elevation</span>
+      </div>
+      <div class="leg-row">
+        <button class="leg-eye" id="leg-areas" title="Original parcel"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:none;border:1.5px dashed #16a34a;"></div></div>
+        <span>Original parcel</span>
+      </div>
+      <div class="leg-row">
+        <button class="leg-eye" id="leg-survey" title="Survey polygon"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:#3b82f6;opacity:.7;border:2px solid #1d4ed8;"></div></div>
+        <span>Survey polygon</span>
+      </div>
+      <div class="leg-row">
+        <button class="leg-eye" id="leg-vertices" title="Polygon vertices"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-dot" style="background:#93c5fd;border:1px solid #1d4ed8;"></div></div>
+        <span>Polygon vertices</span>
+      </div>
+      <div class="leg-row" id="leg-rings-row" style="display:none">
+        <button class="leg-eye" id="leg-rings" title="Warning radius circles"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:#fef08a;opacity:.8;border:1px dashed #ca8a04;"></div></div>
+        <span id="leg-rings-label">Warning radius</span>
+      </div>
+      <div class="leg-row" id="leg-ko-row">
+        <button class="leg-eye" id="leg-ko" title="Keep-out circles"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:#fca5a5;opacity:.8;border:1px dashed #dc2626;"></div></div>
+        <span>Keep-out</span>
+      </div>
+      <div class="leg-row" id="leg-bldgs-row">
+        <button class="leg-eye" id="leg-bldgs" title="Buildings"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-dot" style="background:#dc2626;"></div><div class="l-dot" style="background:#d97706;"></div></div>
+        <span>Buildings</span>
+      </div>
+      <div class="leg-row" id="leg-zones-row">
+        <button class="leg-eye" id="leg-zones" title="UAS zones"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:#f97316;opacity:.4;border:1px solid #ea580c;"></div></div>
+        <span>UAS zones</span>
+      </div>
+    </div>
+    <div id="sp">
+      <div id="spcontent"></div>
+    </div>
+  </div>
+</div>
+
+<div id="xov">
+  <div id="xcard">
+    <h2>&#10003; Export complete</h2>
+    <div id="xfiles"></div>
+    <button id="xcls" onclick="closeExport()">Close</button>
+  </div>
+</div>
+
+<div id="toast">
+  <div id="ttitle">Running…</div>
+  <div id="ttrack"><div id="tfill"></div></div>
+  <div id="tmsg">Starting…</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+var drones = [];
+var outputDir = '';
+var previewData = null;
+var editedPoly = null;
+var polyModified = false;
+var isRunning = false;
+var currentSSE = null;
+var editMode = false;
+
+// ── Map ───────────────────────────────────────────────────────────────────────
+var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution:'&copy; OpenStreetMap', maxZoom:19}).addTo(map);
+
+// DSM pane sits below overlayPane (400) so vectors always render on top
+map.createPane('dsmPane');
+map.getPane('dsmPane').style.zIndex = 350;
+map.getPane('dsmPane').style.pointerEvents = 'none';
+
+var editLayers = new L.FeatureGroup().addTo(map);
+map.addControl(new L.Control.Draw({draw:false, edit:{featureGroup:editLayers, remove:false}}));
+
+map.on(L.Draw.Event.EDITED, function(e) {
+  e.layers.eachLayer(function(l) {
+    editedPoly = layerGeom(l);
+    polyModified = true;
+    document.getElementById('modbadge').style.display = 'block';
+  });
+  editMode = false;
+  map.doubleClickZoom.enable();
+  if (lrs.survey) lrs.survey.addTo(map);
+});
+
+var lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+
+function layerGeom(layer) {
+  var lls = layer.getLatLngs();
+  var ring = (Array.isArray(lls[0]) ? lls[0] : lls).map(function(ll){return [ll.lng,ll.lat];});
+  ring.push(ring[0]);
+  return {type:'Polygon', coordinates:[ring]};
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  // Default job name = timestamp
+  document.getElementById('jname').value = defaultJobName();
+
+  try {
+    var r = await fetch('/api/drones');
+    if (!r.ok) throw new Error('drones ' + r.status);
+    drones = await r.json();
+    var sel = document.getElementById('dsel');
+    drones.forEach(function(d) {
+      var o = document.createElement('option');
+      o.value = d.name; o.textContent = d.label;
+      sel.appendChild(o);
+    });
+
+    var cr = await fetch('/api/config');
+    if (!cr.ok) throw new Error('config ' + cr.status);
+    var cfg = await cr.json();
+
+    outputDir = cfg.output_dir || '';
+    updatePathHint();
+
+    if (cfg.default_drone) sel.value = cfg.default_drone;
+    if (cfg.subcategory) setSub(cfg.subcategory, true);
+    if (cfg.offset_m !== undefined) document.getElementById('offset').value = cfg.offset_m;
+    if (cfg.height_m) {
+      var h0 = Math.round(cfg.height_m);
+      document.getElementById('hgt').value = h0;
+      document.getElementById('warn-radius').value = 3 * h0;
+    }
+    if (cfg.simplify && cfg.simplify !== 'auto') {
+      setSimpManual(parseFloat(cfg.simplify) || 0, true);
+    }
+    document.getElementById('kochk').checked = cfg.keepout !== false;
+    updateGsd();
+    console.log('[init] config loaded, outputDir='+outputDir+', drone='+cfg.default_drone);
+  } catch(e) {
+    console.error('[init] failed:', e);
+  }
+  renderStatus(null);
+  focusArea();
+}
+
+function defaultJobName() {
+  var n = new Date();
+  return 'job-' + n.getFullYear()
+    + String(n.getMonth()+1).padStart(2,'0')
+    + String(n.getDate()).padStart(2,'0')
+    + '-'
+    + String(n.getHours()).padStart(2,'0')
+    + String(n.getMinutes()).padStart(2,'0');
+}
+
+function updatePathHint() {
+  var jn = document.getElementById('jname').value.trim() || '(name)';
+  document.getElementById('pathint').textContent = 'Output: ' + outputDir + '/' + jn;
+}
+document.getElementById('jname').addEventListener('input', updatePathHint);
+
+// ── GSD ───────────────────────────────────────────────────────────────────────
+function updateGsd() {
+  var h = parseFloat(document.getElementById('hgt').value);
+  var d = drones.find(function(x){return x.name === document.getElementById('dsel').value;});
+  var el = document.getElementById('gsdv');
+  if (!d || isNaN(h)) { el.textContent = '—'; return; }
+  el.textContent = (h * d.pixel_pitch_um / (d.focal_length_mm * 10)).toFixed(2);
+}
+var _radiusLinked = true;
+
+function setRadiusLinked(linked) {
+  _radiusLinked = linked;
+  var hint = document.getElementById('warn-radius-hint');
+  hint.style.textDecoration = linked ? '' : 'line-through';
+  hint.style.cursor = linked ? 'default' : 'pointer';
+  hint.title = linked ? '3× flight height' : 'Double-click to restore 3:1 link';
+  if (linked) {
+    var h = parseFloat(document.getElementById('hgt').value);
+    if (!isNaN(h) && h > 0) document.getElementById('warn-radius').value = Math.round(3 * h);
+  }
+}
+
+document.getElementById('warn-radius-hint').addEventListener('dblclick', function() {
+  if (!_radiusLinked) { setRadiusLinked(true); redrawRings(); }
+});
+
+document.getElementById('hgt').addEventListener('input', function() {
+  updateGsd();
+  if (_radiusLinked) {
+    var h = parseFloat(this.value);
+    if (!isNaN(h) && h > 0) document.getElementById('warn-radius').value = Math.round(3 * h);
+  }
+});
+document.getElementById('dsel').addEventListener('change', updateGsd);
+document.getElementById('warn-radius').addEventListener('input', function() {
+  setRadiusLinked(false);
+  redrawRings();
+});
+document.getElementById('warn-radius').addEventListener('blur', function() {
+  if (this.value === '') { setRadiusLinked(true); redrawRings(); }
+});
+
+// ── Subcategory pills ─────────────────────────────────────────────────────────
+var _subVal = 'A3';
+function setSub(v, silent) {
+  _subVal = v;
+  document.getElementById('sub-a3').classList.toggle('active', v === 'A3');
+  document.getElementById('sub-a2').classList.toggle('active', v === 'A2');
+  if (!silent) { clearPolyEdit(); scheduleAutoUpdate(); }
+}
+function getSub() { return _subVal; }
+
+// ── Simplify control ──────────────────────────────────────────────────────────
+var _simpSteps = [0, 1, 2, 3, 5, 8, 10, 15, 20];
+var _simpIdx = 0;   // index into _simpSteps when in manual mode
+var _simpAuto = true;
+
+function _simpRender() {
+  document.getElementById('simp-auto').classList.toggle('active', _simpAuto);
+  document.getElementById('simp-minus').disabled = _simpAuto || _simpIdx === 0;
+  document.getElementById('simp-plus').disabled  = _simpAuto || _simpIdx === _simpSteps.length - 1;
+  document.getElementById('simp-val').textContent = _simpAuto ? '—' : (_simpSteps[_simpIdx] === 0 ? 'off' : _simpSteps[_simpIdx] + ' m');
+}
+function setSimpAuto(silent) {
+  _simpAuto = true; _simpRender();
+  if (!silent) { clearPolyEdit(); scheduleAutoUpdate(); }
+}
+function setSimpManual(v, silent) {
+  _simpAuto = false;
+  // snap to nearest step
+  var best = 0;
+  for (var i = 0; i < _simpSteps.length; i++) {
+    if (Math.abs(_simpSteps[i] - v) < Math.abs(_simpSteps[best] - v)) best = i;
+  }
+  _simpIdx = best; _simpRender();
+  if (!silent) { clearPolyEdit(); scheduleAutoUpdate(); }
+}
+function simpStep(dir) {
+  if (_simpAuto) return;
+  _simpIdx = Math.max(0, Math.min(_simpSteps.length - 1, _simpIdx + dir));
+  _simpRender(); clearPolyEdit(); scheduleAutoUpdate();
+}
+function getSimplify() {
+  return _simpAuto ? 'auto' : String(_simpSteps[_simpIdx]);
+}
+_simpRender();
+
+// Clear polygon edit when geometry params change
+['offset','kochk','dsel'].forEach(function(id){
+  document.getElementById(id).addEventListener('change', clearPolyEdit);
+});
+document.getElementById('pids').addEventListener('input', clearPolyEdit);
+document.getElementById('kids').addEventListener('input', clearPolyEdit);
+function clearPolyEdit() {
+  editedPoly = null; polyModified = false;
+  document.getElementById('modbadge').style.display = 'none';
+}
+
+// Auto-update on flight / polygon param changes (only when a preview exists)
+var _autoTimer = null;
+var _lastPreviewedIds = '';
+
+function idsKey() {
+  return document.getElementById('pids').value.trim() + '||' + document.getElementById('kids').value.trim();
+}
+
+function scheduleAutoUpdate(force) {
+  if (!force && !previewData) return;
+  if (_autoTimer) clearTimeout(_autoTimer);
+  _autoTimer = setTimeout(function() { _autoTimer = null; startPreview(); }, 400);
+}
+['dsel','kochk'].forEach(function(id){
+  document.getElementById(id).addEventListener('change', scheduleAutoUpdate);
+});
+document.getElementById('hgt').addEventListener('change', scheduleAutoUpdate);
+document.getElementById('offset').addEventListener('change', scheduleAutoUpdate);
+
+// Auto-update when area IDs are committed (both fields lose focus)
+function onIdBlur() {
+  setTimeout(function() {
+    var active = document.activeElement;
+    if (active === document.getElementById('pids') || active === document.getElementById('kids')) return;
+    var key = idsKey();
+    if (!key.replace('||','').trim()) return; // no IDs entered
+    if (key === _lastPreviewedIds) return;     // unchanged since last fetch
+    scheduleAutoUpdate(true);
+  }, 150);
+}
+document.getElementById('pids').addEventListener('blur', onIdBlur);
+document.getElementById('kids').addEventListener('blur', onIdBlur);
+
+// New Job — reset editor to a blank slate
+function newJob() {
+  if (isRunning) return;
+  // Cancel any pending auto-update
+  if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
+  // Reset IDs and job name
+  document.getElementById('jname').value = defaultJobName();
+  document.getElementById('pids').value = '';
+  document.getElementById('kids').value = '';
+  updatePathHint();
+  // Clear map
+  Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+  editLayers.clearLayers();
+  editMode = false;
+  // Reset state
+  previewData = null; editedPoly = null; polyModified = false; _lastPreviewedIds = '';
+  clearPolyEdit();
+  clearError();
+  document.getElementById('xb').disabled = true;
+  document.getElementById('rstbtn').disabled = true;
+  renderStatus(null);
+  setRadiusLinked(true);
+  document.getElementById('legend').classList.add('inactive');
+  focusArea();
+  map.setView([64.5, 26.0], 5);
+}
+
+// ── Area section focus hint ───────────────────────────────────────────────────
+function focusArea() {
+  var el = document.getElementById('area-sec');
+  // Re-trigger animation by removing and re-adding the class
+  el.classList.remove('area-focus');
+  void el.offsetWidth; // force reflow
+  el.classList.add('area-focus');
+}
+function clearAreaFocus() {
+  document.getElementById('area-sec').classList.remove('area-focus');
+}
+// Clear highlight as soon as the user types in either ID field
+document.getElementById('pids').addEventListener('input', clearAreaFocus);
+document.getElementById('kids').addEventListener('input', clearAreaFocus);
+
+// ── Warning rings ─────────────────────────────────────────────────────────────
+function redrawRings() {
+  if (lrs.rings) { map.removeLayer(lrs.rings); lrs.rings = null; }
+  var warnR = parseFloat(document.getElementById('warn-radius').value) || 0;
+  var row = document.getElementById('leg-rings-row');
+  var lbl = document.getElementById('leg-rings-label');
+  if (!previewData || !previewData.buildings || !warnR) {
+    if (row) row.style.display = 'none';
+    return;
+  }
+  var wg = L.layerGroup();
+  var count = 0;
+  previewData.buildings.forEach(function(b) {
+    if (!b.is_keepout) return;
+    var pt = centroid(b.geojson);
+    if (!pt) return;
+    L.circle(pt, {
+      radius: warnR, color: '#ca8a04', weight: 1.5,
+      fillColor: '#fef08a', fillOpacity: 0.25, dashArray: '4 4', interactive: false
+    }).addTo(wg);
+    count++;
+  });
+  if (!count) { if (row) row.style.display = 'none'; return; }
+  lrs.rings = wg;
+  if (lbl) lbl.textContent = warnR + ' m radius';
+  var btn = document.getElementById('leg-rings');
+  if (!btn || !btn.classList.contains('off')) lrs.rings.addTo(map);
+  if (row) row.style.display = '';
+}
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+(function initLegend() {
+  var rows = [
+    {btnId:'leg-dsm',      lrKey:'dsm',      rowId:'leg-dsm-row',   startOff:true},
+    {btnId:'leg-areas',    lrKey:'areas',    rowId:null},
+    {btnId:'leg-survey',   lrKey:'survey',   rowId:null},
+    {btnId:'leg-vertices', lrKey:'vertices', rowId:null},
+    {btnId:'leg-rings',    lrKey:'rings',    rowId:'leg-rings-row'},
+    {btnId:'leg-ko',       lrKey:'ko',       rowId:'leg-ko-row'},
+    {btnId:'leg-bldgs',    lrKey:'bldgs',    rowId:'leg-bldgs-row'},
+    {btnId:'leg-zones',    lrKey:'zones',    rowId:'leg-zones-row'},
+  ];
+  rows.forEach(function(r) {
+    document.getElementById(r.btnId).addEventListener('click', function() {
+      var layer = lrs[r.lrKey];
+      if (!layer) return;
+      if (this.classList.toggle('off')) { map.removeLayer(layer); }
+      else { layer.addTo(map); }
+    });
+  });
+  document.getElementById('legend').classList.add('inactive');
+  window._legendRows = rows;
+})();
+
+function resetLegend() {
+  window._legendRows.forEach(function(r) {
+    var btn = document.getElementById(r.btnId);
+    var hasLayer = !!lrs[r.lrKey];
+    if (r.rowId) {
+      document.getElementById(r.rowId).style.display = hasLayer ? '' : 'none';
+    }
+    if (r.startOff) {
+      btn.classList.add('off');   // DSM starts toggled off
+    } else {
+      btn.classList.remove('off');
+    }
+  });
+  document.getElementById('legend').classList.remove('inactive');
+}
+
+// ── Form ──────────────────────────────────────────────────────────────────────
+function parseIds(txt) {
+  return txt.split(/[,\s]+/).map(function(s){return s.trim();}).filter(Boolean);
+}
+
+function getParams() {
+  return {
+    parcel_ids: parseIds(document.getElementById('pids').value),
+    property_ids: parseIds(document.getElementById('kids').value),
+    drone: document.getElementById('dsel').value || null,
+    height_m: parseFloat(document.getElementById('hgt').value) || null,
+    subcategory: getSub(),
+    offset_m: parseFloat(document.getElementById('offset').value) || 0,
+    simplify: getSimplify(),
+    keepout: document.getElementById('kochk').checked,
+    preview_radius_m: parseFloat(document.getElementById('warn-radius').value) || null
+  };
+}
+
+function showError(msg) {
+  var el = document.getElementById('errdiv');
+  el.textContent = 'Error: ' + msg;
+  el.style.display = 'block';
+}
+function clearError() {
+  document.getElementById('errdiv').style.display = 'none';
+  document.getElementById('errdiv').textContent = '';
+}
+
+// ── Preview ───────────────────────────────────────────────────────────────────
+async function startPreview() {
+  if (isRunning) return;
+  clearError();
+  var p = getParams();
+  if (!p.parcel_ids.length && !p.property_ids.length) {
+    showError('Enter at least one parcel ID or property ID.'); return;
+  }
+  await runJob('/api/preview', p, 'Preview', onPreviewDone);
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+async function startExport() {
+  if (isRunning) return;
+  clearError();
+  var jn = document.getElementById('jname').value.trim();
+  if (!jn) { showError('Enter a job name.'); return; }
+  var p = Object.assign(getParams(), {
+    job_name: jn,
+    custom_polygon: polyModified ? editedPoly : null
+  });
+  await runJob('/api/export', p, 'Export', onExportDone);
+}
+
+// ── Job runner ────────────────────────────────────────────────────────────────
+async function runJob(endpoint, params, label, onDone) {
+  isRunning = true;
+  document.getElementById('ub').disabled = true;
+  document.getElementById('njb').disabled = true;
+  document.getElementById('xb').disabled = true;
+  showToast(label + '…', 0, 'Starting…');
+  showPg(true, 0, 'Starting…');
+
+  var res;
+  try {
+    res = await fetch(endpoint, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(params)
+    });
+  } catch(e) { onErr('Network error: ' + e.message); return; }
+
+  if (!res.ok) {
+    var e2 = await res.json().catch(function(){return {detail:'HTTP ' + res.status};});
+    onErr((e2.detail || 'Server error') + ' (HTTP ' + res.status + ')'); return;
+  }
+
+  var data = await res.json();
+  var jid = data.job_id;
+  console.log('[' + label + '] job_id=' + jid);
+
+  if (currentSSE) currentSSE.close();
+  currentSSE = new EventSource('/api/progress/' + jid);
+
+  currentSSE.onmessage = function(e) {
+    var d;
+    try { d = JSON.parse(e.data); } catch(ex) { console.error('SSE parse error', e.data); return; }
+    console.log('[sse]', d.stage, d.pct + '%', d.msg || '');
+    if (d.stage === 'keepalive') return;
+    if (d.stage === 'error') {
+      currentSSE.close(); onErr(d.msg);
+    } else if (d.stage === 'done') {
+      currentSSE.close(); finishRun(); onDone(d.payload);
+    } else {
+      showPg(true, d.pct, d.msg);
+      showToast(null, d.pct, d.msg);
+    }
+  };
+
+  currentSSE.onerror = function(ev) {
+    console.error('[sse] onerror', ev, 'readyState='+currentSSE.readyState);
+    // readyState 2 = CLOSED — means we already called .close() → ignore
+    if (currentSSE.readyState === EventSource.CLOSED) return;
+    currentSSE.close();
+    onErr('SSE connection lost (check server terminal for details).');
+  };
+}
+
+function showPg(on, pct, msg) {
+  var wrap = document.getElementById('pgwrap');
+  wrap.style.opacity = on ? '1' : '0';
+  wrap.style.pointerEvents = on ? '' : 'none';
+  document.getElementById('pgfill').style.width = (pct||0) + '%';
+  document.getElementById('pgmsg').textContent = on ? (msg || '') : '';
+}
+function showToast(title, pct, msg) {
+  var t = document.getElementById('toast');
+  t.style.display = 'block';
+  if (title) document.getElementById('ttitle').textContent = title;
+  document.getElementById('tfill').style.width = (pct||0) + '%';
+  document.getElementById('tmsg').textContent = msg || '';
+}
+function finishRun() {
+  isRunning = false;
+  document.getElementById('ub').disabled = false;
+  document.getElementById('njb').disabled = false;
+  document.getElementById('xb').disabled = !previewData;
+  document.getElementById('toast').style.display = 'none';
+  showPg(false, 0, '');
+}
+function onErr(msg) {
+  console.error('[err]', msg);
+  finishRun();
+  document.getElementById('toast').style.display = 'none';
+  showError(msg);
+}
+
+// ── Map ───────────────────────────────────────────────────────────────────────
+function onPreviewDone(payload) {
+  console.log('[preview done]', payload.stats);
+  previewData = payload;
+  _lastPreviewedIds = idsKey();
+  clearAreaFocus();
+  document.getElementById('xb').disabled = false;
+  document.getElementById('rstbtn').disabled = false;
+  try {
+    renderMap(payload);
+    redrawRings();
+    resetLegend();
+    renderStatus(payload.stats);
+  } catch(e) {
+    console.error('[onPreviewDone]', e);
+    showError('Render error: ' + e.message);
+  }
+}
+
+// Convert a GeoJSON geometry (Polygon or MultiPolygon) to an array of
+// L.polygon layers. Does NOT add them to the map or editLayers.
+function geomToPolys(geom, style) {
+  var out = [];
+  if (!geom) return out;
+  if (geom.type === 'Polygon') {
+    var lls = geom.coordinates[0].map(function(c){return [c[1],c[0]];});
+    out.push(L.polygon(lls, style));
+  } else if (geom.type === 'MultiPolygon') {
+    geom.coordinates.forEach(function(pc) {
+      var lls = pc[0].map(function(c){return [c[1],c[0]];});
+      out.push(L.polygon(lls, style));
+    });
+  }
+  return out;
+}
+
+function renderMap(data) {
+  // Remove all layers from map and reset lrs (do NOT touch editLayers)
+  Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+  editLayers.clearLayers();
+
+  // DSM grayscale overlay — rendered in dsmPane (z 350) below all vectors
+  if (data.dsm_b64 && data.dsm_bounds) {
+    var b = data.dsm_bounds; // [west, south, east, north]
+    var dg = L.layerGroup();
+    L.imageOverlay(
+      'data:image/png;base64,' + data.dsm_b64,
+      [[b[1], b[0]], [b[3], b[2]]],
+      {opacity: 0.65, interactive: false, pane: 'dsmPane'}
+    ).addTo(dg);
+    lrs.dsm = dg;  // start hidden — user enables via legend
+  }
+
+  // Parcel/property outlines (green dashed)
+  if (data.original_areas && data.original_areas.length) {
+    var fc = {type:'FeatureCollection', features:data.original_areas.map(function(g){
+      return {type:'Feature', geometry:g, properties:{}};
+    })};
+    lrs.areas = L.geoJSON(fc, {
+      style:{color:'#16a34a',weight:2,dashArray:'6 3',fillOpacity:.04}
+    }).addTo(map);
+  }
+
+  // Keep-out circles — one true circle per keepout building
+  var koBuf = data.stats && data.stats.home_buffer_m;
+  if (koBuf && data.buildings && data.buildings.length) {
+    var kg = L.layerGroup();
+    data.buildings.forEach(function(b) {
+      if (!b.is_keepout) return;
+      var pt = centroid(b.geojson);
+      if (!pt) return;
+      L.circle(pt, {
+        radius: koBuf, color: '#dc2626', weight: 1,
+        fillColor: '#fca5a5', fillOpacity: 0.20, dashArray: '4 4'
+      }).addTo(kg);
+    });
+    if (kg.getLayers().length) lrs.ko = kg.addTo(map);
+  }
+
+  // UAS restriction zones (orange)
+  var zf = (data.zone_hits||[]).filter(function(z){return z.geojson;}).map(function(z){
+    return {type:'Feature', geometry:z.geojson, properties:{name:z.name, r:z.restriction}};
+  });
+  if (zf.length) {
+    lrs.zones = L.geoJSON({type:'FeatureCollection', features:zf}, {
+      style:{color:'#ea580c',weight:2,fillColor:'#f97316',fillOpacity:.14},
+      onEachFeature:function(f,l){
+        l.bindPopup('<b>'+f.properties.name+'</b><br>'+f.properties.r);
+      }
+    }).addTo(map);
+  }
+
+  // Buildings (red = keepout, yellow = info)
+  if (data.buildings && data.buildings.length) {
+    var bg = L.layerGroup();
+    data.buildings.forEach(function(b) {
+      var c = b.is_keepout ? '#dc2626' : '#d97706';
+      var pt = centroid(b.geojson);
+      if (pt) L.circleMarker(pt, {radius:5,color:c,fillColor:c,fillOpacity:.85,weight:1.5}).addTo(bg);
+    });
+    lrs.bldgs = bg.addTo(map);
+  }
+
+  // Survey polygon — display only; NOT added to editLayers to avoid Leaflet
+  // double-ownership conflicts. Editing copies the polygon on demand.
+  var surveyStyle = {color:'#1d4ed8', weight:2.5, fillColor:'#3b82f6', fillOpacity:.17};
+  var surveyPolys = geomToPolys(data.survey, surveyStyle);
+  if (surveyPolys.length) {
+    lrs.survey = L.featureGroup(surveyPolys).addTo(map);
+    lrs.survey.eachLayer(function(l) {
+      l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!editMode) toggleEdit(); });
+    });
+    console.log('[renderMap] survey bounds', lrs.survey.getBounds());
+    map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]});
+  } else {
+    console.warn('[renderMap] no survey polygons rendered, survey type:', data.survey && data.survey.type);
+  }
+
+  // Vertex dots (on top of survey polygon)
+  if (data.survey) {
+    var vg = L.layerGroup();
+    var geom = data.survey;
+    var rings = geom.type === 'Polygon' ? geom.coordinates
+              : geom.type === 'MultiPolygon' ? geom.coordinates.reduce(function(a,p){return a.concat(p);}, [])
+              : [];
+    var seen = {};
+    rings.forEach(function(ring) {
+      ring.forEach(function(coord) {
+        var key = coord[0].toFixed(7)+','+coord[1].toFixed(7);
+        if (seen[key]) return;
+        seen[key] = true;
+        L.circleMarker([coord[1],coord[0]], {
+          radius:3, color:'#1d4ed8', weight:1,
+          fillColor:'#93c5fd', fillOpacity:0.9, interactive:false
+        }).addTo(vg);
+      });
+    });
+    lrs.vertices = vg.addTo(map);
+  }
+}
+
+function centroid(geom) {
+  try {
+    if (geom.type==='Point') return [geom.coordinates[1], geom.coordinates[0]];
+    if (geom.type==='Polygon') {
+      var cs = geom.coordinates[0];
+      return [cs.reduce(function(s,c){return s+c[1];},0)/cs.length,
+              cs.reduce(function(s,c){return s+c[0];},0)/cs.length];
+    }
+  } catch(e){}
+  return null;
+}
+
+// ── Status panel ──────────────────────────────────────────────────────────────
+var _dash = '<span style="color:#cbd5e1">—</span>';
+function renderStatus(s) {
+  var sh = !s ? ''
+    : s.flight_ready ? '<div class="sh"><span class="sok">&#10003; FLIGHT READY</span></div>'
+    : s.needs_review  ? '<div class="sh"><span class="swrn">&#9888; NEEDS REVIEW</span></div>'
+                      : '<div class="sh"><span class="serr">&#10007; NOT FLIGHT READY</span></div>';
+  var zh = !s ? _dash
+    : !s.zones_checked ? '<span class="swrn">not checked</span>'
+    : s.zones_clear    ? '<span class="sok">clear</span>'
+                       : '<span class="serr">'+s.zone_count+' zone(s)</span>';
+  function fmt1(v) { return s && v != null ? v.toFixed(1) : _dash; }
+  function fmt0(v) { return s && v != null ? v.toFixed(0) : _dash; }
+  function fmt2(v) { return s && v != null ? v.toFixed(2) : _dash; }
+  function fmti(v) { return s && v != null ? String(v)    : _dash; }
+  var rh = s ? (s.review_reasons||[]).map(function(r){
+    return '<div class="ritem">&#9888; '+r+'</div>';
+  }).join('') : '';
+  document.getElementById('spcontent').innerHTML =
+    sh
+   +'<div class="sgrid">'
+   +'<div class="sbox"><div class="slbl">Area</div><div class="sval">'+fmt1(s&&s.final_area_ha)+' '+(s?'ha':'')+' </div></div>'
+   +'<div class="sbox"><div class="slbl">Height</div><div class="sval">'+fmt0(s&&s.flight_height_m)+' '+(s?'m':'')+' </div></div>'
+   +'<div class="sbox"><div class="slbl">GSD</div><div class="sval">'+fmt2(s&&s.target_gsd_cm)+' '+(s?'cm':'')+' </div></div>'
+   +'<div class="sbox"><div class="slbl">Vertices</div><div class="sval">'+fmti(s&&s.survey_vertex_count)+'</div></div>'
+   +'<div class="sbox"><div class="slbl">Lost</div><div class="sval">'+fmt1(s&&s.area_lost_pct)+' '+(s?'%':'')+' </div></div>'
+   +'<div class="sbox"><div class="slbl">Zones</div><div class="sval">'+zh+'</div></div>'
+   +'</div>'
+   +(rh ? '<div class="rlist">'+rh+'</div>' : '');
+}
+
+// ── Polygon editing ───────────────────────────────────────────────────────────
+// Enter edit mode on dblclick on the polygon.
+// Save edits on dblclick outside the polygon (or on the map background).
+// We COPY the survey polygon into editLayers on demand — never share the same
+// Leaflet layer object between two FeatureGroups, which causes silent drop.
+
+function toggleEdit() {
+  // Called by dblclick on polygon — enter edit mode only
+  if (!previewData || !lrs.survey || editMode) return;
+  editMode = true;
+  map.doubleClickZoom.disable();  // prevent zoom while editing
+  editLayers.clearLayers();
+  if (lrs.survey) map.removeLayer(lrs.survey);
+  var style = {color:'#1d4ed8', weight:2.5, fillColor:'#3b82f6', fillOpacity:.17};
+  lrs.survey.eachLayer(function(dp) {
+    var clone = L.polygon(dp.getLatLngs(), style);
+    editLayers.addLayer(clone);
+    if (clone.editing) clone.editing.enable();
+  });
+}
+
+function saveEdit() {
+  // Called by dblclick outside polygon — save and exit edit mode
+  if (!editMode) return;
+  editMode = false;
+  map.doubleClickZoom.enable();
+  editedPoly = null;
+  editLayers.eachLayer(function(l) {
+    if (l.editing && l.editing.enabled()) {
+      l.editing.disable();
+      if (!editedPoly) {
+        editedPoly = layerGeom(l);
+        polyModified = true;
+        document.getElementById('modbadge').style.display = 'block';
+      }
+    }
+  });
+  editLayers.clearLayers();
+  if (lrs.survey) lrs.survey.addTo(map);
+}
+
+// Dblclick on map background (not on polygon) saves the edit
+map.on('dblclick', function(e) {
+  if (editMode) saveEdit();
+});
+
+function resetPoly() {
+  if (!previewData) return;
+  saveEdit();  // exit edit mode cleanly if active
+  clearPolyEdit();
+  renderMap(previewData);
+  resetLegend();
+  try { renderStatus(previewData.stats); } catch(e) {}
+}
+
+// ── Export result ─────────────────────────────────────────────────────────────
+function onExportDone(payload) {
+  console.log('[export done]', payload);
+  var files = payload.output_files || {};
+  var labels = {kmz:'KMZ route',homes_kml:'Homes KML',dsm_tif:'DSM GeoTIFF',
+                preview_html:'Map preview',manifest:'Manifest JSON'};
+  var html = Object.entries(files).map(function(e){
+    return '<div class="frow"><b>'+(labels[e[0]]||e[0])+'</b>'+e[1]+'</div>';
+  }).join('');
+  document.getElementById('xfiles').innerHTML = html ||
+    '<div style="color:#64748b;font-size:12px">No output files found.</div>';
+  document.getElementById('xov').style.display = 'flex';
+  if (payload.stats) renderStatus(payload.stats);
+}
+function closeExport() {
+  document.getElementById('xov').style.display = 'none';
+}
+
+init();
+</script>
+</body>
+</html>
+"""
