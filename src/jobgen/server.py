@@ -475,6 +475,23 @@ def create_app(config: AppConfig) -> FastAPI:
         shutil.rmtree(job_dir)
         return {"deleted": name}
 
+    @app.post("/api/jobs/{name}/reveal")
+    async def reveal_job(name: str):
+        """Open the job folder in the system file manager (Finder / Explorer / Nautilus)."""
+        import subprocess, sys
+        output_dir = Path(_config.output.output_dir).resolve()
+        job_dir = output_dir / name
+        if not job_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{name}' not found")
+        path = str(job_dir)
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        elif sys.platform == "win32":
+            subprocess.Popen(["explorer", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+        return {"revealed": path}
+
     return app
 
 
@@ -2245,10 +2262,11 @@ function toggleCardMenu(e, name, status) {
   var items = status === 'failed'
     ? [['Delete', function(){ confirmDeleteJob(name); }]]
     : [
-        ['Open',   function(){ openJob(name); }],
-        ['Clone',  function(){ cloneJob(name); }],
-        ['Rename', function(){ startRename(name); }],
-        ['Delete', function(){ confirmDeleteJob(name); }],
+        ['Open',            function(){ openJob(name); }],
+        ['Show folder',     function(){ revealJob(name); }],
+        ['Clone',           function(){ cloneJob(name); }],
+        ['Rename',          function(){ startRename(name); }],
+        ['Delete',          function(){ confirmDeleteJob(name); }],
       ];
   items.forEach(function(it) {
     var mi = document.createElement('button');
@@ -2358,6 +2376,17 @@ function _restoreFormFromParams(p) {
     editedPoly = null; polyModified = false;
     document.getElementById('modbadge').style.display = 'none';
   }
+}
+
+// ── Reveal in file manager ────────────────────────────────────────────────────
+async function revealJob(name) {
+  try {
+    var r = await fetch('/api/jobs/' + encodeURIComponent(name) + '/reveal', {method:'POST'});
+    if (!r.ok) {
+      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(e.detail || 'Could not open folder');
+    }
+  } catch(e) { showError('Could not open folder: ' + e.message); }
 }
 
 // ── Clone ─────────────────────────────────────────────────────────────────────
