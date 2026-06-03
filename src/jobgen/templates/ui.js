@@ -27,11 +27,16 @@ var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   {attribution:'&copy; OpenStreetMap', maxZoom:19}).addTo(map);
 
-if (navigator.geolocation) {
-  navigator.geolocation.getCurrentPosition(function(pos) {
-    map.setView([pos.coords.latitude, pos.coords.longitude], 15);
-  });
+function resetMapToUserLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function(pos) {
+      map.setView([pos.coords.latitude, pos.coords.longitude], 15);
+    });
+  } else {
+    map.setView([64.5, 26.0], 5);
+  }
 }
+resetMapToUserLocation();
 
 // DSM pane sits below overlayPane (400) so vectors always render on top
 map.createPane('dsmPane');
@@ -298,7 +303,7 @@ function _doNewJob() {
   // Deselect panel card
   document.querySelectorAll('.jcard').forEach(function(c){ c.classList.remove('active'); });
   focusArea();
-  map.setView([64.5, 26.0], 5);
+  resetMapToUserLocation();
 }
 
 // ── Area section focus hint ───────────────────────────────────────────────────
@@ -1406,7 +1411,7 @@ async function _doOpenJob(name) {
       document.getElementById('bridge-btn').disabled = true;
       renderStatus(null);
       document.getElementById('legend').classList.add('inactive');
-      map.setView([64.5, 26.0], 5);
+      resetMapToUserLocation();
       focusArea();
     }
     // Cache staleness notice
