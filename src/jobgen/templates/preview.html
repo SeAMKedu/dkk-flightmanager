@@ -1,6 +1,6 @@
 {# Jinja2 template — rendered by preview.py into a standalone static HTML file. #}
-{# All JS brace literals ({...}) work without escaping in Jinja2. #}
-{# Runtime map data is injected via the DATA script block; JS code reads JS vars. #}
+{# CSS and JS are inlined at render time via {% include %} so the output is self-contained. #}
+{# status_colour is passed via CSS custom property to keep preview.css free of Jinja2 vars. #}
 
 {% macro eye_btn(btn_id, title, start_off=false) -%}
 <button class="eye-btn{% if start_off %} off{% endif %}" id="{{ btn_id }}" title="{{ title }}"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
@@ -14,55 +14,9 @@
 <title>{{ job_name }} — jobgen preview</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<style>
-  *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; font-family: sans-serif; }
-  body { display: flex; }
-  #map { flex: 1; min-width: 0; }
-  #panel {
-    width: 320px; flex-shrink: 0;
-    overflow-y: auto; overflow-x: hidden;
-    padding: 16px; box-shadow: -2px 0 8px rgba(0,0,0,.15);
-    background: #fff;
-  }
-  h2 { margin: 0 0 4px; font-size: 1rem; color: #374151; word-break: break-all; }
-  .status {
-    display: inline-block; padding: 4px 10px; border-radius: 4px;
-    color: #fff; font-weight: bold; margin-bottom: 12px;
-    background: {{ status_colour }};
-  }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-  td { padding: 3px 0; font-size: .85rem; color: #374151; }
-  td:first-child { color: #6b7280; width: 50%; }
-  .legend { margin-top: 12px; font-size: .82rem; border-top: 1px solid #e5e7eb; padding-top: 10px; }
-  .leg-row {
-    display: grid;
-    grid-template-columns: 22px 24px 1fr;
-    align-items: center;
-    margin: 5px 0;
-  }
-  .eye-btn {
-    background: none; border: none; cursor: pointer; padding: 0;
-    width: 22px; display: flex; align-items: center; justify-content: center;
-    color: #374151; transition: color .15s;
-  }
-  .eye-btn .eye-slash { display: none; }
-  .eye-btn.off { color: #9ca3af; }
-  .eye-btn.off .eye-open { display: none; }
-  .eye-btn.off .eye-slash { display: block; }
-  .leg-icon { display: flex; justify-content: center; align-items: center; }
-  .dot { width: 12px; height: 12px; border-radius: 50%; }
-  .swatch { width: 20px; height: 11px; border-radius: 2px; }
-  .reasons { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px;
-              padding: 8px; font-size: .8rem; margin-top: 10px; }
-  .reasons ul { margin: 4px 0 0; padding-left: 16px; }
-  .reasons li { margin: 2px 0; }
-  .keepout-notice { background: #fee2e2; border: 1px solid #dc2626; border-radius: 4px;
-                     padding: 8px; font-size: .8rem; margin-top: 10px; }
-  .keepout-notice p { margin: 4px 0 0; }
-</style>
+<style>{% include "preview.css" %}</style>
 </head>
-<body>
+<body style="--status-colour: {{ status_colour }}">
 <div id="map"></div>
 <div id="panel">
   <h2>{{ job_name }}</h2>
@@ -135,147 +89,13 @@ var surveyData = {{ survey_geojson }};
 var parcels    = {{ parcels_json }};
 var pins       = {{ pins_json }};
 var zones      = {{ zone_json }};
-var CENTER_LAT      = {{ center_lat }};
-var CENTER_LON      = {{ center_lon }};
-var PREVIEW_RADIUS  = {{ preview_radius_m }};
-var HOME_BUFFER     = {{ home_buffer_m }};
-{% if dsm_b64 %}
-var DSM_B64    = "{{ dsm_b64 }}";
-var DSM_BOUNDS = [{{ dsm_bounds[0] }}, {{ dsm_bounds[1] }}, {{ dsm_bounds[2] }}, {{ dsm_bounds[3] }}];
-{% endif %}
+var CENTER_LAT     = {{ center_lat }};
+var CENTER_LON     = {{ center_lon }};
+var PREVIEW_RADIUS = {{ preview_radius_m }};
+var HOME_BUFFER    = {{ home_buffer_m }};
+var DSM_B64        = {{ dsm_b64 | tojson }};
+var DSM_BOUNDS     = {{ dsm_bounds | tojson }};
 </script>
-<script>
-// ── Map setup ─────────────────────────────────────────────────────────────────
-var map = L.map('map').setView([CENTER_LAT, CENTER_LON], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  maxZoom: 19
-}).addTo(map);
-
-map.invalidateSize();
-
-// Pins pane sits above the default overlayPane (z 400) so dots always render on top
-map.createPane('pinsPane');
-map.getPane('pinsPane').style.zIndex = 450;
-
-var surveyGroup = L.layerGroup().addTo(map);
-var yellowGroup = L.layerGroup().addTo(map);
-var redGroup    = L.layerGroup().addTo(map);
-var parcelGroup = L.layerGroup().addTo(map);
-var vertexGroup = L.layerGroup().addTo(map);
-var pinsGroup   = L.layerGroup().addTo(map);
-
-// ── DSM overlay ───────────────────────────────────────────────────────────────
-{% if dsm_b64 %}
-map.createPane('dsmPane');
-map.getPane('dsmPane').style.zIndex = 350;
-map.getPane('dsmPane').style.pointerEvents = 'none';
-var dsmGroup = L.layerGroup().addTo(map);
-L.imageOverlay(
-  'data:image/png;base64,' + DSM_B64,
-  [[DSM_BOUNDS[1], DSM_BOUNDS[0]], [DSM_BOUNDS[3], DSM_BOUNDS[2]]],
-  {opacity: 0.65, interactive: false, pane: 'dsmPane'}
-).addTo(dsmGroup);
-map.removeLayer(dsmGroup);
-eyeTog('eye-dsm',
-  function() { dsmGroup.addTo(map); },
-  function() { map.removeLayer(dsmGroup); });
-{% endif %}
-
-// ── Survey polygon ────────────────────────────────────────────────────────────
-var surveyLayer = L.geoJSON(surveyData, {
-  style: { color: '#16a34a', weight: 2, fillColor: '#4ade80', fillOpacity: 0.35 }
-}).addTo(surveyGroup);
-
-if (surveyLayer.getLayers().length > 0) {
-  map.fitBounds(surveyLayer.getBounds().pad(0.15));
-}
-
-// ── Warning radius circles (keep-out buildings only) ─────────────────────────
-pins.forEach(function(p) {
-  if (!p.keepout) return;
-  L.circle([p.lat, p.lon], {
-    radius: PREVIEW_RADIUS, color: '#ca8a04', weight: 1,
-    fillColor: '#fef08a', fillOpacity: 0.25, dashArray: '4 4'
-  }).addTo(yellowGroup);
-});
-
-// ── Keep-out circles ──────────────────────────────────────────────────────────
-pins.forEach(function(p) {
-  if (!p.keepout) return;
-  L.circle([p.lat, p.lon], {
-    radius: HOME_BUFFER, color: '#dc2626', weight: 1,
-    fillColor: '#fca5a5', fillOpacity: 0.20, dashArray: '4 4'
-  }).addTo(redGroup);
-});
-
-// ── Original parcel outlines ──────────────────────────────────────────────────
-parcels.forEach(function(f) {
-  L.geoJSON(f, {
-    style: { color: '#374151', weight: 1.5, dashArray: '5 5', fill: false }
-  }).addTo(parcelGroup);
-});
-
-// ── Survey polygon vertex dots ────────────────────────────────────────────────
-(function() {
-  var geom = surveyData.geometry;
-  var rings = geom.type === 'Polygon' ? geom.coordinates
-            : geom.type === 'MultiPolygon' ? geom.coordinates.reduce(function(a, poly) { return a.concat(poly); }, [])
-            : [];
-  var seen = {};
-  rings.forEach(function(ring) {
-    ring.forEach(function(coord) {
-      var key = coord[0].toFixed(7) + ',' + coord[1].toFixed(7);
-      if (seen[key]) return;
-      seen[key] = true;
-      L.circleMarker([coord[1], coord[0]], {
-        radius: 3, color: '#1d4ed8', weight: 1,
-        fillColor: '#93c5fd', fillOpacity: 0.9, interactive: false
-      }).addTo(vertexGroup);
-    });
-  });
-})();
-
-// ── Building pins ─────────────────────────────────────────────────────────────
-pins.forEach(function(p) {
-  L.circleMarker([p.lat, p.lon], {
-    radius: 7, color: '#fff', weight: 1.5,
-    fillColor: p.colour, fillOpacity: 0.9,
-    pane: 'pinsPane'
-  }).bindPopup(p.label).addTo(pinsGroup);
-});
-
-// ── UAS restriction zones ─────────────────────────────────────────────────────
-zones.forEach(function(z) {
-  L.geoJSON(JSON.parse(z.geojson), {
-    style: { color: '#f97316', weight: 2, fillColor: '#fed7aa', fillOpacity: 0.4 }
-  }).bindPopup('<b>' + z.name + '</b><br>' + z.type).addTo(map);
-});
-
-// ── Eye-button toggles ────────────────────────────────────────────────────────
-function eyeTog(btnId, showFn, hideFn) {
-  document.getElementById(btnId).addEventListener('click', function() {
-    if (this.classList.toggle('off')) { hideFn(); } else { showFn(); }
-  });
-}
-eyeTog('eye-parcel',
-  function() { parcelGroup.addTo(map); },
-  function() { map.removeLayer(parcelGroup); });
-eyeTog('eye-survey',
-  function() { surveyGroup.addTo(map); },
-  function() { map.removeLayer(surveyGroup); });
-eyeTog('eye-yellow-c',
-  function() { yellowGroup.addTo(map); },
-  function() { map.removeLayer(yellowGroup); });
-eyeTog('eye-red-c',
-  function() { redGroup.addTo(map); },
-  function() { map.removeLayer(redGroup); });
-eyeTog('eye-vertices',
-  function() { vertexGroup.addTo(map); },
-  function() { map.removeLayer(vertexGroup); });
-eyeTog('eye-pins',
-  function() { pinsGroup.addTo(map); },
-  function() { map.removeLayer(pinsGroup); });
-</script>
+<script>{% include "preview.js" %}</script>
 </body>
 </html>

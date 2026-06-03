@@ -20,6 +20,8 @@ import json
 import logging
 from pathlib import Path
 
+import json as _json
+
 import jinja2
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -27,6 +29,7 @@ _jinja_env = jinja2.Environment(
     loader=jinja2.FileSystemLoader(_TEMPLATES_DIR),
     autoescape=False,
 )
+_jinja_env.filters["tojson"] = lambda v: _json.dumps(v, ensure_ascii=False)
 
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry

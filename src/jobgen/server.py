@@ -36,7 +36,12 @@ _ui_html_cache: str | None = None
 def _load_ui() -> str:
     global _ui_html_cache
     if _ui_html_cache is None:
-        _ui_html_cache = (_TEMPLATES_DIR / "ui.html").read_text(encoding="utf-8")
+        import jinja2
+        env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(_TEMPLATES_DIR),
+            autoescape=False,
+        )
+        _ui_html_cache = env.get_template("ui.html").render()
     return _ui_html_cache
 
 log = logging.getLogger(__name__)

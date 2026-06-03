@@ -35,7 +35,7 @@ jobgen = "jobgen.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-jobgen = ["templates/*.html", "templates/*.js"]
+jobgen = ["templates/*.html", "templates/*.css", "templates/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
