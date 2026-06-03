@@ -22,7 +22,9 @@ import requests
 from shapely.geometry import shape
 from shapely.ops import unary_union
 from shapely.geometry.base import BaseGeometry
+from shapely.wkt import dumps as wkt_dumps, loads as wkt_loads
 
+from jobgen.config import CacheConfig
 from jobgen.crs import require_3067
 
 log = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ def fetch_properties(
     *,
     timeout_s: int = 60,
     page_size: int = 100,
+    cache_config: CacheConfig | None = None,
     session: requests.Session | None = None,
 ) -> list[Property]:
     """Return Property objects for the given kiinteistötunnukset.
@@ -65,17 +68,44 @@ def fetch_properties(
     numeric form ("39989100010001") — both are normalised internally.
 
     Multiple palstat with the same kiinteistötunnus are unioned into one
-    Property so callers always get one geometry per input ID.
+    Property so callers always get one geometry per input ID.  Results are
+    cached in the tile-cache SQLite index when *cache_config* is provided
+    (TTL: 400 days).
 
     Raises PropertyNotFoundError if any ID returns no features.
     """
-    sess = session or requests.Session()
+    from jobgen.cache import get_property_cache, put_property_cache
 
+    sess = session or requests.Session()
     normalised = {_normalise(pid): pid for pid in property_ids}
-    log.info("Fetching %d kiinteistö(t) from MML OGC API", len(normalised))
 
     results: dict[str, Property] = {}
+    missing: dict[str, str] = {}  # numeric_id → original
+
     for numeric_id, original in normalised.items():
+        if cache_config is not None:
+            record = get_property_cache(cache_config, numeric_id)
+            if record is not None:
+                geom = wkt_loads(record.geometry_wkt)
+                results[numeric_id] = Property(
+                    property_id=record.property_id,
+                    display_id=record.display_id,
+                    area_ha=record.area_ha,
+                    geometry=geom,
+                )
+                log.debug("Property cache hit: %s", numeric_id)
+                continue
+        missing[numeric_id] = original
+
+    if missing:
+        log.info(
+            "Fetching %d/%d kiinteistö(t) from MML OGC API (not cached)",
+            len(missing), len(normalised),
+        )
+    else:
+        log.info("All %d kiinteistö(t) served from cache", len(normalised))
+
+    for numeric_id, original in missing.items():
         features = _fetch_one(numeric_id, api_key, timeout_s, page_size, sess)
         if not features:
             msg = f"Kiinteistötunnus not found: {original!r} (normalised: {numeric_id!r})"
@@ -84,9 +114,14 @@ def fetch_properties(
         prop = _to_property(numeric_id, features)
         results[numeric_id] = prop
         log.debug(
-            "  %s → %s  %.2f ha  %d palsta(t)",
-            prop.display_id, prop.property_id, prop.area_ha, len(features),
+            "  %s → %s  %.2f ha",
+            prop.display_id, prop.property_id, prop.area_ha,
         )
+        if cache_config is not None:
+            put_property_cache(
+                cache_config, prop.property_id, prop.display_id,
+                prop.area_ha, wkt_dumps(prop.geometry),
+            )
 
     log.info("Retrieved %d kiinteistö(t)", len(results))
     return list(results.values())

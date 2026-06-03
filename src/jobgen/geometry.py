@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 # Reproject EPSG:3067 → EPSG:4326, always_xy=True → (lon, lat) ordering,
 # matching the fixture coordinate order confirmed in Phase 0.
 _T_3067_4326 = Transformer.from_crs(3067, 4326, always_xy=True)
+_T_4326_3067 = Transformer.from_crs(4326, 3067, always_xy=True)
 
 _M2_TO_HA = 1 / 10_000
 
@@ -117,7 +118,7 @@ def process_survey(
     survey = _apply_survey_offset(survey, polygon_cfg.survey_offset_m)
 
     # 5. Build keep-out zone
-    keepout = _build_keepout(buildings, home_safety)
+    keepout = build_keepout(buildings, home_safety)
 
     # 6. Apply keep-out (or measure distance)
     survey, area_lost_pct, min_dist, offset_applied = _apply_keepout(
@@ -241,7 +242,7 @@ def _apply_survey_offset(geom: BaseGeometry, offset_m: float) -> BaseGeometry:
     return result
 
 
-def _build_keepout(
+def build_keepout(
     buildings: list[Building],
     home_safety: HomeSafetyConfig,
 ) -> BaseGeometry | None:
@@ -407,6 +408,11 @@ def reproject_to_4326(geom: BaseGeometry) -> BaseGeometry:
     return transform(_T_3067_4326.transform, geom)
 
 
+def reproject_to_3067(geom: BaseGeometry) -> BaseGeometry:
+    """Reproject a geometry from EPSG:4326 to EPSG:3067."""
+    return transform(_T_4326_3067.transform, geom)
+
+
 # Internal alias kept for use within this module
 _reproject = reproject_to_4326
 
@@ -456,6 +462,10 @@ def _auto_simplify(geom: BaseGeometry, max_vertices: int) -> BaseGeometry:
     actual = _vertex_count(result)
     log.debug("Auto-simplify converged at %.1f m tolerance → %d vertices", hi, actual)
     return result
+
+
+vertex_count = _vertex_count     # public alias used by pipeline.py
+_build_keepout = build_keepout   # backward-compat alias for existing tests
 
 
 def _simplify_pieces(

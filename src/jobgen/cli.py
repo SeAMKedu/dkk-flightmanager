@@ -591,5 +591,29 @@ def _print_job_summary(manifest: dict, dry_run: bool) -> None:
     typer.echo()
 
 
+@app.command("serve")
+def serve_cmd(
+    port: int = typer.Option(8765, "--port", help="Port to listen on."),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+    no_open: bool = typer.Option(False, "--no-open", help="Do not open browser automatically."),
+) -> None:
+    """Start the browser UI server."""
+    import threading
+    import webbrowser
+    import uvicorn
+    from jobgen.server import create_app
+
+    cfg = _load_cfg(config_path)
+    web_app = create_app(cfg)
+    url = f"http://localhost:{port}"
+    typer.echo(f"dkk-jobmaker web UI → {url}")
+    typer.echo("Press Ctrl+C to stop.")
+
+    if not no_open:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")
+
+
 if __name__ == "__main__":
     app()

@@ -18,8 +18,9 @@ from dataclasses import dataclass
 import requests
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
+from shapely.wkt import dumps as wkt_dumps, loads as wkt_loads
 
-from jobgen.config import ParcelsConfig
+from jobgen.config import CacheConfig, ParcelsConfig
 from jobgen.crs import require_3067
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ def fetch_parcels(
     parcel_ids: list[str] | None = None,
     bbox: tuple[float, float, float, float] | None = None,
     config: ParcelsConfig | None = None,
+    cache_config: CacheConfig | None = None,
     session: requests.Session | None = None,
 ) -> list[Parcel]:
     """Return Parcel objects from the Ruokavirasto INSPIRE WFS.
@@ -58,8 +60,10 @@ def fetch_parcels(
     Exactly one of *parcel_ids* or *bbox* must be provided.
 
     *parcel_ids*: list of PERUSLOHKOTUNNUS strings.  Raises ParcelNotFoundError
-        if any ID is missing from the response.
-    *bbox*: (xmin, ymin, xmax, ymax) in EPSG:3067 metres.
+        if any ID is missing from the response.  Results are cached in the
+        tile-cache SQLite index when *cache_config* is provided (TTL: 400 days).
+    *bbox*: (xmin, ymin, xmax, ymax) in EPSG:3067 metres.  Bbox fetches are
+        not cached (unbounded queries).
 
     All returned geometries are in EPSG:3067.
     """
@@ -70,21 +74,67 @@ def fetch_parcels(
     layer = _LAYER_TEMPLATE.format(year=cfg.lpis_year)
     sess = session or requests.Session()
 
-    log.info(
-        "Fetching parcels from %s layer=%s mode=%s",
-        _WFS_URL, layer, "ids" if parcel_ids is not None else "bbox",
-    )
-
     if parcel_ids is not None:
-        features = _fetch_by_ids(parcel_ids, layer, cfg, sess)
-        parcels = [_to_parcel(f) for f in features]
+        parcels = _fetch_by_ids_cached(parcel_ids, layer, cfg, sess, cache_config)
         _check_missing(parcel_ids, parcels)
     else:
+        log.info("Fetching parcels from %s layer=%s mode=bbox", _WFS_URL, layer)
         features = _fetch_by_bbox(bbox, layer, cfg, sess)  # type: ignore[arg-type]
         parcels = [_to_parcel(f) for f in features]
 
     log.info("Retrieved %d parcel(s)", len(parcels))
     return parcels
+
+
+def _fetch_by_ids_cached(
+    parcel_ids: list[str],
+    layer: str,
+    cfg: ParcelsConfig,
+    sess: requests.Session,
+    cache_config: CacheConfig | None,
+) -> list[Parcel]:
+    """Serve ID-based parcel fetch from cache where possible; network for the rest."""
+    from jobgen.cache import get_parcel_cache, put_parcel_cache
+
+    if cache_config is None:
+        log.info("Fetching parcels from %s layer=%s mode=ids (no cache)", _WFS_URL, layer)
+        return [_to_parcel(f) for f in _fetch_by_ids(parcel_ids, layer, cfg, sess)]
+
+    cached: list[Parcel] = []
+    missing_ids: list[str] = []
+
+    for pid in parcel_ids:
+        record = get_parcel_cache(cache_config, pid, cfg.lpis_year)
+        if record is not None:
+            geom = wkt_loads(record.geometry_wkt)
+            cached.append(Parcel(
+                parcel_id=record.parcel_id,
+                tunnus=record.tunnus,
+                year=record.lpis_year,
+                area_ha=record.area_ha,
+                geometry=geom,
+            ))
+            log.debug("Parcel cache hit: %s year=%d", pid, cfg.lpis_year)
+        else:
+            missing_ids.append(pid)
+
+    if missing_ids:
+        log.info(
+            "Fetching parcels from %s layer=%s mode=ids (%d/%d not cached)",
+            _WFS_URL, layer, len(missing_ids), len(parcel_ids),
+        )
+        features = _fetch_by_ids(missing_ids, layer, cfg, sess)
+        fetched = [_to_parcel(f) for f in features]
+        for p in fetched:
+            put_parcel_cache(
+                cache_config, p.parcel_id, p.year, p.tunnus, p.area_ha,
+                wkt_dumps(p.geometry),
+            )
+        cached.extend(fetched)
+    else:
+        log.info("All %d parcel(s) served from cache", len(parcel_ids))
+
+    return cached
 
 
 # ---------------------------------------------------------------------------
