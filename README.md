@@ -81,12 +81,13 @@ The single-page Leaflet map interface lets you:
 - **Enter area IDs** — paste Ruokavirasto parcel IDs or MML kiinteistötunnus values; the map updates automatically when you leave the field.
 - **Tune flight parameters** — subcategory (A2/A3 pills), drone, height (live GSD display), and warning radius (linked to 3× height by default; click the "3:1" label to restore the link after manual override).
 - **Tune polygon** — offset (expand/contract), simplify (Auto pill + −/+ step buttons), keep-out toggle.
-- **Preview the survey** — click **↻ Update** or edit any parameter to see the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all toggleable from the legend.
+- **Preview the survey** — click **↻ Update** or edit any parameter to see the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all toggleable from the legend. UAS zone polygons are sorted so inner zones render on top and are clickable even when nested inside a larger zone. Click any zone to see all overlapping zones at that point, including altitude floor/ceiling ranges and nesting relationships. Inner concentric zones of an airfield that don't directly intersect the survey buffer are shown with a dashed border for context.
 - **Edit the polygon** — double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to exit and save. In edit mode, vertex handles are white squares and midpoint handles are smaller white diamonds — drag a midpoint to create a new vertex. Click a vertex to delete it. Clicking **Save** while still in edit mode auto-commits the edit before saving. Click **↻ Reset polygon** to revert all manual edits.
 - **Bridge / Cut** — in edit mode, right-click any vertex to enter Bridge/Cut mode (the vertex turns orange). Newly created vertices (promoted midpoints) are immediately available for selection. Left-click up to three more vertices to define the operation:
   - **3 vertices on the same polygon** → triangle cut (subtracts the triangle from the polygon)
   - **2 vertices on each of two separate polygons** → bridge (connects them into a single continuous polygon with a quadrilateral corridor)
   - Selected vertices highlight orange as you pick them; a dashed preview line shows the shape. Right-click anywhere or press **Esc** to cancel. The **♦ Bridge / Cut** button in the Polygon section is an alternative entry point.
+- **Zone altitude cap** — when a preview returns zone hits that carry an altitude floor (Finnish vyöhyke B/C/D), flight height is automatically set to 75 % of the lowest floor and the warning radius re-syncs. Raising height above the floor triggers an orange warning in the status panel. The cap is advisory; you can override freely.
 - **Save** — click **Save** to write the full job (KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, thumbnail) to disk. Unsaved changes are tracked; you will be prompted before opening a different job or starting a new one.
 
 Parcel and property geometries are cached locally (400-day TTL) so repeat previews of the same area do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL).
@@ -321,11 +322,10 @@ Set `preview_radius_m` in `config.toml` under `[home_safety]` to change the defa
 ## Safety notes
 
 - **120 m AGL limit** — enforced by the tool; `max_height_agl_m` in config.
-- **UAS zones** — checked automatically against Traficom's published zone data.
-  This is a static dump of permanent zones — temporary restrictions (NOTAMs) are
-  NOT included. Check NOTAMs manually on the day of the flight.
-- The generated job is a planning aid. The remote pilot remains responsible for
-  compliance, airspace checks, and uninvolved-person separation on the day.
+- **UAS zones** — checked automatically against Traficom's published permanent zone data. The survey area is expanded by 500 m before the check so zones near the boundary are also flagged. Finnish UAS vyöhykkeet (A–D) are concentric altitude bands; the browser UI reads the zone *floor* (`lower_limit`) as the binding altitude cap — flying below it exits that zone without authorisation. The zone dump is re-fetched daily. **Temporary restrictions (NOTAMs) are NOT included** — check NOTAMs manually on the day.
+- **Inner zones shown for context** — when the survey intersects the outer zone of an airfield, all inner concentric zones (tighter vyöhykkeet with lower altitude limits) are also displayed with a dashed border so you can judge how close you are to the more restrictive inner areas.
+- **Altitude auto-cap** — when zone hits carry an altitude floor, the browser UI automatically sets flight height to 75 % of that floor and warns if you raise it above the limit. The cap is advisory only; override requires no confirmation, but the warning persists.
+- The generated job is a planning aid. The remote pilot remains responsible for compliance, airspace checks, and uninvolved-person separation on the day.
 
 ## Disclaimer
 
@@ -365,9 +365,15 @@ See `fixtures/FIXTURE_NOTES.md` for annotated analysis of all M3E-specific value
 
 ## Attribution (CC-BY 4.0)
 
-- Elevation: "Contains data from the National Land Survey of Finland, Elevation model 2 m, retrieved \<date\>."
-- Buildings: "Contains data from the National Land Survey of Finland, Topographic Database, retrieved \<date\>."
-- Parcels: "Contains data from Ruokavirasto (Finnish Food Authority), Peltolohkorekisteri, retrieved \<date\>."
+All data sources require attribution. The manifest records the exact strings with retrieval dates. Both the browser UI map and the static HTML preview display the applicable credits in the Leaflet attribution control.
+
+| Data | Attribution string |
+|---|---|
+| Elevation (DEM 2 m) | Contains data from the National Land Survey of Finland, Elevation model 2 m, retrieved \<date\>. |
+| Buildings (Maastotietokanta) | Contains data from the National Land Survey of Finland, Topographic Database, retrieved \<date\>. |
+| Parcels (Ruokavirasto) | Contains data from Ruokavirasto (Finnish Food Authority), Peltolohkorekisteri, retrieved \<date\>. |
+| Properties (Kiinteistötietojärjestelmä) | Contains data from the National Land Survey of Finland, Cadastral Index Map, retrieved \<date\>. |
+| UAS zones | Contains data from Traficom, UAS Geographical Zones, retrieved \<date\>. |
 
 ---
 
