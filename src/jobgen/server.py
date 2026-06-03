@@ -603,7 +603,8 @@ def _write_job_params(job_dir: Path, req: "ExportRequest", manifest: dict) -> No
             "preview_radius_m": req.preview_radius_m,
         },
         "custom_polygon_4326": req.custom_polygon,
-        "last_preview_geojson": _last_preview_result,
+        "last_preview_geojson": {k: v for k, v in _last_preview_result.items() if k != "dsm_b64"}
+        if _last_preview_result else None,
     }
     params_path = job_dir / "job_params.json"
     params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -783,8 +784,6 @@ button{width:100%;padding:7px 10px;border:none;border-radius:4px;font-size:12px;
 button:disabled{opacity:.4;cursor:not-allowed}
 #ub{background:#0f172a;color:#f8fafc;flex:1}
 #ub:not(:disabled):hover{background:#1e293b}
-#njb{background:#475569;color:#f8fafc;flex:1}
-#njb:not(:disabled):hover{background:#334155}
 #xb{background:#16a34a;color:#fff;margin-top:5px}
 #xb:not(:disabled):hover{background:#15803d}
 .rst-btn{background:#7c3aed;color:#fff;font-size:11px}
@@ -1476,7 +1475,6 @@ async function startExport() {
 async function runJob(endpoint, params, label, onDone) {
   isRunning = true;
   document.getElementById('ub').disabled = true;
-  document.getElementById('njb').disabled = true;
   document.getElementById('xb').disabled = true;
   showToast(label + '…', 0, 'Starting…');
   showPg(true, 0, 'Starting…');
@@ -1542,7 +1540,6 @@ function showToast(title, pct, msg) {
 function finishRun() {
   isRunning = false;
   document.getElementById('ub').disabled = false;
-  document.getElementById('njb').disabled = false;
   document.getElementById('xb').disabled = !previewData;
   document.getElementById('toast').style.display = 'none';
   showPg(false, 0, '');
@@ -2277,6 +2274,7 @@ function closeCardMenu() {
 
 // ── Open job ──────────────────────────────────────────────────────────────────
 function openJob(name) {
+  if (isRunning) return;
   confirmIfDirty(function() { _doOpenJob(name); });
 }
 async function _doOpenJob(name) {
@@ -2328,6 +2326,8 @@ async function _doOpenJob(name) {
     // Cache staleness notice
     if (data.cache_stale && data.cache_stale.length) showStaleNotice(data.cache_stale);
     else hideStaleNotice();
+    // Auto-run preview for fresh data (and DSM overlay)
+    startPreview();
   } catch(ex) { showError('Failed to open job: ' + ex.message); }
 }
 
@@ -2368,6 +2368,7 @@ function _restoreFormFromParams(p) {
 
 // ── Clone ─────────────────────────────────────────────────────────────────────
 async function cloneJob(name) {
+  if (isRunning) return;
   try {
     var r = await fetch('/api/jobs/' + encodeURIComponent(name) + '/clone', {method:'POST'});
     if (!r.ok) {
