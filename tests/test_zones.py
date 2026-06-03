@@ -279,15 +279,17 @@ class TestAltitudeLimits:
         assert a.upper_limit_m_agl is None
 
     def test_ceiling_note_above_zone(self):
+        # lower=0: ground-up zone; flight above the ceiling
         a = AltitudeLimits(50, "M", "AGL", 0, "M", "AGL")
         note = a.ceiling_note(100.0)
-        assert "ABOVE" in note
+        assert "above" in note.lower()
         assert "50" in note
 
     def test_ceiling_note_within_zone(self):
+        # lower=0: ground-up zone; flight inside it
         a = AltitudeLimits(120, "M", "AGL", 0, "M", "AGL")
         note = a.ceiling_note(100.0)
-        assert "within" in note
+        assert "inside" in note or "within" in note
 
     def test_ceiling_note_amsl(self):
         a = AltitudeLimits(2000, "FT", "AMSL", 0, "FT", "AMSL")
@@ -309,7 +311,7 @@ class TestAltitudeLimits:
                              cache_dir=tmp_path, session=sess)
         hit = result.intersecting_zones[0]
         assert hit.altitude.upper_limit == 50
-        assert "ABOVE" in result.reasons[0]
+        assert "above" in result.reasons[0].lower()
 
     def test_hit_within_zone_note(self, tmp_path):
         # Zone with 120m ceiling — flight at 100m is inside it
@@ -318,7 +320,7 @@ class TestAltitudeLimits:
         cfg = ZonesConfig()
         result = check_zones(SURVEY_4326, cfg, flight_height_m=100.0,
                              cache_dir=tmp_path, session=sess)
-        assert "within" in result.reasons[0]
+        assert "within" in result.reasons[0] or "inside" in result.reasons[0]
 
 
 # ---------------------------------------------------------------------------

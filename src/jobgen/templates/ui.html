@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>dkk-jobmaker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
+<style>{% include "ui.css" %}</style>
+</head>
+<body>
+<div id="hdr">
+  <h1>dkk-jobmaker</h1>
+</div>
+<div id="main">
+  <div id="jp">
+    <div id="jp-inner">
+      <div id="jp-hdr">
+        <span>Jobs</span>
+        <input type="text" id="jp-filter" placeholder="Filter&#8230;">
+      </div>
+      <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
+      <div id="jp-list"></div>
+    </div>
+    <button id="jp-tog" onclick="toggleJp()" title="Toggle jobs panel">&#9664;</button>
+  </div>
+
+  <div id="sb">
+    <div id="stale-notice"></div>
+
+    <div class="sec">
+      <h3>Job</h3>
+      <button id="xb" onclick="startExport()" disabled style="margin-top:3px">Save</button>
+      <div id="pgwrap">
+        <div id="pgtrack"><div id="pgfill"></div></div>
+        <div id="pgmsg"></div>
+      </div>
+      <div id="errdiv"></div>
+      <label style="margin-top:8px">Name</label>
+      <input type="text" id="jname" placeholder="job-20260602-1423">
+      <div class="path-hint" id="pathint">Output: —</div>
+    </div>
+
+    <div class="sec" id="area-sec">
+      <h3>Area</h3>
+      <label>Parcel IDs (peruslohkotunnus)</label>
+      <textarea id="pids" rows="2" placeholder="5241087453&#10;5241087453, 5241087454"></textarea>
+      <label>Property IDs (kiinteistötunnus)</label>
+      <textarea id="kids" rows="2" placeholder="214-407-3-22"></textarea>
+    </div>
+
+    <div class="sec">
+      <h3>Flight</h3>
+      <label>Subcategory</label>
+      <div class="pill-row">
+        <button class="pill active" id="sub-a3" onclick="setSub('A3')">A3</button>
+        <button class="pill"        id="sub-a2" onclick="setSub('A2')">A2</button>
+      </div>
+      <label>Drone</label>
+      <select id="dsel"></select>
+      <label>Height (m AGL)</label>
+      <input type="number" id="hgt" min="20" max="120" step="1" value="60">
+      <div class="gsd-row">GSD: <span id="gsdv">—</span> cm/px</div>
+      <label>Warning radius (m) <span id="warn-radius-hint" style="font-weight:400;color:#94a3b8;cursor:default" title="3× flight height">3:1</span></label>
+      <input type="number" id="warn-radius" min="0" max="2000" step="10" value="180">
+    </div>
+
+    <div class="sec">
+      <h3>Polygon</h3>
+      <label>Offset (m)</label>
+      <input type="number" id="offset" value="0" step="1">
+      <label>Simplify</label>
+      <div class="simp-row">
+        <button class="simp-pill active" id="simp-auto" onclick="setSimpAuto()">Auto</button>
+        <button class="simp-step" id="simp-minus" onclick="simpStep(-1)" disabled>&#8722;</button>
+        <span class="simp-val" id="simp-val">—</span>
+        <button class="simp-step" id="simp-plus"  onclick="simpStep(+1)" disabled>&#43;</button>
+      </div>
+      <label class="ck-row">
+        <input type="checkbox" id="kochk" checked>
+        Keep-out subtraction
+      </label>
+      <div id="modbadge">&#9888; Polygon manually edited</div>
+      <button class="rst-btn" id="rstbtn" onclick="resetPoly()" disabled style="margin-top:6px">&#8635; Reset polygon</button>
+      <button class="bridge-btn" id="bridge-btn" onclick="toggleBridgeMode()" disabled title="Right-click any vertex to start, or use this button">&#9003; Bridge / Cut</button>
+    </div>
+
+
+  </div>
+
+  <div id="mc">
+    <div id="map"></div>
+    <div id="bridge-hint"></div>
+    <div id="legend">
+      <h4>Layers</h4>
+      <div class="leg-row" id="leg-dsm-row" style="display:none">
+        <button class="leg-eye off" id="leg-dsm" title="DSM elevation"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:linear-gradient(to right,#000,#fff);border:1px solid #9ca3af;"></div></div>
+        <span>DSM elevation</span>
+      </div>
+      <div class="leg-row">
+        <button class="leg-eye" id="leg-areas" title="Original parcel"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:none;border:1.5px dashed #16a34a;"></div></div>
+        <span>Original parcel</span>
+      </div>
+      <div class="leg-row">
+        <button class="leg-eye" id="leg-survey" title="Survey polygon"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:#3b82f6;opacity:.7;border:2px solid #1d4ed8;"></div></div>
+        <span>Survey polygon</span>
+      </div>
+      <div class="leg-row">
+        <button class="leg-eye" id="leg-vertices" title="Polygon vertices"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-dot" style="background:#93c5fd;border:1px solid #1d4ed8;"></div></div>
+        <span>Polygon vertices</span>
+      </div>
+      <div class="leg-row" id="leg-rings-row" style="display:none">
+        <button class="leg-eye" id="leg-rings" title="Warning radius circles"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:#fef08a;opacity:.8;border:1px dashed #ca8a04;"></div></div>
+        <span id="leg-rings-label">Warning radius</span>
+      </div>
+      <div class="leg-row" id="leg-ko-row">
+        <button class="leg-eye" id="leg-ko" title="Keep-out circles"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:#fca5a5;opacity:.8;border:1px dashed #dc2626;"></div></div>
+        <span>Keep-out</span>
+      </div>
+      <div class="leg-row" id="leg-bldgs-row">
+        <button class="leg-eye" id="leg-bldgs" title="Buildings"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-dot" style="background:#dc2626;"></div><div class="l-dot" style="background:#d97706;"></div></div>
+        <span>Buildings</span>
+      </div>
+      <div class="leg-row" id="leg-zones-row">
+        <button class="leg-eye" id="leg-zones" title="UAS zones"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-swatch" style="background:#f97316;opacity:.4;border:1px solid #ea580c;"></div></div>
+        <span>UAS zones</span>
+      </div>
+    </div>
+    <div id="sp">
+      <div id="spcontent"></div>
+    </div>
+  </div>
+</div>
+
+
+<div id="confirm-modal">
+  <div id="confirm-card">
+    <div id="confirm-msg"></div>
+    <div class="btn-pair">
+      <button id="confirm-discard">Discard changes</button>
+      <button id="confirm-cancel" onclick="hideConfirmModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast">
+  <div id="ttitle">Running…</div>
+  <div id="ttrack"><div id="tfill"></div></div>
+  <div id="tmsg">Starting…</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<script>{% include "ui.js" %}</script>
+</body>
+</html>

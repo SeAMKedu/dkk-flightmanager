@@ -66,6 +66,10 @@ _CC_BY = {
         "Contains data from the National Land Survey of Finland, "
         "Cadastral Index Map, retrieved {date}."
     ),
+    "zones": (
+        "Contains data from Traficom, "
+        "UAS Geographical Zones, retrieved {date}."
+    ),
 }
 
 
@@ -172,11 +176,7 @@ def run_job(
         prelim_bounds = prelim.bounds
 
     buf = config.home_safety.home_buffer_m
-    include_buf = (
-        config.home_safety.home_include_buffer_m
-        if config.home_safety.home_include_buffer_m is not None
-        else 2.0 * buf
-    )
+    include_buf = config.home_safety.resolved_include_buffer_m
     _preview_radius_cfg = config.home_safety.preview_radius_m
     buildings_bbox = (
         prelim_bounds[0] - include_buf,
@@ -449,6 +449,7 @@ def run_job(
         "zones": {
             "checked":           zone_result.checked,
             "flight_ready":      zone_result.flight_ready,
+            "attribution":       zone_result.attribution,
             "intersecting_zones": [
                 {
                     "identifier":  h.identifier,
@@ -485,6 +486,7 @@ def run_job(
             manifest=manifest,
             parcels_4326=parcels_4326,
             zone_hits=zone_result.intersecting_zones,
+            zone_result=zone_result,
             dsm_path=dsm_path,
             preview_radius_m=preview_radius_m,
             keepout_ignored=not config.home_safety.offset_enabled,
@@ -555,6 +557,7 @@ def run_preview(
     refresh: bool = False,
     progress_cb: Callable[[str, str, int], None] | None = None,
     _cache: PreviewCache | None = None,
+    custom_polygon_4326: Any | None = None,
 ) -> tuple[dict, PreviewCache]:
     """Run parcels → buildings → geometry → zones; return (GeoJSON dict, cache).
 
@@ -572,11 +575,7 @@ def run_preview(
     api_key = _require_api_key()
 
     buf = config.home_safety.home_buffer_m
-    include_buf = (
-        config.home_safety.home_include_buffer_m
-        if config.home_safety.home_include_buffer_m is not None
-        else 2.0 * buf
-    )
+    include_buf = config.home_safety.resolved_include_buffer_m
 
     # 1. Fetch input geometries (or reuse cache)
     if _cache is not None and _cache.covers(parcel_ids, property_ids, include_buf):
@@ -612,11 +611,18 @@ def run_preview(
             log.info("Preview: %d kiinteistö(t)", len(props))
             input_geoms.extend(props)
 
-        if not input_geoms:
+        if not input_geoms and custom_polygon_4326 is None:
             raise ValueError("No input geometries — provide parcel IDs, property IDs, or bbox.")
 
-        prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
-        prelim_bounds = prelim.bounds
+        if custom_polygon_4326 is not None and not input_geoms:
+            # Only a custom polygon was provided (no parcel/property IDs).
+            # Derive the building-fetch bounds from the custom polygon itself,
+            # mirroring the run_job() pattern.  Without this, unary_union([])
+            # returns an empty geometry whose NaN bounds crash covering_tiles().
+            prelim_bounds = reproject_to_3067(custom_polygon_4326).bounds
+        else:
+            prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
+            prelim_bounds = prelim.bounds
 
         buildings_bbox = (
             prelim_bounds[0] - include_buf,
@@ -648,8 +654,29 @@ def run_preview(
 
     # 3. Survey polygon
     _cb(progress_cb, "geometry", "Computing survey polygon…", 55)
-    log.info("Preview: computing survey geometry …")
-    survey_geom = process_survey(input_geoms, buildings, config.home_safety, config.polygon)
+    if custom_polygon_4326 is not None:
+        log.info("Preview: using custom polygon (bridge/cut applied)")
+        _survey_3067 = reproject_to_3067(custom_polygon_4326)
+        _area_ha = _survey_3067.area / 10_000
+        _vc = vertex_count(custom_polygon_4326)
+        survey_geom = SurveyGeometry(
+            survey_3067=_survey_3067,
+            survey_4326=custom_polygon_4326,
+            pieces_3067=[_survey_3067],
+            pieces_4326=[custom_polygon_4326],
+            bbox_3067=_survey_3067.bounds,
+            original_area_ha=_area_ha,
+            final_area_ha=_area_ha,
+            area_lost_pct=0.0,
+            min_dist_to_home_m=None,
+            offset_applied=False,
+            survey_vertex_count=_vc,
+            needs_review=True,
+            review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
+        )
+    else:
+        log.info("Preview: computing survey geometry …")
+        survey_geom = process_survey(input_geoms, buildings, config.home_safety, config.polygon)
 
     # 4. Keep-out zone geometry for visualisation
     keepout_3067 = build_keepout(buildings, config.home_safety)
@@ -708,15 +735,35 @@ def run_preview(
             "buffer_geojson": dict(mapping(buf_geom_4326)) if buf_geom_4326 else None,
         })
 
-    # Zone geometries for map display
+    # Zone geometries for map display; include altitude limits and nesting.
+    # Direct hits + related inner zones are all included; related ones are flagged context_only.
+    all_zone_hits = [
+        (h, False) for h in zone_result.intersecting_zones
+    ] + [
+        (h, True)  for h in zone_result.related_zones
+    ]
+    all_hit_objs = [h for h, _ in all_zone_hits]
     zone_hits_data = []
-    for h in zone_result.intersecting_zones:
+    for i, (h, context_only) in enumerate(all_zone_hits):
         geojson = _zone_geojson(h)
+        contained_by = []
+        if h.geom is not None:
+            for j, (other, _) in enumerate(all_zone_hits):
+                if i != j and other.geom is not None and other.geom.contains(h.geom):
+                    contained_by.append({"id": other.identifier, "name": other.name})
         zone_hits_data.append({
-            "geojson": geojson,
-            "identifier": h.identifier,
-            "name": h.name,
-            "restriction": h.restriction,
+            "geojson":      geojson,
+            "identifier":   h.identifier,
+            "name":         h.name,
+            "restriction":  h.restriction,
+            "upper_limit":  h.altitude.upper_limit,
+            "upper_uom":    h.altitude.upper_uom,
+            "upper_ref":    h.altitude.upper_ref,
+            "lower_limit":  h.altitude.lower_limit,
+            "lower_uom":    h.altitude.lower_uom,
+            "lower_ref":    h.altitude.lower_ref,
+            "contained_by": contained_by,
+            "context_only": context_only,
         })
 
     all_review_reasons = list(survey_geom.review_reasons) + list(zone_result.reasons)
@@ -748,7 +795,10 @@ def run_preview(
             "zones_checked": zone_result.checked,
             "zones_clear": not zone_result.intersecting_zones,
             "zone_count": len(zone_result.intersecting_zones),
+            "zones_attribution": zone_result.attribution,
             "home_buffer_m": buf,
+            "has_parcels": any(hasattr(g, "parcel_id") for g in input_geoms),
+            "has_properties": any(hasattr(g, "property_id") for g in input_geoms),
         },
     }
     return result, new_cache
