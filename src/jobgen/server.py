@@ -83,6 +83,13 @@ class PolygonOpRequest(BaseModel):
     points: list            # 4 [lng, lat] coordinates
 
 
+class BatchRequest(BaseModel):
+    ids: list[str]
+    id_type: str = "parcels"   # "parcels" | "properties"
+    folder: str | None = None
+    params: dict = {}
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -594,6 +601,60 @@ def create_app(config: AppConfig) -> FastAPI:
         else:
             subprocess.Popen(["xdg-open", job_path])
         return {"revealed": job_path}
+
+    # -----------------------------------------------------------------------
+    # Batch skeleton job creation
+    # -----------------------------------------------------------------------
+
+    @app.post("/api/batch")
+    async def start_batch(req: BatchRequest):
+        import uuid
+        if not req.ids:
+            raise HTTPException(400, detail="ids list is empty")
+        if req.id_type not in ("parcels", "properties"):
+            raise HTTPException(400, detail="id_type must be 'parcels' or 'properties'")
+
+        job_id = str(uuid.uuid4())
+        queue: asyncio.Queue = asyncio.Queue()
+        _job_queues[job_id] = queue
+        loop = asyncio.get_running_loop()
+        output_dir = str(Path(_config.output.output_dir).resolve())
+
+        def cb(stage: str, msg: str, pct: int) -> None:
+            try:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct}
+                )
+            except Exception:
+                pass
+
+        def run() -> None:
+            from jobgen.pipeline import create_skeleton_jobs
+            try:
+                results = create_skeleton_jobs(
+                    req.ids, req.id_type, Path(output_dir),
+                    req.folder, req.params, cb, _config,
+                )
+                ok = sum(1 for r in results if r["status"] == "ok")
+                skipped = sum(1 for r in results if r["status"] == "skipped")
+                failed = sum(1 for r in results if r["status"] == "error")
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"stage": "done", "pct": 100, "payload": {
+                        "results": results,
+                        "created": ok, "skipped": skipped, "failed": failed,
+                    }},
+                )
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"stage": "error", "pct": 0, "msg": str(exc)},
+                )
+
+        loop.run_in_executor(None, run)
+        return {"job_id": job_id}
 
     # -----------------------------------------------------------------------
     # Folder management endpoints

@@ -20,6 +20,7 @@
         <input type="text" id="jp-filter" placeholder="Filter&#8230;">
       </div>
       <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
+      <button id="jp-batch" onclick="openBatchDialog()">&#8659; Batch</button>
       <div id="jp-list"></div>
     </div>
     <button id="jp-tog" onclick="toggleJp()" title="Toggle jobs panel">&#9664;</button>
@@ -140,6 +141,59 @@
   </div>
 </div>
 
+
+<div id="batch-modal">
+  <div id="batch-card">
+    <div id="batch-form">
+      <div class="batch-hdr">
+        <span>Batch Create Jobs</span>
+        <button class="batch-close" onclick="closeBatchDialog()">&#10005;</button>
+      </div>
+      <div class="batch-type-row">
+        <button class="pill active" id="btype-parcels" onclick="setBatchType('parcels')">Parcels</button>
+        <button class="pill"        id="btype-props"   onclick="setBatchType('properties')">Properties</button>
+      </div>
+      <label>IDs <span id="batch-count" class="batch-count">0</span></label>
+      <textarea id="batch-ids" rows="6" placeholder="One ID per line&#10;5241087453&#10;5241087454&#10;&#10;Or paste comma-separated"></textarea>
+      <div class="batch-file-row">
+        <label for="batch-file-input" class="batch-file-btn">&#128194; Load file</label>
+        <input type="file" id="batch-file-input" accept=".txt,.csv" style="display:none">
+        <span id="batch-file-name"></span>
+      </div>
+      <label>Group folder <span style="font-weight:400;color:#94a3b8">(optional)</span></label>
+      <input type="text" id="batch-folder" placeholder="e.g. batch-2026-06-03">
+      <div class="batch-params-row">
+        <div class="batch-param">
+          <label>Drone</label>
+          <select id="batch-drone"></select>
+        </div>
+        <div class="batch-param">
+          <label>Height (m)</label>
+          <input type="number" id="batch-height" min="20" max="120" step="1" placeholder="default">
+        </div>
+        <div class="batch-param">
+          <label>Subcat.</label>
+          <select id="batch-sub">
+            <option value="A3">A3</option>
+            <option value="A2">A2</option>
+          </select>
+        </div>
+      </div>
+      <button id="batch-submit" onclick="submitBatch()">Create <span id="batch-n">0</span> jobs</button>
+    </div>
+    <div id="batch-progress" style="display:none">
+      <div class="batch-hdr">
+        <span id="batch-prog-title">Creating jobs…</span>
+        <button class="batch-close" id="batch-prog-close" onclick="closeBatchDialog()" disabled>&#10005;</button>
+      </div>
+      <div id="bpgwrap">
+        <div id="bpgtrack"><div id="bpgfill"></div></div>
+        <div id="bpgmsg"></div>
+      </div>
+      <div id="batch-results"></div>
+    </div>
+  </div>
+</div>
 
 <div id="confirm-modal">
   <div id="confirm-card">

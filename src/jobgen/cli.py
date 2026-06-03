@@ -576,6 +576,141 @@ def _print_job_summary(manifest: dict, dry_run: bool) -> None:
     typer.echo()
 
 
+@app.command("batch")
+def batch_cmd(
+    parcels: Optional[str] = typer.Option(
+        None, "--parcels", "-p",
+        help=(
+            "Comma-separated peruslohkotunnus IDs, or omit the value to use --parcels "
+            "as a type selector with --file (e.g. --parcels --file ids.txt). "
+            "Cannot be combined with --properties."
+        ),
+    ),
+    properties: Optional[str] = typer.Option(
+        None, "--properties", "-k",
+        help=(
+            "Comma-separated kiinteistötunnus values, or bare flag with --file. "
+            "Cannot be combined with --parcels."
+        ),
+    ),
+    file: Optional[Path] = typer.Option(
+        None, "--file", "-f",
+        help="Text file with one ID per line. # lines and blank lines are skipped.",
+        exists=True, file_okay=True, dir_okay=False,
+    ),
+    folder: Optional[str] = typer.Option(
+        None, "--folder",
+        help="Output subfolder to group the batch jobs under.",
+    ),
+    drone: Optional[str] = typer.Option(None, "--drone", help="Drone profile override."),
+    height: Optional[float] = typer.Option(None, "--height", help="Flight height (m AGL)."),
+    subcategory: Optional[str] = typer.Option(None, "--subcategory", help="A2 or A3."),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """Create skeleton jobs from a list of parcel or property IDs.
+
+    Fetches parcel/property geometry and writes job_params.json for each ID —
+    no KMZ or DSM is generated.  Jobs appear in the UI ready to edit and export.
+
+    ID type is determined by which flag is used.  If neither --parcels nor
+    --properties is given, the type is auto-detected from the ID format
+    (all-digits → parcels; NNN-NNN-N-NN → properties).
+    """
+    from jobgen.pipeline import create_skeleton_jobs
+
+    _require_key()
+    cfg = _load_cfg(config_path)
+
+    # Determine ID type
+    if parcels is not None and properties is not None:
+        typer.echo("Error: --parcels and --properties cannot be combined.", err=True)
+        raise typer.Exit(1)
+
+    # Collect IDs from inline flags and/or file
+    raw_ids: list[str] = []
+    if parcels is not None:
+        raw_ids.extend(p.strip() for p in parcels.split(",") if p.strip())
+    if properties is not None:
+        raw_ids.extend(k.strip() for k in properties.split(",") if k.strip())
+    if file is not None:
+        for line in Path(file).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                raw_ids.extend(p.strip() for p in line.split(",") if p.strip())
+
+    if not raw_ids:
+        typer.echo("Error: no IDs provided (use --parcels, --properties, and/or --file).", err=True)
+        raise typer.Exit(1)
+
+    # Detect or assign ID type
+    if parcels is not None:
+        id_type = "parcels"
+    elif properties is not None:
+        id_type = "properties"
+    else:
+        import re
+        sample = raw_ids[0]
+        id_type = "parcels" if re.match(r"^\d{8,}$", sample) else "properties"
+        typer.echo(f"Auto-detected ID type: {id_type}")
+
+    # Validate subcategory
+    if subcategory:
+        subcategory = subcategory.upper()
+        if subcategory not in ("A2", "A3"):
+            typer.echo("Error: --subcategory must be A2 or A3.", err=True)
+            raise typer.Exit(1)
+
+    # Apply drone/height overrides to config
+    import copy
+    cfg = copy.deepcopy(cfg)
+    if drone:
+        cfg.default_drone = drone
+    if height is not None:
+        active = cfg.active_drone()
+        cfg.flight.target_gsd_cm = active.gsd_from_height(height)
+    if subcategory:
+        cfg.home_safety.operating_subcategory = subcategory
+
+    params = {
+        "drone": cfg.default_drone,
+        "height_m": height,
+        "subcategory": subcategory or cfg.home_safety.operating_subcategory,
+        "offset_m": cfg.polygon.survey_offset_m,
+        "simplify": "auto" if cfg.polygon.simplify_mode == "auto" else str(cfg.polygon.simplify_tolerance_m),
+        "keepout": cfg.home_safety.offset_enabled,
+        "preview_radius_m": None,
+    }
+
+    output_dir = Path(cfg.output.output_dir).resolve()
+    typer.echo(f"\nCreating {len(raw_ids)} skeleton job(s)  [type={id_type}]")
+    if folder:
+        typer.echo(f"Folder: {folder}")
+    typer.echo()
+
+    results = create_skeleton_jobs(
+        raw_ids, id_type, output_dir, folder, params,
+        progress_cb=None, config=cfg,
+    )
+
+    # Print results table
+    ok = skipped = failed = 0
+    for r in results:
+        if r["status"] == "ok":
+            ok += 1
+            typer.echo(f"  ✓  {r['id']}")
+        elif r["status"] == "skipped":
+            skipped += 1
+            typer.echo(f"  –  {r['id']}  (skipped: {r.get('reason', '')})")
+        else:
+            failed += 1
+            typer.echo(f"  ✗  {r['id']}  {r.get('reason', '')}")
+
+    typer.echo()
+    typer.echo(f"Created: {ok}  Skipped: {skipped}  Failed: {failed}")
+    if failed:
+        raise typer.Exit(1)
+
+
 @app.command("serve")
 def serve_cmd(
     port: int = typer.Option(8765, "--port", help="Port to listen on."),

@@ -121,6 +121,48 @@ button:disabled{opacity:.4;cursor:not-allowed}
 #confirm-card .btn-pair{display:flex;gap:6px}
 #confirm-discard{background:#dc2626;color:#fff;border:none;border-radius:4px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;flex:1}
 #confirm-cancel{background:#e2e8f0;color:#374151;border:none;border-radius:4px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;flex:1}
+/* Batch button in jobs panel header */
+#jp-batch{margin:6px 8px 0;padding:5px 10px;background:#1e293b;border:1px dashed #334155;border-radius:4px;color:#94a3b8;font-size:11px;font-weight:600;cursor:pointer;text-align:left;flex-shrink:0;transition:background .12s,color .12s}
+#jp-batch:hover{background:#334155;color:#f8fafc}
+/* Batch dialog */
+#batch-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center}
+#batch-modal.open{display:flex}
+#batch-card{background:#1e293b;border:1px solid #334155;border-radius:8px;width:420px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+.batch-hdr{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 8px;border-bottom:1px solid #334155}
+.batch-hdr span{font-size:13px;font-weight:700;color:#f8fafc}
+.batch-close{background:none;border:none;color:#64748b;font-size:14px;cursor:pointer;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:3px;padding:0;transition:color .12s}
+.batch-close:hover{color:#f8fafc}
+#batch-form{padding:12px 14px 14px;display:flex;flex-direction:column;gap:6px}
+#batch-form label{font-size:11px;font-weight:500;color:#94a3b8;margin-bottom:1px}
+#batch-form input,#batch-form select,#batch-form textarea{background:#0f172a;border:1px solid #334155;color:#f8fafc;font-size:12px}
+#batch-form input:focus,#batch-form select:focus,#batch-form textarea:focus{border-color:#3b82f6}
+#batch-form textarea{font-family:monospace;font-size:11px;resize:vertical}
+.batch-type-row{display:flex;gap:4px;margin-bottom:2px}
+.batch-count{background:#334155;color:#94a3b8;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:600;margin-left:4px}
+.batch-file-row{display:flex;align-items:center;gap:8px}
+.batch-file-btn{display:inline-flex;align-items:center;gap:4px;background:#334155;border:none;border-radius:4px;color:#94a3b8;font-size:11px;font-weight:600;padding:4px 9px;cursor:pointer;transition:background .12s,color .12s;width:auto;margin:0}
+.batch-file-btn:hover{background:#475569;color:#f8fafc}
+#batch-file-name{font-size:10px;color:#64748b;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.batch-params-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.batch-param label{display:block;font-size:10px;color:#64748b;margin-bottom:2px}
+#batch-submit{margin-top:4px;background:#16a34a;color:#fff;font-size:12px;font-weight:700}
+#batch-submit:hover:not(:disabled){background:#15803d}
+#batch-submit:disabled{opacity:.4}
+/* Batch progress */
+#batch-progress{padding:12px 14px 14px;display:flex;flex-direction:column;gap:8px}
+#batch-prog-title{font-size:12px;font-weight:700;color:#f8fafc}
+#bpgwrap{display:flex;flex-direction:column;gap:3px}
+#bpgtrack{background:#334155;border-radius:3px;height:5px;overflow:hidden}
+#bpgfill{background:#3b82f6;height:100%;width:0;transition:width .25s;border-radius:3px}
+#bpgmsg{font-size:10px;color:#64748b;height:14px;overflow:hidden}
+#batch-results{max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin-top:2px}
+.bres-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:3px;font-size:11px}
+.bres-row.ok{background:#052e16;color:#86efac}
+.bres-row.skipped{background:#1e293b;color:#64748b}
+.bres-row.error{background:#450a0a;color:#fca5a5}
+.bres-icon{font-size:10px;flex-shrink:0;width:12px}
+.bres-id{font-family:monospace;flex:1;overflow:hidden;text-overflow:ellipsis}
+.bres-reason{font-size:9px;color:#64748b;flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Folder sections in jobs panel */
 .jfolder{margin-bottom:4px}
 .jfolder-hdr{display:flex;align-items:center;gap:4px;padding:4px 4px 3px;cursor:pointer;border-radius:4px;transition:background .12s;user-select:none}
