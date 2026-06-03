@@ -142,9 +142,14 @@ def create_app(config: AppConfig) -> FastAPI:
         loop = asyncio.get_running_loop()
         cfg = _prepare_config(req)
 
+        _include_buf = (
+            cfg.home_safety.home_include_buffer_m
+            if cfg.home_safety.home_include_buffer_m is not None
+            else 2.0 * cfg.home_safety.home_buffer_m
+        )
         cached = _preview_cache is not None and _preview_cache.covers(
             req.parcel_ids or None, req.property_ids or None,
-            2.0 * cfg.home_safety.home_buffer_m,
+            _include_buf,
         )
         print(
             f"[preview] job {job_id[:8]} starting — parcels={req.parcel_ids} props={req.property_ids}"
@@ -230,6 +235,11 @@ def create_app(config: AppConfig) -> FastAPI:
 
         def run() -> None:
             global _active_job_id
+            # Snapshot the preview result that was current when this export was
+            # triggered.  Reading it here (before run_job) rather than inside
+            # _write_job_params prevents a race where a concurrent preview could
+            # overwrite the global between job completion and the write.
+            preview_snapshot = _last_preview_result
             try:
                 manifest = run_job(
                     req.job_name,
@@ -240,7 +250,7 @@ def create_app(config: AppConfig) -> FastAPI:
                     custom_polygon_4326=custom_poly,
                 )
                 job_dir = Path(output_dir) / req.job_name
-                _write_job_params(job_dir, req, manifest)
+                _write_job_params(job_dir, req, manifest, preview_snapshot)
                 output_files = {
                     k: str(p)
                     for k, p in {
@@ -423,11 +433,26 @@ def create_app(config: AppConfig) -> FastAPI:
             raise HTTPException(404, detail=f"Job '{name}' not found")
         if new_dir.exists():
             raise HTTPException(409, detail=f"Job '{new_name}' already exists")
-        # Rename prefixed output files
+        # Build rename list up-front so we can roll back on failure
+        renames: list[tuple[Path, Path]] = []
         for f in old_dir.iterdir():
             if f.name.startswith(f"{name}.") or f.name.startswith(f"{name}_"):
                 suffix = f.name[len(name):]
-                f.rename(old_dir / f"{new_name}{suffix}")
+                renames.append((f, old_dir / f"{new_name}{suffix}"))
+
+        done: list[tuple[Path, Path]] = []
+        try:
+            for src, dst in renames:
+                src.rename(dst)
+                done.append((src, dst))
+        except OSError as exc:
+            for src, dst in reversed(done):
+                try:
+                    dst.rename(src)
+                except OSError:
+                    pass
+            raise HTTPException(500, detail=f"Rename failed mid-way, rolled back: {exc}")
+
         # Update job_name in JSON files
         for json_file in (old_dir / "manifest.json", old_dir / "job_params.json"):
             if json_file.exists():
@@ -614,7 +639,12 @@ def _make_thumbnail_svg(survey_geojson: dict | None) -> str | None:
         return None
 
 
-def _write_job_params(job_dir: Path, req: "ExportRequest", manifest: dict) -> None:
+def _write_job_params(
+    job_dir: Path,
+    req: "ExportRequest",
+    manifest: dict,
+    preview_result: dict | None = None,
+) -> None:
     """Write job_params.json and thumbnail.svg alongside the manifest."""
     params = {
         "job_name": req.job_name,
@@ -637,8 +667,8 @@ def _write_job_params(job_dir: Path, req: "ExportRequest", manifest: dict) -> No
             "preview_radius_m": req.preview_radius_m,
         },
         "custom_polygon_4326": req.custom_polygon,
-        "last_preview_geojson": {k: v for k, v in _last_preview_result.items() if k != "dsm_b64"}
-        if _last_preview_result else None,
+        "last_preview_geojson": {k: v for k, v in preview_result.items() if k != "dsm_b64"}
+        if preview_result else None,
     }
     params_path = job_dir / "job_params.json"
     params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")

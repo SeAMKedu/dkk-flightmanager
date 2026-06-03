@@ -613,7 +613,7 @@ def run_preview(
             log.info("Preview: %d kiinteistö(t)", len(props))
             input_geoms.extend(props)
 
-        if not input_geoms:
+        if not input_geoms and custom_polygon_4326 is None:
             raise ValueError("No input geometries — provide parcel IDs, property IDs, or bbox.")
 
         prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
