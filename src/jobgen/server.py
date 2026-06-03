@@ -1051,6 +1051,7 @@ var previewData = null;
 var editedPoly = null;
 var polyModified = false;
 var isRunning = false;
+var _pendingPreview = false;  // startPreview() deferred because isRunning was true
 var currentSSE = null;
 var editMode = false;
 var _bridgeMode = false;
@@ -1320,6 +1321,9 @@ function _doNewJob() {
   _activeJob = null; _dirty = false;
   clearPolyEdit();
   clearError();
+  // Reset polygon controls to a clean neutral state
+  document.getElementById('offset').value = 0;
+  setSimpAuto(true);  // silent — no scheduleAutoUpdate, no clearPolyEdit
   hideStaleNotice();
   document.getElementById('xb').disabled = true;
   document.getElementById('rstbtn').disabled = true;
@@ -1543,6 +1547,7 @@ function finishRun() {
   document.getElementById('xb').disabled = !previewData;
   document.getElementById('toast').style.display = 'none';
   showPg(false, 0, '');
+  if (_pendingPreview) { _pendingPreview = false; startPreview(); }
 }
 function onErr(msg) {
   console.error('[err]', msg);
@@ -2090,10 +2095,13 @@ function resetPoly() {
   if (!previewData) return;
   saveEdit();  // exit edit mode cleanly if active
   clearPolyEdit();
-  renderMap(previewData);
-  redrawRings();
-  resetLegend();
-  try { renderStatus(previewData.stats); } catch(e) {}
+  // Cancel any pending auto-update so the stale simplify value doesn't fire after reset
+  if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
+  // Reset polygon controls to neutral: no offset, no simplification
+  document.getElementById('offset').value = 0;
+  setSimpManual(0, true);  // silent=true so it doesn't trigger scheduleAutoUpdate
+  // If a job is already running, defer the preview until it finishes
+  if (isRunning) { _pendingPreview = true; } else { startPreview(); }
 }
 
 // ── Save result ───────────────────────────────────────────────────────────────
