@@ -782,8 +782,6 @@ textarea{resize:vertical;min-height:44px;font-family:monospace;font-size:11px}
 .btn-pair{display:flex;gap:5px;margin-top:5px}
 button{width:100%;padding:7px 10px;border:none;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;transition:background .12s,opacity .12s}
 button:disabled{opacity:.4;cursor:not-allowed}
-#ub{background:#0f172a;color:#f8fafc;flex:1}
-#ub:not(:disabled):hover{background:#1e293b}
 #xb{background:#16a34a;color:#fff;margin-top:5px}
 #xb:not(:disabled):hover{background:#15803d}
 .rst-btn{background:#7c3aed;color:#fff;font-size:11px}
@@ -906,8 +904,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 
     <div class="sec">
       <h3>Job</h3>
-      <button id="ub" onclick="startPreview()" style="margin-top:3px">&#8635; Update</button>
-      <button id="xb" onclick="startExport()" disabled style="margin-top:5px">Save</button>
+      <button id="xb" onclick="startExport()" disabled style="margin-top:3px">Save</button>
       <div id="pgwrap">
         <div id="pgtrack"><div id="pgfill"></div></div>
         <div id="pgmsg"></div>
@@ -1478,7 +1475,6 @@ async function startExport() {
 // ── Job runner ────────────────────────────────────────────────────────────────
 async function runJob(endpoint, params, label, onDone) {
   isRunning = true;
-  document.getElementById('ub').disabled = true;
   document.getElementById('xb').disabled = true;
   showToast(label + '…', 0, 'Starting…');
   showPg(true, 0, 'Starting…');
@@ -1543,7 +1539,6 @@ function showToast(title, pct, msg) {
 }
 function finishRun() {
   isRunning = false;
-  document.getElementById('ub').disabled = false;
   document.getElementById('xb').disabled = !previewData;
   document.getElementById('toast').style.display = 'none';
   showPg(false, 0, '');
