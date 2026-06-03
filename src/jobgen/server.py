@@ -70,11 +70,11 @@ class PreviewRequest(BaseModel):
     simplify: str = "auto"
     keepout: bool = True
     preview_radius_m: float | None = None
+    custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
 
 
 class ExportRequest(PreviewRequest):
     job_name: str
-    custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
 
 
 class PolygonOpRequest(BaseModel):
@@ -163,12 +163,15 @@ def create_app(config: AppConfig) -> FastAPI:
         def run() -> None:
             global _active_job_id, _preview_cache, _last_preview_result
             try:
+                from shapely.geometry import shape as _shape
+                custom_poly_geom = _shape(req.custom_polygon) if req.custom_polygon else None
                 result, new_cache = run_preview(
                     cfg,
                     parcel_ids=req.parcel_ids or None,
                     property_ids=req.property_ids or None,
                     progress_cb=cb,
                     _cache=_preview_cache,
+                    custom_polygon_4326=custom_poly_geom,
                 )
                 _preview_cache = new_cache
                 _last_preview_result = result

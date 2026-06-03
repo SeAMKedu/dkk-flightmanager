@@ -410,12 +410,13 @@ function clearError() {
 
 // ── Preview ───────────────────────────────────────────────────────────────────
 async function startPreview() {
-  if (isRunning) return;
+  if (isRunning || editMode) return;  // don't preview while editing — renderMap clears editLayers
   clearError();
   var p = getParams();
   if (!p.parcel_ids.length && !p.property_ids.length) {
     showError('Enter at least one parcel ID or property ID.'); return;
   }
+  if (polyModified) p.custom_polygon = editedPoly;
   await runJob('/api/preview', p, 'Preview', onPreviewDone);
 }
 
@@ -425,6 +426,7 @@ async function startExport() {
   clearError();
   var jn = document.getElementById('jname').value.trim();
   if (!jn) { showError('Enter a job name.'); return; }
+  if (editMode) saveEdit();  // commit any pending vertex edits before saving
   var p = Object.assign(getParams(), {
     job_name: jn,
     custom_polygon: polyModified ? editedPoly : null
@@ -723,19 +725,22 @@ function saveEdit() {
   if (!editMode) return;
   editMode = false;
   map.doubleClickZoom.enable();
-  editedPoly = null;
+  // Read geometry BEFORE disabling — some Leaflet.draw builds revert _latlngs on disable().
+  var liveGeom = _geomFromEditLayers();
   editLayers.eachLayer(function(l) {
-    if (l.editing && l.editing.enabled()) {
-      l.editing.disable();
-      if (!editedPoly) {
-        editedPoly = layerGeom(l);
-        polyModified = true; markDirty();
-        document.getElementById('modbadge').style.display = 'block';
-      }
-    }
+    if (l.editing && l.editing.enabled()) l.editing.disable();
   });
   editLayers.clearLayers();
-  if (lrs.survey) lrs.survey.addTo(map);
+  editedPoly = liveGeom;
+  if (liveGeom) {
+    polyModified = true; markDirty();
+    document.getElementById('modbadge').style.display = 'block';
+    _updateSurveyDisplay(liveGeom);
+  } else {
+    var _fallback = (previewData && previewData.survey) || null;
+    if (_fallback) _updateSurveyDisplay(_fallback);
+    else if (lrs.survey) lrs.survey.addTo(map);
+  }
   exitBridgeMode();
   _detachEditListeners();
   if (_editVHandler) { map.off('draw:editvertex', _editVHandler); _editVHandler = null; }
@@ -768,7 +773,7 @@ function _attachEditListeners() {
     e.preventDefault(); e.stopPropagation();
     if (_bridgeMode) { exitBridgeMode(); return; }
     var latlng = map.mouseEventToLatLng(e);
-    var verts = _collectVerts(_currentSurveyGeom());
+    var verts = editMode ? _collectVertsFromEditLayers() : _collectVerts(_currentSurveyGeom());
     var mp = map.latLngToContainerPoint(latlng);
     var best = null, bestD = 28;
     verts.forEach(function(v) {
@@ -853,6 +858,28 @@ function _currentSurveyGeom() {
   return editedPoly || (previewData && previewData.survey) || null;
 }
 
+function _geomFromEditLayers() {
+  var polys = [];
+  editLayers.eachLayer(function(l) { polys.push(layerGeom(l)); });
+  if (!polys.length) return null;
+  if (polys.length === 1) return polys[0];
+  return {type:'MultiPolygon', coordinates: polys.map(function(p){return p.coordinates;})};
+}
+
+function _collectVertsFromEditLayers() {
+  var verts = [];
+  var pi = 0;
+  editLayers.eachLayer(function(l) {
+    var lls = l.getLatLngs();
+    var ring = Array.isArray(lls[0]) ? lls[0] : lls;
+    for (var i = 0; i < ring.length; i++) {
+      verts.push({coord: [ring[i].lng, ring[i].lat], polyIdx: pi});
+    }
+    pi++;
+  });
+  return verts;
+}
+
 function _collectVerts(geom) {
   var verts = [];
   if (!geom) return verts;
@@ -888,7 +915,7 @@ function enterBridgeMode() {
   if (!previewData) return;
   _bridgeMode = true;
   _bridgePts = [];
-  _bridgeVerts = _collectVerts(_currentSurveyGeom());
+  _bridgeVerts = editMode ? _collectVertsFromEditLayers() : _collectVerts(_currentSurveyGeom());
   if (_bridgeGroup) map.removeLayer(_bridgeGroup);
   _bridgeGroup = L.layerGroup().addTo(map);
   map.boxZoom.disable();  // prevent Shift+drag box-zoom during picking
@@ -995,7 +1022,7 @@ function _showBridgeError(msg) {
 }
 
 async function _commitBridge() {
-  var geom = _currentSurveyGeom();
+  var geom = editMode ? _geomFromEditLayers() : _currentSurveyGeom();
   if (!geom) { exitBridgeMode(); return; }
 
   var indices = _bridgePts.map(function(p){ return p.polyIdx; });

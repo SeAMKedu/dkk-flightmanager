@@ -555,6 +555,7 @@ def run_preview(
     refresh: bool = False,
     progress_cb: Callable[[str, str, int], None] | None = None,
     _cache: PreviewCache | None = None,
+    custom_polygon_4326: Any | None = None,
 ) -> tuple[dict, PreviewCache]:
     """Run parcels → buildings → geometry → zones; return (GeoJSON dict, cache).
 
@@ -648,8 +649,29 @@ def run_preview(
 
     # 3. Survey polygon
     _cb(progress_cb, "geometry", "Computing survey polygon…", 55)
-    log.info("Preview: computing survey geometry …")
-    survey_geom = process_survey(input_geoms, buildings, config.home_safety, config.polygon)
+    if custom_polygon_4326 is not None:
+        log.info("Preview: using custom polygon (bridge/cut applied)")
+        _survey_3067 = reproject_to_3067(custom_polygon_4326)
+        _area_ha = _survey_3067.area / 10_000
+        _vc = vertex_count(custom_polygon_4326)
+        survey_geom = SurveyGeometry(
+            survey_3067=_survey_3067,
+            survey_4326=custom_polygon_4326,
+            pieces_3067=[_survey_3067],
+            pieces_4326=[custom_polygon_4326],
+            bbox_3067=_survey_3067.bounds,
+            original_area_ha=_area_ha,
+            final_area_ha=_area_ha,
+            area_lost_pct=0.0,
+            min_dist_to_home_m=None,
+            offset_applied=False,
+            survey_vertex_count=_vc,
+            needs_review=True,
+            review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
+        )
+    else:
+        log.info("Preview: computing survey geometry …")
+        survey_geom = process_survey(input_geoms, buildings, config.home_safety, config.polygon)
 
     # 4. Keep-out zone geometry for visualisation
     keepout_3067 = build_keepout(buildings, config.home_safety)
