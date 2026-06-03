@@ -74,6 +74,7 @@ class PreviewRequest(BaseModel):
 
 class ExportRequest(PreviewRequest):
     job_name: str
+    folder: str | None = None
 
 
 class PolygonOpRequest(BaseModel):
@@ -236,7 +237,11 @@ def create_app(config: AppConfig) -> FastAPI:
                     progress_cb=cb,
                     custom_polygon_4326=custom_poly,
                 )
-                job_dir = Path(output_dir) / req.job_name
+                if req.folder:
+                    job_dir = Path(output_dir) / req.folder / req.job_name
+                    job_dir.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    job_dir = Path(output_dir) / req.job_name
                 _write_job_params(job_dir, req, manifest, preview_snapshot)
                 output_files = {
                     k: str(p)
@@ -267,7 +272,8 @@ def create_app(config: AppConfig) -> FastAPI:
                     "zones_clear": not manifest.get("zones", {}).get("intersecting_zones"),
                     "zone_count": len(manifest.get("zones", {}).get("intersecting_zones", [])),
                 }
-                print(f"[export] job {job_id[:8]} done — {output_dir}/{req.job_name}")
+                job_rel = f"{req.folder}/{req.job_name}" if req.folder else req.job_name
+                print(f"[export] job {job_id[:8]} done — {output_dir}/{job_rel}")
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
                     {
@@ -278,6 +284,7 @@ def create_app(config: AppConfig) -> FastAPI:
                             "stats": stats,
                             "output_dir": output_dir,
                             "job_name": req.job_name,
+                            "folder": req.folder,
                         },
                     },
                 )
@@ -371,19 +378,21 @@ def create_app(config: AppConfig) -> FastAPI:
 
     # -----------------------------------------------------------------------
     # Job management endpoints
+    # Note: specific literal routes (like /api/jobs/geojson) must be defined
+    # BEFORE /api/jobs/{path:path} so they are matched first.
     # -----------------------------------------------------------------------
 
     @app.get("/api/jobs")
     async def list_jobs():
         output_dir = Path(_config.output.output_dir).resolve()
-        return {"jobs": _scan_jobs(output_dir)}
+        return {"groups": _scan_jobs(output_dir)}
 
-    @app.get("/api/jobs/{name}")
-    async def get_job(name: str):
+    @app.get("/api/jobs/{path:path}")
+    async def get_job(path: str):
         output_dir = Path(_config.output.output_dir).resolve()
-        job_dir = output_dir / name
+        folder, name, job_dir = _resolve_job_dir(output_dir, path)
         if not job_dir.is_dir():
-            raise HTTPException(404, detail=f"Job '{name}' not found")
+            raise HTTPException(404, detail=f"Job '{path}' not found")
         params_path = job_dir / "job_params.json"
         manifest_path = job_dir / "manifest.json"
         manifest: dict = {}
@@ -400,32 +409,48 @@ def create_app(config: AppConfig) -> FastAPI:
         elif manifest:
             params = _params_from_manifest(name, manifest)
         else:
-            raise HTTPException(404, detail=f"Job '{name}' has no readable data")
+            raise HTTPException(404, detail=f"Job '{path}' has no readable data")
         stale: list[str] = []
         if manifest:
             stale = _check_cache_staleness(manifest, _config.cache)
-        return {"params": params, "cache_stale": stale}
+        return {"params": params, "cache_stale": stale, "folder": folder}
 
-    @app.patch("/api/jobs/{name}")
-    async def rename_job(name: str, body: dict):
+    @app.patch("/api/jobs/{path:path}")
+    async def update_job(path: str, body: dict):
+        output_dir = Path(_config.output.output_dir).resolve()
+        folder, name, job_dir = _resolve_job_dir(output_dir, path)
+        if not job_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{path}' not found")
+
+        # Handle color update
+        if "color" in body and "new_name" not in body:
+            color = body.get("color")  # None clears the color
+            params_path = job_dir / "job_params.json"
+            if params_path.exists():
+                try:
+                    data = json.loads(params_path.read_text(encoding="utf-8"))
+                    data["color"] = color
+                    params_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception as exc:
+                    raise HTTPException(500, detail=f"Could not update color: {exc}")
+            return {"path": path, "color": color}
+
+        # Handle rename
         new_name: str = body.get("new_name", "").strip()
         if not new_name:
             raise HTTPException(400, detail="new_name is required")
         if new_name == name:
-            return {"name": name}
-        output_dir = Path(_config.output.output_dir).resolve()
-        old_dir = output_dir / name
-        new_dir = output_dir / new_name
-        if not old_dir.is_dir():
-            raise HTTPException(404, detail=f"Job '{name}' not found")
+            return {"path": path, "name": name, "folder": folder}
+
+        new_dir = job_dir.parent / new_name
         if new_dir.exists():
-            raise HTTPException(409, detail=f"Job '{new_name}' already exists")
-        # Build rename list up-front so we can roll back on failure
+            raise HTTPException(409, detail=f"Job '{new_name}' already exists in this location")
+
         renames: list[tuple[Path, Path]] = []
-        for f in old_dir.iterdir():
+        for f in job_dir.iterdir():
             if f.name.startswith(f"{name}.") or f.name.startswith(f"{name}_"):
                 suffix = f.name[len(name):]
-                renames.append((f, old_dir / f"{new_name}{suffix}"))
+                renames.append((f, job_dir / f"{new_name}{suffix}"))
 
         done: list[tuple[Path, Path]] = []
         try:
@@ -440,9 +465,7 @@ def create_app(config: AppConfig) -> FastAPI:
                     pass
             raise HTTPException(500, detail=f"Rename failed mid-way, rolled back: {exc}")
 
-        # Update job_name in JSON files (best-effort; these files keep their
-        # fixed names and are still accessible while the directory is old_dir)
-        for json_file in (old_dir / "manifest.json", old_dir / "job_params.json"):
+        for json_file in (job_dir / "manifest.json", job_dir / "job_params.json"):
             if json_file.exists():
                 try:
                     data = json.loads(json_file.read_text(encoding="utf-8"))
@@ -452,10 +475,8 @@ def create_app(config: AppConfig) -> FastAPI:
                 except Exception:
                     pass
 
-        # Rename the directory itself.  If this fails we roll back the file
-        # renames too so the job is left in its original state.
         try:
-            old_dir.rename(new_dir)
+            job_dir.rename(new_dir)
         except OSError as exc:
             for src, dst in reversed(done):
                 try:
@@ -464,26 +485,28 @@ def create_app(config: AppConfig) -> FastAPI:
                     pass
             raise HTTPException(500, detail=f"Directory rename failed, rolled back: {exc}")
 
-        return {"name": new_name}
+        new_path = f"{folder}/{new_name}" if folder else new_name
+        return {"path": new_path, "name": new_name, "folder": folder}
 
-    @app.post("/api/jobs/{name}/clone")
-    async def clone_job(name: str):
+    @app.post("/api/jobs/{path:path}/clone")
+    async def clone_job(path: str):
         output_dir = Path(_config.output.output_dir).resolve()
-        src_dir = output_dir / name
+        folder, name, src_dir = _resolve_job_dir(output_dir, path)
         if not src_dir.is_dir():
-            raise HTTPException(404, detail=f"Job '{name}' not found")
+            raise HTTPException(404, detail=f"Job '{path}' not found")
         params_path = src_dir / "job_params.json"
         manifest_path = src_dir / "manifest.json"
         if not params_path.exists() and not manifest_path.exists():
-            raise HTTPException(404, detail=f"Job '{name}' has no data to clone")
-        # Find a unique clone name
+            raise HTTPException(404, detail=f"Job '{path}' has no data to clone")
+        # Clone stays in the same folder as the source
+        parent_dir = src_dir.parent
         base = f"{name}-copy"
         clone_name = base
         counter = 2
-        while (output_dir / clone_name).exists():
+        while (parent_dir / clone_name).exists():
             clone_name = f"{base}{counter}"
             counter += 1
-        clone_dir = output_dir / clone_name
+        clone_dir = parent_dir / clone_name
         clone_dir.mkdir(parents=True, exist_ok=True)
         if params_path.exists():
             try:
@@ -491,9 +514,8 @@ def create_app(config: AppConfig) -> FastAPI:
             except Exception as exc:
                 raise HTTPException(500, detail=str(exc))
         else:
-            manifest_src = src_dir / "manifest.json"
             try:
-                src_manifest = json.loads(manifest_src.read_text(encoding="utf-8"))
+                src_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 params = _params_from_manifest(name, src_manifest)
             except Exception as exc:
                 raise HTTPException(500, detail=str(exc))
@@ -502,37 +524,107 @@ def create_app(config: AppConfig) -> FastAPI:
         (clone_dir / "job_params.json").write_text(
             json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        # Copy thumbnail if present
         thumb_src = src_dir / "thumbnail.svg"
         if thumb_src.exists():
             shutil.copy2(thumb_src, clone_dir / "thumbnail.svg")
-        return {"name": clone_name}
+        clone_path = f"{folder}/{clone_name}" if folder else clone_name
+        return {"path": clone_path, "name": clone_name, "folder": folder}
 
-    @app.delete("/api/jobs/{name}")
-    async def delete_job(name: str):
+    @app.post("/api/jobs/{path:path}/move")
+    async def move_job(path: str, body: dict):
+        """Move a job to a different folder (or root if folder is null)."""
         output_dir = Path(_config.output.output_dir).resolve()
-        job_dir = output_dir / name
-        if not job_dir.is_dir():
-            raise HTTPException(404, detail=f"Job '{name}' not found")
-        shutil.rmtree(job_dir)
-        return {"deleted": name}
+        folder, name, src_dir = _resolve_job_dir(output_dir, path)
+        if not src_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{path}' not found")
+        to_folder: str | None = body.get("folder") or None
+        if to_folder == folder:
+            return {"path": path, "folder": folder}
+        if to_folder:
+            dest_parent = output_dir / to_folder
+            dest_parent.mkdir(parents=True, exist_ok=True)
+            # Write folder marker if not present
+            marker = dest_parent / ".dkk-folder"
+            if not marker.exists():
+                marker.write_text("", encoding="utf-8")
+        else:
+            dest_parent = output_dir
+        dest_dir = dest_parent / name
+        if dest_dir.exists():
+            raise HTTPException(409, detail=f"A job named '{name}' already exists in the target location")
+        src_dir.rename(dest_dir)
+        # Clean up source folder if now empty (only if it was a group folder)
+        if folder:
+            src_parent = output_dir / folder
+            remaining = [d for d in src_parent.iterdir() if not d.name.startswith(".")]
+            if not remaining:
+                shutil.rmtree(src_parent)
+        new_path = f"{to_folder}/{name}" if to_folder else name
+        return {"path": new_path, "folder": to_folder}
 
-    @app.post("/api/jobs/{name}/reveal")
-    async def reveal_job(name: str):
-        """Open the job folder in the system file manager (Finder / Explorer / Nautilus)."""
+    @app.delete("/api/jobs/{path:path}")
+    async def delete_job(path: str):
+        output_dir = Path(_config.output.output_dir).resolve()
+        folder, name, job_dir = _resolve_job_dir(output_dir, path)
+        if not job_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{path}' not found")
+        shutil.rmtree(job_dir)
+        # Auto-remove empty folder
+        if folder:
+            parent = output_dir / folder
+            if parent.is_dir():
+                remaining = [d for d in parent.iterdir() if not d.name.startswith(".")]
+                if not remaining:
+                    shutil.rmtree(parent)
+        return {"deleted": path}
+
+    @app.post("/api/jobs/{path:path}/reveal")
+    async def reveal_job(path: str):
+        """Open the job folder in the system file manager."""
         import subprocess, sys
         output_dir = Path(_config.output.output_dir).resolve()
-        job_dir = output_dir / name
+        folder, name, job_dir = _resolve_job_dir(output_dir, path)
         if not job_dir.is_dir():
-            raise HTTPException(404, detail=f"Job '{name}' not found")
-        path = str(job_dir)
+            raise HTTPException(404, detail=f"Job '{path}' not found")
+        job_path = str(job_dir)
         if sys.platform == "darwin":
-            subprocess.Popen(["open", path])
+            subprocess.Popen(["open", job_path])
         elif sys.platform == "win32":
-            subprocess.Popen(["explorer", path])
+            subprocess.Popen(["explorer", job_path])
         else:
-            subprocess.Popen(["xdg-open", path])
-        return {"revealed": path}
+            subprocess.Popen(["xdg-open", job_path])
+        return {"revealed": job_path}
+
+    # -----------------------------------------------------------------------
+    # Folder management endpoints
+    # -----------------------------------------------------------------------
+
+    @app.post("/api/folders")
+    async def create_folder(body: dict):
+        folder_name: str = body.get("name", "").strip()
+        if not folder_name or "/" in folder_name or folder_name.startswith("."):
+            raise HTTPException(400, detail="Invalid folder name")
+        output_dir = Path(_config.output.output_dir).resolve()
+        folder_dir = output_dir / folder_name
+        if folder_dir.exists():
+            raise HTTPException(409, detail=f"Folder '{folder_name}' already exists")
+        folder_dir.mkdir(parents=True, exist_ok=True)
+        (folder_dir / ".dkk-folder").write_text("", encoding="utf-8")
+        return {"name": folder_name}
+
+    @app.delete("/api/folders/{folder_name}")
+    async def delete_folder(folder_name: str, force: bool = False):
+        output_dir = Path(_config.output.output_dir).resolve()
+        folder_dir = output_dir / folder_name
+        if not folder_dir.is_dir():
+            raise HTTPException(404, detail=f"Folder '{folder_name}' not found")
+        if not _is_folder_dir(folder_dir):
+            raise HTTPException(400, detail=f"'{folder_name}' is not a group folder")
+        jobs = [d for d in folder_dir.iterdir() if d.is_dir()]
+        if jobs and not force:
+            raise HTTPException(409, detail=f"Folder '{folder_name}' contains jobs; use force=true to delete all")
+        shutil.rmtree(folder_dir)
+        return {"deleted": folder_name}
 
     return app
 
@@ -684,24 +776,70 @@ def _write_job_params(
 # ---------------------------------------------------------------------------
 
 
+def _is_job_dir(d: Path) -> bool:
+    """True if d contains job marker files (job_params.json or manifest.json)."""
+    return (d / "job_params.json").exists() or (d / "manifest.json").exists()
+
+
+def _is_folder_dir(d: Path) -> bool:
+    """True if d is a group folder (has .dkk-folder marker or contains job subdirs)."""
+    if (d / ".dkk-folder").exists():
+        return True
+    try:
+        return any(sub.is_dir() and _is_job_dir(sub) for sub in d.iterdir() if sub.is_dir())
+    except PermissionError:
+        return False
+
+
+def _resolve_job_dir(output_dir: Path, path: str) -> tuple[str | None, str, Path]:
+    """Split a job path (name or folder/name) into (folder, name, directory)."""
+    parts = path.strip("/").split("/", 1)
+    if len(parts) == 2:
+        folder, name = parts
+        return folder, name, output_dir / folder / name
+    return None, parts[0], output_dir / parts[0]
+
+
 def _scan_jobs(output_dir: Path) -> list[dict]:
-    """Scan output_dir for job subdirectories; return sorted list of job cards."""
-    jobs = []
+    """Scan output_dir; return groups [{name, jobs}] with one-level folder support."""
     if not output_dir.is_dir():
-        return jobs
-    for job_dir in sorted(output_dir.iterdir()):
-        if not job_dir.is_dir():
+        return []
+
+    root_jobs: list[dict] = []
+    folder_groups: list[dict] = []
+
+    for entry in sorted(output_dir.iterdir()):
+        if not entry.is_dir():
             continue
-        card = _read_job_card(job_dir)
-        if card:
-            jobs.append(card)
-    jobs.sort(key=lambda j: j.get("saved_at") or j.get("modified_at") or "", reverse=True)
-    return jobs
+        if _is_folder_dir(entry):
+            folder_jobs = []
+            try:
+                for sub in sorted(entry.iterdir()):
+                    if sub.is_dir():
+                        card = _read_job_card(sub, folder=entry.name)
+                        folder_jobs.append(card)
+            except PermissionError:
+                pass
+            folder_jobs.sort(
+                key=lambda j: j.get("saved_at") or j.get("modified_at") or "", reverse=True
+            )
+            folder_groups.append({"name": entry.name, "jobs": folder_jobs})
+        else:
+            root_jobs.append(_read_job_card(entry, folder=None))
+
+    root_jobs.sort(key=lambda j: j.get("saved_at") or j.get("modified_at") or "", reverse=True)
+
+    groups = []
+    if root_jobs:
+        groups.append({"name": None, "jobs": root_jobs})
+    groups.extend(folder_groups)
+    return groups
 
 
-def _read_job_card(job_dir: Path) -> dict | None:
+def _read_job_card(job_dir: Path, folder: str | None = None) -> dict:
     """Build a summary card dict for one job directory."""
     name = job_dir.name
+    path = f"{folder}/{name}" if folder else name
     manifest_path = job_dir / "manifest.json"
     params_path = job_dir / "job_params.json"
     thumb_path = job_dir / "thumbnail.svg"
@@ -709,9 +847,13 @@ def _read_job_card(job_dir: Path) -> dict | None:
     if not manifest_path.exists() and not params_path.exists():
         return {
             "name": name,
+            "folder": folder,
+            "path": path,
             "status": "failed",
             "saved_at": None,
             "modified_at": job_dir.stat().st_mtime,
+            "untouched": False,
+            "color": None,
         }
 
     manifest: dict = {}
@@ -735,10 +877,16 @@ def _read_job_card(job_dir: Path) -> dict | None:
         except Exception:
             pass
 
+    has_kmz = any(job_dir.glob("*.kmz"))
+    batch_created = params.get("batch_created", False)
+    untouched = bool(batch_created and not has_kmz)
+
     g = manifest.get("geometry", {})
     f = manifest.get("flight", {})
     return {
         "name": name,
+        "folder": folder,
+        "path": path,
         "status": "ok",
         "saved_at": params.get("saved_at"),
         "run_at": manifest.get("run_timestamp"),
@@ -748,6 +896,8 @@ def _read_job_card(job_dir: Path) -> dict | None:
         "drone_label": f.get("drone_label"),
         "flight_ready": manifest.get("flight_ready"),
         "needs_review": manifest.get("needs_review"),
+        "untouched": untouched,
+        "color": params.get("color"),
         "thumbnail_svg": thumbnail_svg,
     }
 

@@ -121,6 +121,22 @@ button:disabled{opacity:.4;cursor:not-allowed}
 #confirm-card .btn-pair{display:flex;gap:6px}
 #confirm-discard{background:#dc2626;color:#fff;border:none;border-radius:4px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;flex:1}
 #confirm-cancel{background:#e2e8f0;color:#374151;border:none;border-radius:4px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;flex:1}
+/* Folder sections in jobs panel */
+.jfolder{margin-bottom:4px}
+.jfolder-hdr{display:flex;align-items:center;gap:4px;padding:4px 4px 3px;cursor:pointer;border-radius:4px;transition:background .12s;user-select:none}
+.jfolder-hdr:hover{background:#1e293b}
+.jfolder-caret{color:#475569;font-size:9px;width:12px;flex-shrink:0;transition:transform .15s}
+.jfolder-caret.open{transform:rotate(90deg)}
+.jfolder-name{font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jfolder-count{font-size:9px;color:#475569;flex-shrink:0}
+.jfolder-map-btn{background:none;border:1px solid #334155;border-radius:3px;color:#64748b;font-size:9px;padding:1px 5px;cursor:pointer;flex-shrink:0;width:auto;font-weight:600;transition:color .12s,border-color .12s}
+.jfolder-map-btn:hover{color:#94a3b8;border-color:#475569}
+.jfolder-jobs{padding-left:8px}
+.jfolder-jobs.hidden{display:none}
+/* Untouched badge */
+.jbadge.untouched{background:#334155;color:#64748b;font-size:8px;width:auto;padding:0 4px;border-radius:3px}
+/* Move-to-folder submenu */
+.jmenu-sub{position:absolute;right:110px;top:0;background:#1e293b;border:1px solid #334155;border-radius:5px;box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:201;min-width:120px;overflow:hidden}
 /* Leaflet.draw midpoint handles — diamond via ::before so Leaflet's own
    translate3d positioning transform on the icon element is not overridden.
    top/left 50% + translate(-50%,-50%) centres the diamond on the anchor point. */

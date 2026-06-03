@@ -11,9 +11,11 @@ var editMode = false;
 var _bridgeMode = false;
 // Jobs panel state
 var _dirty = false;
-var _activeJob = null;
+var _activeJob = null;       // full path (folder/name or name)
+var _activeJobFolder = null; // folder part, null for root
 var _jpOpen = localStorage.getItem('jp-open') !== 'false';
-var _jobsCache = [];
+var _jobsCache = [];         // flat list of all job cards (for filter search)
+var _jobsGroups = [];        // grouped structure from API
 var _bridgePts = [];        // [{coord:[lng,lat], polyIdx}]
 var _bridgeVerts = [];      // all vertices of current survey geometry
 var _bridgeGroup = null;
@@ -143,7 +145,8 @@ function defaultJobName() {
 
 function updatePathHint() {
   var jn = document.getElementById('jname').value.trim() || '(name)';
-  document.getElementById('pathint').textContent = 'Output: ' + outputDir + '/' + jn;
+  var rel = _activeJobFolder ? _activeJobFolder + '/' + jn : jn;
+  document.getElementById('pathint').textContent = 'Output: ' + outputDir + '/' + rel;
 }
 document.getElementById('jname').addEventListener('input', updatePathHint);
 
@@ -306,7 +309,7 @@ function _doNewJob() {
   _detachEditListeners();
   // Reset state
   previewData = null; editedPoly = null; polyModified = false; _lastPreviewedIds = '';
-  _activeJob = null; _dirty = false; _altCap = null;
+  _activeJob = null; _activeJobFolder = null; _dirty = false; _altCap = null;
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
   clearPolyEdit();
   clearError();
@@ -464,6 +467,7 @@ async function startExport() {
   if (editMode) saveEdit();  // commit any pending vertex edits before saving
   var p = Object.assign(getParams(), {
     job_name: jn,
+    folder: _activeJobFolder || null,
     custom_polygon: polyModified ? editedPoly : null
   });
   await runJob('/api/export', p, 'Saving…', onSaveDone);
@@ -1256,7 +1260,8 @@ function resetPoly() {
 function onSaveDone(payload) {
   console.log('[save done]', payload);
   document.getElementById('xb').disabled = false;
-  _activeJob = payload.job_name || null;
+  _activeJob = payload.job_name ? (payload.folder ? payload.folder + '/' + payload.job_name : payload.job_name) : null;
+  _activeJobFolder = payload.folder || null;
   _dirty = false;
   if (payload.stats) renderStatus(payload.stats);
   // Open the panel (first save reveals it) then refresh the job cards
@@ -1321,7 +1326,7 @@ function setJpOpen(open) {
 function toggleJp() { setJpOpen(!_jpOpen); }
 
 document.getElementById('jp-filter').addEventListener('input', function() {
-  renderJobsList(_jobsCache);
+  renderJobsList(_jobsGroups);
 });
 
 async function loadJobsList() {
@@ -1329,42 +1334,89 @@ async function loadJobsList() {
     var r = await fetch('/api/jobs');
     if (!r.ok) return;
     var data = await r.json();
-    _jobsCache = data.jobs || [];
+    _jobsGroups = data.groups || [];
+    // Flatten to cache for filter searching
+    _jobsCache = [];
+    _jobsGroups.forEach(function(g){ _jobsCache = _jobsCache.concat(g.jobs || []); });
     // Auto-open panel on first ever load if jobs exist
     if (_jobsCache.length > 0 && localStorage.getItem('jp-open') === null) {
       setJpOpen(true);
     }
-    renderJobsList(_jobsCache);
-    // Highlight active job card
-    if (_activeJob) {
-      document.querySelectorAll('.jcard').forEach(function(c){
-        c.classList.toggle('active', c.dataset.name === _activeJob);
-      });
-    }
+    renderJobsList(_jobsGroups);
   } catch(e) { console.error('[loadJobsList]', e); }
 }
 
-function renderJobsList(jobs) {
+function renderJobsList(groups) {
   var list = document.getElementById('jp-list');
   var filter = (document.getElementById('jp-filter').value || '').toLowerCase();
   list.innerHTML = '';
-  var filtered = jobs.filter(function(j){ return !filter || j.name.toLowerCase().includes(filter); });
-  if (!filtered.length) {
-    list.innerHTML = '<div style="padding:16px 8px;color:#475569;font-size:11px;text-align:center">'
-      + (filter ? 'No matches' : 'No saved jobs yet') + '</div>';
+
+  // If filtering, flatten and show matching cards without folder headers
+  if (filter) {
+    var matched = _jobsCache.filter(function(j){ return j.name.toLowerCase().includes(filter); });
+    if (!matched.length) {
+      list.innerHTML = '<div style="padding:16px 8px;color:#475569;font-size:11px;text-align:center">No matches</div>';
+      return;
+    }
+    matched.forEach(function(j){ list.appendChild(buildJobCard(j)); });
     return;
   }
-  filtered.forEach(function(j) { list.appendChild(buildJobCard(j)); });
+
+  if (!_jobsCache.length) {
+    list.innerHTML = '<div style="padding:16px 8px;color:#475569;font-size:11px;text-align:center">No saved jobs yet</div>';
+    return;
+  }
+
+  groups.forEach(function(g) { list.appendChild(buildFolderSection(g)); });
+}
+
+function buildFolderSection(group) {
+  var frag = document.createDocumentFragment();
+  var isRoot = group.name === null || group.name === undefined;
+  var storageKey = 'jf-open-' + (isRoot ? '__root__' : group.name);
+  var isOpen = localStorage.getItem(storageKey) !== 'false';
+
+  if (!isRoot) {
+    var hdr = document.createElement('div');
+    hdr.className = 'jfolder-hdr';
+    hdr.innerHTML = '<span class="jfolder-caret' + (isOpen ? ' open' : '') + '">&#9658;</span>'
+      + '<span class="jfolder-name" title="' + escHtml(group.name) + '">' + escHtml(group.name) + '</span>'
+      + '<span class="jfolder-count">' + group.jobs.length + '</span>'
+      + '<button class="jfolder-map-btn" title="Show jobs on map" onclick="showFolderOnMap(event,\'' + escHtml(group.name) + '\')">Map</button>';
+
+    var container = document.createElement('div');
+    container.className = 'jfolder';
+    var jobs = document.createElement('div');
+    jobs.className = 'jfolder-jobs' + (isOpen ? '' : ' hidden');
+
+    hdr.addEventListener('click', function(e) {
+      if (e.target.closest('.jfolder-map-btn')) return;
+      isOpen = !isOpen;
+      localStorage.setItem(storageKey, isOpen ? 'true' : 'false');
+      jobs.classList.toggle('hidden', !isOpen);
+      hdr.querySelector('.jfolder-caret').classList.toggle('open', isOpen);
+    });
+
+    (group.jobs || []).forEach(function(j){ jobs.appendChild(buildJobCard(j)); });
+    container.appendChild(hdr);
+    container.appendChild(jobs);
+    frag.appendChild(container);
+  } else {
+    (group.jobs || []).forEach(function(j){ frag.appendChild(buildJobCard(j)); });
+  }
+  return frag;
 }
 
 function buildJobCard(j) {
   var card = document.createElement('div');
-  card.className = 'jcard' + (j.name === _activeJob ? ' active' : '') + (j.status === 'failed' ? ' failed' : '');
-  card.dataset.name = j.name;
+  var isActive = j.path === _activeJob;
+  card.className = 'jcard' + (isActive ? ' active' : '') + (j.status === 'failed' ? ' failed' : '');
+  card.dataset.path = j.path;
   var date = j.saved_at || j.run_at || '';
   var dateStr = date ? new Date(date).toLocaleString('fi-FI',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
   var meta = [dateStr, j.area_ha != null ? j.area_ha.toFixed(1)+' ha' : '', j.drone||''].filter(Boolean).join(' · ');
   var badge = j.status === 'failed' ? '<span class="jbadge fail">!</span>'
+    : j.untouched              ? '<span class="jbadge untouched">new</span>'
     : j.flight_ready === true  ? '<span class="jbadge ok">&#10003;</span>'
     : j.needs_review === true  ? '<span class="jbadge wrn">!</span>'
     : '';
@@ -1376,12 +1428,12 @@ function buildJobCard(j) {
     +   '<div class="jcard-meta">' + escHtml(meta) + '</div>'
     + '</div>'
     + '<div class="jcard-right">' + badge
-    +   '<button class="jcard-menu-btn" title="Actions" onclick="toggleCardMenu(event,\'' + escHtml(j.name) + '\',\'' + j.status + '\')">&#8942;</button>'
+    +   '<button class="jcard-menu-btn" title="Actions" onclick="toggleCardMenu(event,' + JSON.stringify(j) + ')">&#8942;</button>'
     + '</div>';
   if (j.status !== 'failed') {
     card.addEventListener('click', function(e) {
       if (e.target.closest('.jcard-menu-btn') || e.target.closest('.jmenu')) return;
-      openJob(j.name);
+      openJob(j.path);
     });
   }
   return card;
@@ -1389,20 +1441,21 @@ function buildJobCard(j) {
 
 // ── Card menu ─────────────────────────────────────────────────────────────────
 var _openMenu = null;
-function toggleCardMenu(e, name, status) {
+function toggleCardMenu(e, j) {
   e.stopPropagation();
   closeCardMenu();
   var btn = e.currentTarget;
   var menu = document.createElement('div');
   menu.className = 'jmenu';
-  var items = status === 'failed'
-    ? [['Delete', function(){ confirmDeleteJob(name); }]]
+  var items = j.status === 'failed'
+    ? [['Delete', function(){ confirmDeleteJob(j); }]]
     : [
-        ['Open',            function(){ openJob(name); }],
-        ['Show folder',     function(){ revealJob(name); }],
-        ['Clone',           function(){ cloneJob(name); }],
-        ['Rename',          function(){ startRename(name); }],
-        ['Delete',          function(){ confirmDeleteJob(name); }],
+        ['Open',            function(){ openJob(j.path); }],
+        ['Show folder',     function(){ revealJob(j.path); }],
+        ['Move to Folder',  function(){ showMoveMenu(btn, j); }],
+        ['Clone',           function(){ cloneJob(j.path); }],
+        ['Rename',          function(){ startRename(j); }],
+        ['Delete',          function(){ confirmDeleteJob(j); }],
       ];
   items.forEach(function(it) {
     var mi = document.createElement('button');
@@ -1411,7 +1464,6 @@ function toggleCardMenu(e, name, status) {
     mi.addEventListener('click', function(ev) { ev.stopPropagation(); closeCardMenu(); it[1](); });
     menu.appendChild(mi);
   });
-  // Position relative to the card's right area
   btn.closest('.jcard-right').appendChild(menu);
   _openMenu = menu;
   setTimeout(function() { document.addEventListener('click', closeCardMenu, {once:true}); }, 0);
@@ -1420,17 +1472,103 @@ function closeCardMenu() {
   if (_openMenu) { _openMenu.remove(); _openMenu = null; }
 }
 
-// ── Open job ──────────────────────────────────────────────────────────────────
-function openJob(name) {
-  if (isRunning) return;
-  confirmIfDirty(function() { _doOpenJob(name); });
+// ── Move to folder ─────────────────────────────────────────────────────────────
+function showMoveMenu(btn, j) {
+  closeCardMenu();
+  // Collect all folder names from current groups
+  var folderNames = [];
+  document.querySelectorAll('.jfolder-name').forEach(function(el){
+    var n = el.textContent.trim();
+    if (n) folderNames.push(n);
+  });
+
+  var sub = document.createElement('div');
+  sub.className = 'jmenu jmenu-sub';
+
+  var makeItem = function(label, fn) {
+    var mi = document.createElement('button');
+    mi.className = 'jmenu-item';
+    mi.textContent = label;
+    mi.addEventListener('click', function(ev){ ev.stopPropagation(); sub.remove(); fn(); });
+    sub.appendChild(mi);
+  };
+
+  if (j.folder) {
+    makeItem('Move to root', function(){ doMoveJob(j, null); });
+  }
+  folderNames.forEach(function(name) {
+    if (name !== j.folder) {
+      makeItem('→ ' + name, function(){ doMoveJob(j, name); });
+    }
+  });
+  makeItem('+ New folder…', function(){ promptNewFolderForJob(j); });
+
+  btn.closest('.jcard-right').appendChild(sub);
+  setTimeout(function(){ document.addEventListener('click', function(){ sub.remove(); }, {once:true}); }, 0);
 }
-async function _doOpenJob(name) {
+
+async function doMoveJob(j, toFolder) {
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(name));
+    var r = await fetch(jobApiUrl(j.path, '/move'), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({folder: toFolder})
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(err.detail || 'Move failed'); return;
+    }
+    var data = await r.json();
+    if (_activeJob === j.path) {
+      _activeJob = data.path;
+      _activeJobFolder = data.folder || null;
+    }
+    await loadJobsList();
+  } catch(e) { showError('Move failed: ' + e.message); }
+}
+
+async function promptNewFolderForJob(j) {
+  var name = window.prompt('New folder name:');
+  if (!name || !name.trim()) return;
+  name = name.trim();
+  try {
+    var r = await fetch('/api/folders', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      // 409 = already exists, still try the move
+      if (r.status !== 409) { showError(err.detail || 'Could not create folder'); return; }
+    }
+    await doMoveJob(j, name);
+  } catch(e) { showError('Failed: ' + e.message); }
+}
+
+// ── Map view for folder (Phase 4 stub) ────────────────────────────────────────
+function showFolderOnMap(e, folderName) {
+  e.stopPropagation();
+  // Phase 4: open map management overlay for this folder
+  console.log('[map view] folder:', folderName, '(not yet implemented)');
+}
+
+// ── URL helper ────────────────────────────────────────────────────────────────
+function jobApiUrl(path, suffix) {
+  var encoded = path.split('/').map(encodeURIComponent).join('/');
+  return '/api/jobs/' + encoded + (suffix || '');
+}
+
+// ── Open job ──────────────────────────────────────────────────────────────────
+function openJob(path) {
+  if (isRunning) return;
+  confirmIfDirty(function() { _doOpenJob(path); });
+}
+async function _doOpenJob(path) {
+  try {
+    var r = await fetch(jobApiUrl(path));
     if (!r.ok) { showError('Could not load job: HTTP ' + r.status); return; }
     var data = await r.json();
     var p = data.params;
+    var name = path.includes('/') ? path.split('/').pop() : path;
     // Cancel any pending timer
     if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
     // Clear map first
@@ -1442,11 +1580,12 @@ async function _doOpenJob(name) {
     _restoreFormFromParams(p);
     document.getElementById('jname').value = name;
     updatePathHint();
-    _activeJob = name;
+    _activeJob = path;
+    _activeJobFolder = data.folder || null;
     _dirty = false;
     clearError();
     // Highlight card
-    document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.name === name); });
+    document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
     // Restore map from stored preview (instant)
     if (p && p.last_preview_geojson) {
       previewData = p.last_preview_geojson;
@@ -1524,9 +1663,9 @@ function _restoreFormFromParams(p) {
 }
 
 // ── Reveal in file manager ────────────────────────────────────────────────────
-async function revealJob(name) {
+async function revealJob(path) {
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(name) + '/reveal', {method:'POST'});
+    var r = await fetch(jobApiUrl(path, '/reveal'), {method:'POST'});
     if (!r.ok) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Could not open folder');
@@ -1535,61 +1674,61 @@ async function revealJob(name) {
 }
 
 // ── Clone ─────────────────────────────────────────────────────────────────────
-async function cloneJob(name) {
+async function cloneJob(path) {
   if (isRunning) return;
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(name) + '/clone', {method:'POST'});
+    var r = await fetch(jobApiUrl(path, '/clone'), {method:'POST'});
     if (!r.ok) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Clone failed'); return;
     }
     var data = await r.json();
     await loadJobsList();
-    openJob(data.name);
+    openJob(data.path);
   } catch(e) { showError('Clone failed: ' + e.message); }
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────
-function confirmDeleteJob(name) {
-  var card = document.querySelector('.jcard[data-name="' + CSS.escape(name) + '"]');
+function confirmDeleteJob(j) {
+  var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (!card) return;
   card.innerHTML =
-    '<div style="padding:6px 10px;font-size:11px;color:#fca5a5;flex:1">Delete <b>' + escHtml(name) + '</b>?</div>'
+    '<div style="padding:6px 10px;font-size:11px;color:#fca5a5;flex:1">Delete <b>' + escHtml(j.name) + '</b>?</div>'
     + '<div style="display:flex;gap:4px;padding:6px 8px;flex-shrink:0">'
-    + '<button class="jcard-del-yes" onclick="deleteJob(\'' + escHtml(name).replace(/'/g,"\\'") + '\')">Delete</button>'
+    + '<button class="jcard-del-yes" onclick="deleteJob(' + escHtml(JSON.stringify(j)) + ')">Delete</button>'
     + '<button class="jcard-del-no" onclick="loadJobsList()">Cancel</button>'
     + '</div>';
   card.style.alignItems = 'center';
 }
-async function deleteJob(name) {
+async function deleteJob(j) {
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(name), {method:'DELETE'});
+    var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
     if (!r.ok) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Delete failed'); return;
     }
-    if (_activeJob === name) { _activeJob = null; _dirty = false; _doNewJob(); }
+    if (_activeJob === j.path) { _activeJob = null; _activeJobFolder = null; _dirty = false; _doNewJob(); }
     await loadJobsList();
   } catch(e) { showError('Delete failed: ' + e.message); }
 }
 
 // ── Rename ────────────────────────────────────────────────────────────────────
-function startRename(name) {
-  var card = document.querySelector('.jcard[data-name="' + CSS.escape(name) + '"]');
+function startRename(j) {
+  var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (!card) return;
   var nameEl = card.querySelector('.jcard-name');
   if (!nameEl) return;
   var input = document.createElement('input');
   input.className = 'jcard-rename-input';
-  input.value = name;
+  input.value = j.name;
   nameEl.replaceWith(input);
   input.focus(); input.select();
   var committed = false;
   function commit() {
     if (committed) return; committed = true;
     var newName = input.value.trim();
-    if (!newName || newName === name) { loadJobsList(); return; }
-    doRename(name, newName);
+    if (!newName || newName === j.name) { loadJobsList(); return; }
+    doRename(j, newName);
   }
   input.addEventListener('blur', commit);
   input.addEventListener('keydown', function(e) {
@@ -1597,9 +1736,9 @@ function startRename(name) {
     if (e.key === 'Escape') { committed = true; loadJobsList(); }
   });
 }
-async function doRename(oldName, newName) {
+async function doRename(j, newName) {
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(oldName), {
+    var r = await fetch(jobApiUrl(j.path), {
       method:'PATCH', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({new_name: newName})
     });
@@ -1607,8 +1746,9 @@ async function doRename(oldName, newName) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Rename failed'); await loadJobsList(); return;
     }
-    if (_activeJob === oldName) {
-      _activeJob = newName;
+    var data = await r.json();
+    if (_activeJob === j.path) {
+      _activeJob = data.path;
       document.getElementById('jname').value = newName;
       updatePathHint();
     }
