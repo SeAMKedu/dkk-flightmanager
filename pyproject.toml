@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.29",
+    "jinja2>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,9 @@ jobgen = "jobgen.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+jobgen = ["templates/*.html", "templates/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
