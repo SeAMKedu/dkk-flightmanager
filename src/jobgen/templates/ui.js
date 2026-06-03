@@ -47,6 +47,8 @@ map.on(L.Draw.Event.EDITED, function(e) {
 });
 
 var lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+var _altCap = null;         // minimum AGL ceiling (metres) from current zone hits; null if none
+var _dataAttribution = '';  // attribution string currently added to the map control
 
 function layerGeom(layer) {
   var lls = layer.getLatLngs();
@@ -150,6 +152,7 @@ document.getElementById('hgt').addEventListener('input', function() {
     var h = parseFloat(this.value);
     if (!isNaN(h) && h > 0) document.getElementById('warn-radius').value = Math.round(3 * h);
   }
+  if (_altCap !== null && previewData) renderStatus(previewData.stats);
 });
 document.getElementById('dsel').addEventListener('change', updateGsd);
 document.getElementById('warn-radius').addEventListener('input', function() {
@@ -272,7 +275,8 @@ function _doNewJob() {
   _detachEditListeners();
   // Reset state
   previewData = null; editedPoly = null; polyModified = false; _lastPreviewedIds = '';
-  _activeJob = null; _dirty = false;
+  _activeJob = null; _dirty = false; _altCap = null;
+  if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
   clearPolyEdit();
   clearError();
   // Reset polygon controls to a clean neutral state
@@ -533,6 +537,22 @@ function onPreviewDone(payload) {
   document.getElementById('xb').disabled = false;
   document.getElementById('rstbtn').disabled = false;
   // bridge-btn stays disabled until the user enters edit mode
+  // Compute the lowest zone floor (lower_limit) across all zone hits.
+  // lower_limit is the binding altitude: fly below it to exit the zone without authorisation.
+  // Zones with lower_limit=0/null apply from the ground — no safe altitude below them.
+  _altCap = null;
+  (payload.zone_hits||[]).forEach(function(z) {
+    if (z.lower_ref === 'AGL' && z.lower_limit != null && z.lower_limit > 0) {
+      var m = z.lower_uom === 'FT' ? z.lower_limit * 0.3048 : parseFloat(z.lower_limit);
+      if (!isNaN(m) && (_altCap === null || m < _altCap)) _altCap = m;
+    }
+  });
+  if (_altCap !== null) {
+    var suggested = Math.floor(_altCap * 0.75);
+    document.getElementById('hgt').value = suggested;
+    updateGsd();
+    if (_radiusLinked) setRadiusLinked(true);  // re-sync radius to new height
+  }
   try {
     renderMap(payload);
     redrawRings();
@@ -567,6 +587,8 @@ function renderMap(data) {
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
   lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
   editLayers.clearLayers();
+  // Clear previous data-source attributions
+  if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
 
   // DSM grayscale overlay — rendered in dsmPane (z 350) below all vectors
   if (data.dsm_b64 && data.dsm_bounds) {
@@ -607,14 +629,65 @@ function renderMap(data) {
   }
 
   // UAS restriction zones (orange)
+  // Sort largest→smallest so outer zones render first (bottom); inner zones stay on top and receive clicks.
   var zf = (data.zone_hits||[]).filter(function(z){return z.geojson;}).map(function(z){
-    return {type:'Feature', geometry:z.geojson, properties:{name:z.name, r:z.restriction}};
+    return {type:'Feature', geometry:z.geojson, properties:{
+      name:z.name, r:z.restriction,
+      upper_limit:z.upper_limit, upper_uom:z.upper_uom, upper_ref:z.upper_ref,
+      lower_limit:z.lower_limit, lower_uom:z.lower_uom, lower_ref:z.lower_ref,
+      contained_by:z.contained_by||[],
+      context_only:!!z.context_only
+    }};
+  });
+  zf.sort(function(a, b) {
+    function bboxArea(f) {
+      var c = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0]
+            : f.geometry.coordinates[0][0];
+      var lons = c.map(function(p){return p[0];}), lats = c.map(function(p){return p[1];});
+      return (Math.max.apply(null,lons)-Math.min.apply(null,lons)) *
+             (Math.max.apply(null,lats)-Math.min.apply(null,lats));
+    }
+    return bboxArea(b) - bboxArea(a);
   });
   if (zf.length) {
     lrs.zones = L.geoJSON({type:'FeatureCollection', features:zf}, {
-      style:{color:'#ea580c',weight:2,fillColor:'#f97316',fillOpacity:.14},
+      style: function(f) {
+        var ctx = f.properties.context_only;
+        return {color:'#ea580c', weight:ctx?1.5:2, dashArray:ctx?'5,4':null,
+                fillColor:'#f97316', fillOpacity:ctx?.08:.14};
+      },
       onEachFeature:function(f,l){
-        l.bindPopup('<b>'+f.properties.name+'</b><br>'+f.properties.r);
+        l.on('click', function(e) {
+          L.DomEvent.stopPropagation(e);
+          var pt = map.latLngToLayerPoint(e.latlng);
+          var hits = [];
+          lrs.zones.eachLayer(function(zl) {
+            if (zl._containsPoint && zl._containsPoint(pt)) {
+              hits.push(zl.feature.properties);
+            }
+          });
+          if (hits.length) {
+            var content = hits.map(function(p){
+              var altLine = '';
+              if (p.lower_ref === 'AGL' && p.lower_limit != null && p.lower_limit > 0) {
+                var lo = p.lower_uom === 'FT' ? Math.round(p.lower_limit * 0.3048) : p.lower_limit;
+                var hi = (p.upper_ref === 'AGL' && p.upper_limit != null)
+                  ? (p.upper_uom === 'FT' ? Math.round(p.upper_limit * 0.3048) : p.upper_limit)
+                  : null;
+                altLine = '<br><small>Altitude: '+lo+(hi?' – '+hi:'+')+' m AGL — fly below '+lo+' m to exit</small>';
+              } else if (p.upper_ref === 'AGL' && p.upper_limit != null) {
+                var hi = p.upper_uom === 'FT' ? Math.round(p.upper_limit * 0.3048) : p.upper_limit;
+                altLine = '<br><small>Ground to '+hi+' m AGL</small>';
+              }
+              var nestLine = p.contained_by && p.contained_by.length
+                ? '<br><small style="color:#94a3b8">Within: '+p.contained_by.map(function(c){return c.name;}).join(', ')+'</small>'
+                : '';
+              var ctxNote = p.context_only ? ' <small style="color:#94a3b8">(nearby)</small>' : '';
+              return '<b>'+p.name+'</b>'+ctxNote+'<br>'+p.r+altLine+nestLine;
+            }).join('<hr style="margin:4px 0">');
+            L.popup().setLatLng(e.latlng).setContent(content).openOn(map);
+          }
+        });
       }
     }).addTo(map);
   }
@@ -647,6 +720,15 @@ function renderMap(data) {
 
   // Vertex dots (on top of survey polygon)
   if (data.survey) lrs.vertices = _buildVertexLayer(data.survey).addTo(map);
+
+  // Data-source attribution — appears in the map control only when data is loaded.
+  var attrs = [];
+  var s = data.stats || {};
+  if (s.has_parcels) attrs.push('Parcels &copy; <a href="https://ruokavirasto.fi" target="_blank">Ruokavirasto</a>');
+  if (s.has_properties) attrs.push('Properties &copy; <a href="https://maanmittauslaitos.fi" target="_blank">MML</a>');
+  if (data.buildings && data.buildings.length) attrs.push('Topographic DB &amp; DEM &copy; <a href="https://maanmittauslaitos.fi" target="_blank">MML</a>');
+  if (data.zone_hits) attrs.push('UAS zones &copy; <a href="https://traficom.fi" target="_blank">Traficom</a>');
+  if (attrs.length) { _dataAttribution = attrs.join(' | '); map.attributionControl.addAttribution(_dataAttribution); }
 }
 
 function centroid(geom) {
@@ -679,6 +761,11 @@ function renderStatus(s) {
   var rh = s ? (s.review_reasons||[]).map(function(r){
     return '<div class="ritem">&#9888; '+r+'</div>';
   }).join('') : '';
+  // Client-side altitude cap warning: shown when user's current height exceeds the zone ceiling.
+  var curH = parseFloat(document.getElementById('hgt').value);
+  if (_altCap !== null && !isNaN(curH) && curH >= _altCap) {
+    rh += '<div class="ritem" style="color:#f97316">&#9888; Height '+curH.toFixed(0)+' m is at or above zone floor '+Math.round(_altCap)+' m AGL — fly below '+Math.round(_altCap)+' m or obtain authorisation</div>';
+  }
   document.getElementById('spcontent').innerHTML =
     sh
    +'<div class="sgrid">'

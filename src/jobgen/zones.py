@@ -38,11 +38,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from pyproj import Transformer
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import transform as shp_transform, unary_union
 
 from jobgen.config import ZonesConfig
 from jobgen.crs import require_4326
+
+_to_3067 = Transformer.from_crs("EPSG:4326", "EPSG:3067", always_xy=True)
+_to_4326 = Transformer.from_crs("EPSG:3067", "EPSG:4326", always_xy=True)
 
 log = logging.getLogger(__name__)
 
@@ -70,25 +75,56 @@ class AltitudeLimits:
             return self.upper_limit * 0.3048
         return float(self.upper_limit)
 
+    @property
+    def lower_limit_m_agl(self) -> float | None:
+        """Lower limit (zone floor) converted to metres AGL, or None if AMSL or not set."""
+        if self.lower_limit is None or self.lower_ref != "AGL":
+            return None
+        if self.lower_uom == "FT":
+            return self.lower_limit * 0.3048
+        return float(self.lower_limit)
+
     def ceiling_note(self, flight_height_m: float) -> str:
-        """Human-readable note comparing planned height against zone ceiling."""
-        m_agl = self.upper_limit_m_agl
-        if m_agl is None:
-            if self.upper_ref == "AMSL":
+        """Human-readable note comparing planned height against zone altitude limits.
+
+        Finnish UAS zones (vyöhykkeet A–D) use lower_limit as the *floor* of the
+        restriction.  Flying below that floor exits the zone entirely — so
+        lower_limit_m_agl is the binding safe-ceiling for UAS operators, not the
+        upper_limit.  upper_limit is merely the top of the restricted volume.
+        """
+        lo_m = self.lower_limit_m_agl
+        hi_m = self.upper_limit_m_agl
+
+        if lo_m is not None and lo_m > 0:
+            # Zone only applies above its floor — flying below lo_m avoids it.
+            if flight_height_m < lo_m:
                 return (
-                    f"Zone ceiling {self.upper_limit} {self.upper_uom} AMSL "
-                    f"(cannot compare with {flight_height_m:.0f} m AGL without terrain elevation)"
+                    f"Planned height {flight_height_m:.0f} m AGL is below zone floor "
+                    f"{lo_m:.0f} m AGL — no authorisation required at this height"
                 )
-            return f"No upper limit — restriction applies at all altitudes"
-        if flight_height_m > m_agl:
+            hi_str = f"–{hi_m:.0f} m" if hi_m is not None else "+"
             return (
-                f"Planned height {flight_height_m:.0f} m AGL is ABOVE zone ceiling "
-                f"{m_agl:.0f} m AGL — flight may be above this restriction"
+                f"Planned height {flight_height_m:.0f} m AGL is inside zone "
+                f"({lo_m:.0f}{hi_str} m AGL) — fly below {lo_m:.0f} m or obtain authorisation"
             )
-        return (
-            f"Planned height {flight_height_m:.0f} m AGL is within zone "
-            f"(ceiling {m_agl:.0f} m AGL)"
-        )
+
+        # Zone applies from ground up (lo = 0 or unknown).
+        if hi_m is not None:
+            if flight_height_m > hi_m:
+                return (
+                    f"Planned height {flight_height_m:.0f} m AGL is above zone ceiling "
+                    f"{hi_m:.0f} m AGL — flight is above this restriction"
+                )
+            return (
+                f"Zone applies from ground to {hi_m:.0f} m AGL — "
+                f"planned height {flight_height_m:.0f} m is inside the zone"
+            )
+        if self.upper_ref == "AMSL":
+            return (
+                f"Zone ceiling {self.upper_limit} {self.upper_uom} AMSL "
+                f"(cannot compare with {flight_height_m:.0f} m AGL without terrain elevation)"
+            )
+        return "Zone applies from ground with no upper limit — restriction at all altitudes"
 
 
 @dataclass
@@ -99,15 +135,19 @@ class ZoneHit:
     reason: list[str]
     altitude: AltitudeLimits
     properties: dict
+    geom: BaseGeometry | None = None  # zone geometry in EPSG:4326, for nesting detection
 
 
 @dataclass
 class ZoneCheckResult:
     checked: bool
     intersecting_zones: list[ZoneHit] = field(default_factory=list)
+    related_zones: list[ZoneHit] = field(default_factory=list)  # inner/nested zones, shown for context
     needs_review: bool = False
     flight_ready: bool = True
     reasons: list[str] = field(default_factory=list)
+    fetched_date: str = ""   # ISO date when zone data was last fetched from Traficom
+    attribution: str = ""    # CC-BY attribution string for manifest
 
 
 def check_zones(
@@ -125,22 +165,49 @@ def check_zones(
     *survey_4326* must be in EPSG:4326.
     *flight_height_m* is used to compare against zone altitude ceilings and
     annotate each hit with a human-readable altitude note.
+    The survey is expanded by *config.check_buffer_m* before the intersection
+    so that nearby zones are also reported.
     """
     require_4326(survey_4326)
 
-    features = _get_features(config, cache_dir, session)
+    features, fetched_date = _get_features(config, cache_dir, session)
+    attribution = (
+        f"Contains data from Traficom, UAS Geographical Zones, retrieved {fetched_date}."
+        if fetched_date else
+        "Contains data from Traficom, UAS Geographical Zones."
+    )
     if features is None:
         reason = (
             "Zone data could not be loaded (no network and no cache). "
             "Zone intersection check was skipped — job flagged for review."
         )
         log.warning(reason)
-        return ZoneCheckResult(checked=False, needs_review=True, reasons=[reason])
+        return ZoneCheckResult(
+            checked=False, needs_review=True, reasons=[reason],
+            fetched_date=fetched_date, attribution=attribution,
+        )
 
-    hits = _intersect(survey_4326, features)
+    # Expand survey polygon for the search so nearby zones are also reported.
+    if config.check_buffer_m > 0:
+        survey_search = shp_transform(_to_4326.transform,
+                                      shp_transform(_to_3067.transform, survey_4326)
+                                      .buffer(config.check_buffer_m))
+        log.debug("Zone search buffered by %.0f m", config.check_buffer_m)
+    else:
+        survey_search = survey_4326
+
+    hits = _intersect(survey_search, features)
     if not hits:
         log.info("Zone check passed — no intersecting UAS restrictions found")
-        return ZoneCheckResult(checked=True)
+        return ZoneCheckResult(checked=True, fetched_date=fetched_date, attribution=attribution)
+
+    # Second pass: find zones whose centroid lies inside any hit zone.
+    # These are the inner concentric zones of an airfield (e.g. vyöhyke C/D
+    # inside a larger outer zone) that may not intersect the survey buffer but
+    # are contextually important for understanding altitude limits.
+    related = _find_related(hits, features)
+    if related:
+        log.info("Found %d related inner zone(s) for context", len(related))
 
     reasons = []
     for h in hits:
@@ -155,9 +222,12 @@ def check_zones(
     return ZoneCheckResult(
         checked=True,
         intersecting_zones=hits,
+        related_zones=related,
         needs_review=True,
         flight_ready=False,
         reasons=reasons,
+        fetched_date=fetched_date,
+        attribution=attribution,
     )
 
 
@@ -166,26 +236,35 @@ def check_zones(
 # ---------------------------------------------------------------------------
 
 
+def _file_date(path: Path) -> str:
+    """ISO date (YYYY-MM-DD) of a file's last-modified time."""
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
 def _get_features(
     config: ZonesConfig,
     cache_dir: str | Path,
     session: requests.Session | None,
-) -> list[dict] | None:
-    """Load zone features from override file, fresh API, or cache."""
+) -> tuple[list[dict] | None, str]:
+    """Load zone features from override file, fresh API, or cache.
+
+    Returns ``(features, fetched_date)`` where *fetched_date* is an ISO date
+    string reflecting when the data was last retrieved from Traficom.
+    """
     # Override file takes precedence (offline / custom zone data)
     if config.zones_file:
         p = Path(config.zones_file)
         if not p.exists():
             log.warning("Zones override file not found: %s", p)
-            return None
+            return None, ""
         _warn_if_stale(p, config.max_age_days)
-        return _parse_features(json.loads(p.read_text(encoding="utf-8")))
+        return _parse_features(json.loads(p.read_text(encoding="utf-8"))), _file_date(p)
 
     # Otherwise use the API with a local cache
     cache_path = Path(cache_dir) / "zones" / "uas_zones.json"
     if _cache_fresh(cache_path, config.max_age_days):
         log.debug("Zone cache hit: %s", cache_path)
-        return _parse_features(json.loads(cache_path.read_text(encoding="utf-8")))
+        return _parse_features(json.loads(cache_path.read_text(encoding="utf-8"))), _file_date(cache_path)
 
     return _fetch_and_cache(cache_path, session)
 
@@ -210,8 +289,9 @@ def _warn_if_stale(path: Path, max_age_days: int) -> None:
 def _fetch_and_cache(
     cache_path: Path,
     session: requests.Session | None,
-) -> list[dict] | None:
+) -> tuple[list[dict] | None, str]:
     """Fetch zones from the Traficom API and save to cache_path."""
+    today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
     sess = session or requests.Session()
     try:
         log.info("Fetching UAS zones from Traficom API")
@@ -223,8 +303,8 @@ def _fetch_and_cache(
         # Fall back to stale cache if present
         if cache_path.exists():
             log.warning("Using stale zone cache as fallback")
-            return _parse_features(json.loads(cache_path.read_text(encoding="utf-8")))
-        return None
+            return _parse_features(json.loads(cache_path.read_text(encoding="utf-8"))), _file_date(cache_path)
+        return None, ""
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -232,7 +312,7 @@ def _fetch_and_cache(
         "UAS zones cached: %d feature(s) → %s",
         len(data.get("features", [])), cache_path,
     )
-    return _parse_features(data)
+    return _parse_features(data), today
 
 
 def _parse_features(data: dict) -> list[dict]:
@@ -280,6 +360,58 @@ def _intersect(survey: BaseGeometry, features: list[dict]) -> list[ZoneHit]:
                 reason=feat.get("reason", []),
                 altitude=altitude,
                 properties=feat,
+                geom=zone_geom,
             ))
 
     return hits
+
+
+def _find_related(hits: list[ZoneHit], all_features: list[dict]) -> list[ZoneHit]:
+    """Return flagged zones whose centroid lies inside any directly-hit zone.
+
+    These are inner concentric zones (e.g. closer-in vyöhykkeet of an airfield)
+    that don't intersect the survey buffer but are relevant context for
+    understanding the altitude restrictions in the area.
+    """
+    hit_ids = {h.identifier for h in hits}
+    hit_geoms = [h.geom for h in hits if h.geom is not None]
+    if not hit_geoms:
+        return []
+    hit_union = unary_union(hit_geoms) if len(hit_geoms) > 1 else hit_geoms[0]
+
+    related: list[ZoneHit] = []
+    for feat in all_features:
+        ident = feat.get("identifier", "")
+        if ident in hit_ids:
+            continue
+        if feat.get("restriction", "") not in _FLAGGED_RESTRICTIONS:
+            continue
+        geom_entries = feat.get("geometry", [])
+        if not geom_entries:
+            continue
+        g = geom_entries[0]
+        try:
+            zone_geom = shape(g.get("horizontalProjection", {}))
+        except Exception:
+            continue
+        if not hit_union.contains(zone_geom.centroid):
+            continue
+        altitude = AltitudeLimits(
+            upper_limit=g.get("upperLimit"),
+            upper_uom=g.get("uomDimensions"),
+            upper_ref=g.get("upperVerticalReference"),
+            lower_limit=g.get("lowerLimit"),
+            lower_uom=g.get("uomDimensions"),
+            lower_ref=g.get("lowerVerticalReference"),
+        )
+        related.append(ZoneHit(
+            identifier=ident,
+            name=feat.get("name", "unknown"),
+            restriction=feat.get("restriction", ""),
+            reason=feat.get("reason", []),
+            altitude=altitude,
+            properties=feat,
+            geom=zone_geom,
+        ))
+
+    return related

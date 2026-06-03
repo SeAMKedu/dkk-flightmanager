@@ -268,10 +268,12 @@ class ZonesConfig(BaseModel):
     # If set, the API is not called and this file is used instead.
     zones_file: str = ""
     # Re-fetch the dump if the cached copy is older than this many days.
-    # The source is a periodic static export of permanent zones (not live),
-    # so 7–30 days is appropriate.  Temporary restrictions are not in this
-    # dataset — those require a manual NOTAM check on the day.
-    max_age_days: int = Field(default=14, gt=0)
+    # 1 day: the dump is regenerated frequently; daily refresh picks up new zones.
+    # Temporary restrictions (NOTAMs) are NOT in this dataset regardless of TTL.
+    max_age_days: int = Field(default=1, gt=0)
+    # Expand the survey polygon by this many metres before the zone intersection
+    # check so that zones nearby — but not overlapping — are also reported.
+    check_buffer_m: float = Field(default=500.0, ge=0)
 
 
 class ParcelsConfig(BaseModel):

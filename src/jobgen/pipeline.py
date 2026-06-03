@@ -66,6 +66,10 @@ _CC_BY = {
         "Contains data from the National Land Survey of Finland, "
         "Cadastral Index Map, retrieved {date}."
     ),
+    "zones": (
+        "Contains data from Traficom, "
+        "UAS Geographical Zones, retrieved {date}."
+    ),
 }
 
 
@@ -445,6 +449,7 @@ def run_job(
         "zones": {
             "checked":           zone_result.checked,
             "flight_ready":      zone_result.flight_ready,
+            "attribution":       zone_result.attribution,
             "intersecting_zones": [
                 {
                     "identifier":  h.identifier,
@@ -481,6 +486,7 @@ def run_job(
             manifest=manifest,
             parcels_4326=parcels_4326,
             zone_hits=zone_result.intersecting_zones,
+            zone_result=zone_result,
             dsm_path=dsm_path,
             preview_radius_m=preview_radius_m,
             keepout_ignored=not config.home_safety.offset_enabled,
@@ -729,15 +735,35 @@ def run_preview(
             "buffer_geojson": dict(mapping(buf_geom_4326)) if buf_geom_4326 else None,
         })
 
-    # Zone geometries for map display
+    # Zone geometries for map display; include altitude limits and nesting.
+    # Direct hits + related inner zones are all included; related ones are flagged context_only.
+    all_zone_hits = [
+        (h, False) for h in zone_result.intersecting_zones
+    ] + [
+        (h, True)  for h in zone_result.related_zones
+    ]
+    all_hit_objs = [h for h, _ in all_zone_hits]
     zone_hits_data = []
-    for h in zone_result.intersecting_zones:
+    for i, (h, context_only) in enumerate(all_zone_hits):
         geojson = _zone_geojson(h)
+        contained_by = []
+        if h.geom is not None:
+            for j, (other, _) in enumerate(all_zone_hits):
+                if i != j and other.geom is not None and other.geom.contains(h.geom):
+                    contained_by.append({"id": other.identifier, "name": other.name})
         zone_hits_data.append({
-            "geojson": geojson,
-            "identifier": h.identifier,
-            "name": h.name,
-            "restriction": h.restriction,
+            "geojson":      geojson,
+            "identifier":   h.identifier,
+            "name":         h.name,
+            "restriction":  h.restriction,
+            "upper_limit":  h.altitude.upper_limit,
+            "upper_uom":    h.altitude.upper_uom,
+            "upper_ref":    h.altitude.upper_ref,
+            "lower_limit":  h.altitude.lower_limit,
+            "lower_uom":    h.altitude.lower_uom,
+            "lower_ref":    h.altitude.lower_ref,
+            "contained_by": contained_by,
+            "context_only": context_only,
         })
 
     all_review_reasons = list(survey_geom.review_reasons) + list(zone_result.reasons)
@@ -769,7 +795,10 @@ def run_preview(
             "zones_checked": zone_result.checked,
             "zones_clear": not zone_result.intersecting_zones,
             "zone_count": len(zone_result.intersecting_zones),
+            "zones_attribution": zone_result.attribution,
             "home_buffer_m": buf,
+            "has_parcels": any(hasattr(g, "parcel_id") for g in input_geoms),
+            "has_properties": any(hasattr(g, "property_id") for g in input_geoms),
         },
     }
     return result, new_cache

@@ -1,7 +1,7 @@
 // ── Map setup ─────────────────────────────────────────────────────────────────
 var map = L.map('map').setView([CENTER_LAT, CENTER_LON], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors | Parcels &copy; <a href="https://ruokavirasto.fi" target="_blank">Ruokavirasto</a> | Topographic DB &amp; DEM &copy; <a href="https://maanmittauslaitos.fi" target="_blank">MML</a> | UAS zones &copy; <a href="https://traficom.fi" target="_blank">Traficom</a>',
   maxZoom: 19
 }).addTo(map);
 
@@ -99,10 +99,57 @@ pins.forEach(function(p) {
 });
 
 // ── UAS restriction zones ─────────────────────────────────────────────────────
-zones.forEach(function(z) {
-  L.geoJSON(JSON.parse(z.geojson), {
-    style: { color: '#f97316', weight: 2, fillColor: '#fed7aa', fillOpacity: 0.4 }
-  }).bindPopup('<b>' + z.name + '</b><br>' + z.type).addTo(map);
+var zonesGroup = L.layerGroup().addTo(map);
+// Sort largest→smallest so inner (nested) zones render on top and are clickable.
+var zonesSorted = zones.slice().sort(function(a, b) {
+  function bbox(z) {
+    try {
+      var g = JSON.parse(z.geojson);
+      var c = g.type === 'Polygon' ? g.coordinates[0] : g.coordinates[0][0];
+      var lons = c.map(function(p){return p[0];}), lats = c.map(function(p){return p[1];});
+      return (Math.max.apply(null,lons)-Math.min.apply(null,lons)) *
+             (Math.max.apply(null,lats)-Math.min.apply(null,lats));
+    } catch(e) { return 0; }
+  }
+  return bbox(b) - bbox(a);
+});
+zonesSorted.forEach(function(z) {
+  var ctx = !!z.context_only;
+  var layer = L.geoJSON(JSON.parse(z.geojson), {
+    style: { color: '#ea580c', weight: ctx ? 1.5 : 2, dashArray: ctx ? '5,4' : null,
+             fillColor: '#f97316', fillOpacity: ctx ? 0.08 : 0.14 }
+  });
+  layer.on('click', function(e) {
+    L.DomEvent.stopPropagation(e);
+    var pt = map.latLngToLayerPoint(e.latlng);
+    var hits = [];
+    zonesGroup.eachLayer(function(gl) {
+      gl.eachLayer(function(sub) {
+        if (sub._containsPoint && sub._containsPoint(pt)) hits.push(gl._zdata);
+      });
+    });
+    if (!hits.length) hits = [z];
+    var content = hits.map(function(h) {
+      var altLine = '';
+      if (h.lower_ref === 'AGL' && h.lower_limit != null && h.lower_limit > 0) {
+        var lo = h.lower_uom === 'FT' ? Math.round(h.lower_limit * 0.3048) : h.lower_limit;
+        var hi = (h.upper_ref === 'AGL' && h.upper_limit != null)
+          ? (h.upper_uom === 'FT' ? Math.round(h.upper_limit * 0.3048) : h.upper_limit) : null;
+        altLine = '<br><small>Altitude: ' + lo + (hi ? ' – ' + hi : '+') + ' m AGL — fly below ' + lo + ' m to exit</small>';
+      } else if (h.upper_ref === 'AGL' && h.upper_limit != null) {
+        var hi = h.upper_uom === 'FT' ? Math.round(h.upper_limit * 0.3048) : h.upper_limit;
+        altLine = '<br><small>Ground to ' + hi + ' m AGL</small>';
+      }
+      var nestLine = h.contained_by && h.contained_by.length
+        ? '<br><small style="color:#6b7280">Within: ' + h.contained_by.map(function(c){return c.name;}).join(', ') + '</small>'
+        : '';
+      var ctxNote = h.context_only ? ' <small style="color:#6b7280">(nearby)</small>' : '';
+      return '<b>' + h.name + '</b>' + ctxNote + '<br>' + h.restriction + altLine + nestLine;
+    }).join('<hr style="margin:4px 0">');
+    L.popup().setLatLng(e.latlng).setContent(content).openOn(map);
+  });
+  layer._zdata = z;
+  layer.addTo(zonesGroup);
 });
 
 // ── Eye-button toggles ────────────────────────────────────────────────────────
@@ -129,3 +176,8 @@ eyeTog('eye-vertices',
 eyeTog('eye-pins',
   function() { pinsGroup.addTo(map); },
   function() { map.removeLayer(pinsGroup); });
+if (document.getElementById('eye-zones')) {
+  eyeTog('eye-zones',
+    function() { zonesGroup.addTo(map); },
+    function() { map.removeLayer(zonesGroup); });
+}

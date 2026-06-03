@@ -190,6 +190,7 @@ def build_map_preview(
     manifest: dict,
     parcels_4326: list[BaseGeometry] | None = None,
     zone_hits: list[ZoneHit] | None = None,
+    zone_result=None,  # ZoneCheckResult — provides related_zones; avoids circular import
     dsm_path: Path | None = None,
     preview_radius_m: float = 300.0,
     keepout_ignored: bool = False,
@@ -233,21 +234,32 @@ def build_map_preview(
 
     pins_json = json.dumps(pins)
 
-    # Zone hit polygons
+    # Zone hit polygons — direct hits + related inner zones; detect nesting for popup
+    direct_hits = list(zone_hits or [])
+    related_hits = list(zone_result.related_zones if zone_result else [])
+    all_hits = [(h, False) for h in direct_hits] + [(h, True) for h in related_hits]
     zone_layers = []
-    for hit in (zone_hits or []):
-        geom = hit.properties.get("geometry")
-        if geom:
-            try:
-                from shapely.geometry import shape
-                g = shape(geom["geometry"] if "geometry" in geom else geom)
-                zone_layers.append({
-                    "geojson": json.dumps(mapping(g)),
-                    "name":    hit.name,
-                    "type":    hit.restriction,
-                })
-            except Exception:
-                pass
+    for i, (hit, context_only) in enumerate(all_hits):
+        if hit.geom is None:
+            continue
+        contained_by = [
+            {"id": other.identifier, "name": other.name}
+            for j, (other, _) in enumerate(all_hits)
+            if i != j and other.geom is not None and other.geom.contains(hit.geom)
+        ]
+        zone_layers.append({
+            "geojson":      json.dumps(mapping(hit.geom)),
+            "name":         hit.name,
+            "restriction":  hit.restriction,
+            "upper_limit":  hit.altitude.upper_limit,
+            "upper_uom":    hit.altitude.upper_uom,
+            "upper_ref":    hit.altitude.upper_ref,
+            "lower_limit":  hit.altitude.lower_limit,
+            "lower_uom":    hit.altitude.lower_uom,
+            "lower_ref":    hit.altitude.lower_ref,
+            "contained_by": contained_by,
+            "context_only": context_only,
+        })
 
     zone_json = json.dumps(zone_layers)
 

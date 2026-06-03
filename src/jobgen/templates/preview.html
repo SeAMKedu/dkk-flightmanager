@@ -67,6 +67,13 @@
       </div>
       <span>Buildings</span>
     </div>
+    {% if zone_json != '[]' %}
+    <div class="leg-row">
+      {{ eye_btn("eye-zones", "Toggle UAS restriction zones") }}
+      <div class="leg-icon"><div class="swatch" style="background:#fed7aa;opacity:.8;border:2px solid #ea580c;"></div></div>
+      <span>UAS zones</span>
+    </div>
+    {% endif %}
   </div>
   {% if review_reasons %}
   <div class="reasons"><b>Review reasons:</b><ul>
