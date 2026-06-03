@@ -812,13 +812,6 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .sval{font-size:13px;font-weight:700;color:#1e293b;line-height:1.3}
 .rlist{margin-top:4px}
 .ritem{font-size:10px;color:#dc2626;padding:1px 0}
-/* export overlay */
-#xov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;align-items:center;justify-content:center}
-#xcard{background:#fff;border-radius:8px;padding:20px 22px;max-width:480px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.18)}
-#xcard h2{font-size:14px;font-weight:700;margin-bottom:10px;color:#166534}
-.frow{font-size:11px;color:#334155;padding:3px 0;font-family:monospace;word-break:break-all}
-.frow b{color:#64748b;font-family:sans-serif;font-size:10px;display:block;font-weight:600}
-#xcls{margin-top:14px;background:#1e293b;color:#fff}
 /* toast */
 #toast{position:fixed;bottom:14px;right:14px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 13px;box-shadow:0 4px 16px rgba(0,0,0,.12);width:220px;z-index:9999;display:none}
 #ttitle{font-size:11px;font-weight:700;color:#1e293b;margin-bottom:5px}
@@ -1014,13 +1007,6 @@ button:disabled{opacity:.4;cursor:not-allowed}
   </div>
 </div>
 
-<div id="xov">
-  <div id="xcard">
-    <h2>&#10003; Saved</h2>
-    <div id="xfiles"></div>
-    <button id="xcls" onclick="closeExport()">Close</button>
-  </div>
-</div>
 
 <div id="confirm-modal">
   <div id="confirm-card">
@@ -1403,18 +1389,21 @@ function redrawRings() {
   window._legendRows = rows;
 })();
 
-function resetLegend() {
+// savedVis: optional {lrKey: bool} map of user-chosen visibility to restore.
+// When omitted (e.g. first render, open-job), defaults are applied (startOff for DSM).
+function resetLegend(savedVis) {
   window._legendRows.forEach(function(r) {
     var btn = document.getElementById(r.btnId);
     var hasLayer = !!lrs[r.lrKey];
     if (r.rowId) {
       document.getElementById(r.rowId).style.display = hasLayer ? '' : 'none';
     }
-    if (r.startOff) {
-      btn.classList.add('off');   // DSM starts toggled off
-    } else {
-      btn.classList.remove('off');
-    }
+    if (!hasLayer) { btn.classList.add('off'); return; }
+    // Restore user's toggle choice if available; otherwise apply the startup default
+    var visible = (savedVis && r.lrKey in savedVis) ? savedVis[r.lrKey] : !r.startOff;
+    btn.classList.toggle('off', !visible);
+    // renderMap already added all new layers to the map; remove the ones that should be hidden
+    if (!visible) map.removeLayer(lrs[r.lrKey]);
   });
   document.getElementById('legend').classList.remove('inactive');
 }
@@ -1539,7 +1528,8 @@ function showToast(title, pct, msg) {
 }
 function finishRun() {
   isRunning = false;
-  document.getElementById('xb').disabled = !previewData;
+  // xb state is owned by each completion callback (onPreviewDone/onSaveDone/onErr)
+  // — do NOT touch it here to avoid a stale-previewData flicker.
   document.getElementById('toast').style.display = 'none';
   showPg(false, 0, '');
   if (_pendingPreview) { _pendingPreview = false; startPreview(); }
@@ -1547,6 +1537,8 @@ function finishRun() {
 function onErr(msg) {
   console.error('[err]', msg);
   finishRun();
+  // Restore xb to whatever is correct given the current state
+  document.getElementById('xb').disabled = !previewData;
   document.getElementById('toast').style.display = 'none';
   showError(msg);
 }
@@ -1554,6 +1546,14 @@ function onErr(msg) {
 // ── Map ───────────────────────────────────────────────────────────────────────
 function onPreviewDone(payload) {
   console.log('[preview done]', payload.stats);
+  // Capture user's eye-toggle choices before renderMap replaces the layer objects
+  var savedVis = null;
+  if (!document.getElementById('legend').classList.contains('inactive')) {
+    savedVis = {};
+    window._legendRows.forEach(function(r) {
+      savedVis[r.lrKey] = !document.getElementById(r.btnId).classList.contains('off');
+    });
+  }
   previewData = payload;
   _lastPreviewedIds = idsKey();
   clearAreaFocus();
@@ -1563,7 +1563,7 @@ function onPreviewDone(payload) {
   try {
     renderMap(payload);
     redrawRings();
-    resetLegend();
+    resetLegend(savedVis);  // null on first render → applies startOff defaults
     renderStatus(payload.stats);
   } catch(e) {
     console.error('[onPreviewDone]', e);
@@ -2102,22 +2102,13 @@ function resetPoly() {
 // ── Save result ───────────────────────────────────────────────────────────────
 function onSaveDone(payload) {
   console.log('[save done]', payload);
+  document.getElementById('xb').disabled = false;
   _activeJob = payload.job_name || null;
   _dirty = false;
-  var files = payload.output_files || {};
-  var labels = {kmz:'KMZ route',homes_kml:'Homes KML',dsm_tif:'DSM GeoTIFF',
-                preview_html:'Map preview',manifest:'Manifest JSON'};
-  var html = Object.entries(files).map(function(e){
-    return '<div class="frow"><b>'+(labels[e[0]]||e[0])+'</b>'+e[1]+'</div>';
-  }).join('');
-  document.getElementById('xfiles').innerHTML = html ||
-    '<div style="color:#64748b;font-size:12px">No output files found.</div>';
-  document.getElementById('xov').style.display = 'flex';
   if (payload.stats) renderStatus(payload.stats);
+  // Open the panel (first save reveals it) then refresh the job cards
+  setJpOpen(true);
   loadJobsList();
-}
-function closeExport() {
-  document.getElementById('xov').style.display = 'none';
 }
 
 // ── Leaflet.draw midpoint diamond styling ─────────────────────────────────────
