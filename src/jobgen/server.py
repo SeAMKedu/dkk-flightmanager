@@ -142,14 +142,9 @@ def create_app(config: AppConfig) -> FastAPI:
         loop = asyncio.get_running_loop()
         cfg = _prepare_config(req)
 
-        _include_buf = (
-            cfg.home_safety.home_include_buffer_m
-            if cfg.home_safety.home_include_buffer_m is not None
-            else 2.0 * cfg.home_safety.home_buffer_m
-        )
         cached = _preview_cache is not None and _preview_cache.covers(
             req.parcel_ids or None, req.property_ids or None,
-            _include_buf,
+            cfg.home_safety.resolved_include_buffer_m,
         )
         print(
             f"[preview] job {job_id[:8]} starting — parcels={req.parcel_ids} props={req.property_ids}"
@@ -453,7 +448,8 @@ def create_app(config: AppConfig) -> FastAPI:
                     pass
             raise HTTPException(500, detail=f"Rename failed mid-way, rolled back: {exc}")
 
-        # Update job_name in JSON files
+        # Update job_name in JSON files (best-effort; these files keep their
+        # fixed names and are still accessible while the directory is old_dir)
         for json_file in (old_dir / "manifest.json", old_dir / "job_params.json"):
             if json_file.exists():
                 try:
@@ -463,7 +459,19 @@ def create_app(config: AppConfig) -> FastAPI:
                     json_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
                 except Exception:
                     pass
-        old_dir.rename(new_dir)
+
+        # Rename the directory itself.  If this fails we roll back the file
+        # renames too so the job is left in its original state.
+        try:
+            old_dir.rename(new_dir)
+        except OSError as exc:
+            for src, dst in reversed(done):
+                try:
+                    dst.rename(src)
+                except OSError:
+                    pass
+            raise HTTPException(500, detail=f"Directory rename failed, rolled back: {exc}")
+
         return {"name": new_name}
 
     @app.post("/api/jobs/{name}/clone")
@@ -625,7 +633,7 @@ def _make_thumbnail_svg(survey_geojson: dict | None) -> str | None:
 
         paths = []
         for ring in rings:
-            pts = " ".join(f"{to_svg(c[0], c[1])[0]:.1f},{to_svg(c[0], c[1])[1]:.1f}" for c in ring)
+            pts = " ".join(f"{x:.1f},{y:.1f}" for c in ring for x, y in (to_svg(c[0], c[1]),))
             paths.append(f'<polygon points="{pts}" fill="#3b82f6" fill-opacity="0.7" stroke="#1d4ed8" stroke-width="1"/>')
 
         return (

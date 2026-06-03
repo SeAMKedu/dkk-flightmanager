@@ -203,6 +203,19 @@ class HomeSafetyConfig(BaseModel):
     offset_enabled: bool = True
     max_area_loss_pct: float = Field(default=30.0, ge=0, le=100)
 
+    @property
+    def resolved_include_buffer_m(self) -> float:
+        """Effective building-inclusion buffer distance (metres).
+
+        Defaults to 2× home_buffer_m when home_include_buffer_m is not set
+        explicitly.  Use this everywhere instead of repeating the ternary.
+        """
+        return (
+            self.home_include_buffer_m
+            if self.home_include_buffer_m is not None
+            else 2.0 * self.home_buffer_m
+        )
+
 
 class PolygonConfig(BaseModel):
     edge_buffer_m: float = Field(default=0.0, ge=0)

@@ -172,11 +172,7 @@ def run_job(
         prelim_bounds = prelim.bounds
 
     buf = config.home_safety.home_buffer_m
-    include_buf = (
-        config.home_safety.home_include_buffer_m
-        if config.home_safety.home_include_buffer_m is not None
-        else 2.0 * buf
-    )
+    include_buf = config.home_safety.resolved_include_buffer_m
     _preview_radius_cfg = config.home_safety.preview_radius_m
     buildings_bbox = (
         prelim_bounds[0] - include_buf,
@@ -573,11 +569,7 @@ def run_preview(
     api_key = _require_api_key()
 
     buf = config.home_safety.home_buffer_m
-    include_buf = (
-        config.home_safety.home_include_buffer_m
-        if config.home_safety.home_include_buffer_m is not None
-        else 2.0 * buf
-    )
+    include_buf = config.home_safety.resolved_include_buffer_m
 
     # 1. Fetch input geometries (or reuse cache)
     if _cache is not None and _cache.covers(parcel_ids, property_ids, include_buf):
@@ -616,8 +608,15 @@ def run_preview(
         if not input_geoms and custom_polygon_4326 is None:
             raise ValueError("No input geometries — provide parcel IDs, property IDs, or bbox.")
 
-        prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
-        prelim_bounds = prelim.bounds
+        if custom_polygon_4326 is not None and not input_geoms:
+            # Only a custom polygon was provided (no parcel/property IDs).
+            # Derive the building-fetch bounds from the custom polygon itself,
+            # mirroring the run_job() pattern.  Without this, unary_union([])
+            # returns an empty geometry whose NaN bounds crash covering_tiles().
+            prelim_bounds = reproject_to_3067(custom_polygon_4326).bounds
+        else:
+            prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
+            prelim_bounds = prelim.bounds
 
         buildings_bbox = (
             prelim_bounds[0] - include_buf,
