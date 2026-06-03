@@ -27,6 +27,12 @@ var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   {attribution:'&copy; OpenStreetMap', maxZoom:19}).addTo(map);
 
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(function(pos) {
+    map.setView([pos.coords.latitude, pos.coords.longitude], 15);
+  });
+}
+
 // DSM pane sits below overlayPane (400) so vectors always render on top
 map.createPane('dsmPane');
 map.getPane('dsmPane').style.zIndex = 350;
