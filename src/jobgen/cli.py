@@ -1,4 +1,4 @@
-"""CLI entrypoint — Phase 8.
+"""CLI entrypoint.
 
 Commands:
   jobgen run    --name <name> --parcels <ids> | --bbox <bbox> | --parcels-file <file>
@@ -24,7 +24,7 @@ import typer
 
 app = typer.Typer(
     name="jobgen",
-    help="DJI M3E terrain-following mapping job generator for Finnish field parcels.",
+    help="DJI terrain-following mapping job generator for Finnish field parcels.",
     no_args_is_help=True,
 )
 cache_app = typer.Typer(help="Manage the tile cache.", no_args_is_help=True)
@@ -67,10 +67,6 @@ def run_job_cmd(
     parcels: Optional[str] = typer.Option(
         None, "--parcels", "-p",
         help="Comma-separated peruslohkotunnus IDs.",
-    ),
-    parcels_file: Optional[str] = typer.Option(
-        None, "--parcels-file",
-        help="Path to a newline-separated file of parcel IDs.",
     ),
     properties: Optional[str] = typer.Option(
         None, "--properties", "-k",
@@ -183,24 +179,20 @@ def run_job_cmd(
     _require_key()
 
     # --- input validation ---
-    # --bbox is exclusive; --parcels / --parcels-file / --properties may be combined.
+    # --bbox is exclusive; --parcels / --properties may be combined.
     area_inputs = sum([
         parcels is not None,
-        parcels_file is not None,
         bbox is not None,
         properties is not None,
     ])
     if area_inputs == 0:
         typer.echo(
-            "Error: provide at least one of --parcels, --parcels-file, --properties, or --bbox.",
+            "Error: provide at least one of --parcels, --properties, or --bbox.",
             err=True,
         )
         raise typer.Exit(1)
     if bbox is not None and area_inputs > 1:
         typer.echo("Error: --bbox cannot be combined with other area inputs.", err=True)
-        raise typer.Exit(1)
-    if parcels is not None and parcels_file is not None:
-        typer.echo("Error: --parcels and --parcels-file are mutually exclusive.", err=True)
         raise typer.Exit(1)
 
     # --- parse inputs ---
@@ -210,13 +202,6 @@ def run_job_cmd(
 
     if parcels:
         parcel_ids = [p.strip() for p in parcels.split(",") if p.strip()]
-
-    if parcels_file:
-        p = Path(parcels_file)
-        if not p.exists():
-            typer.echo(f"Error: parcels file not found: {p}", err=True)
-            raise typer.Exit(1)
-        parcel_ids = [line.strip() for line in p.read_text().splitlines() if line.strip()]
 
     if properties:
         property_ids = [k.strip() for k in properties.split(",") if k.strip()]
