@@ -79,15 +79,17 @@ The single-page Leaflet map interface lets you:
 
 - **Manage jobs** — the **Jobs panel** on the left lists all saved jobs with thumbnails, area, and status badges. Click any card to re-open a job (form and map restore instantly; a fresh preview runs automatically). Use the three-dot menu per card to **Clone**, **Rename**, or **Delete** a job. Click **＋ New Job** at the top of the panel to start a fresh job. The panel can be collapsed with the `◄` tab on its right edge.
 - **Enter area IDs** — paste Ruokavirasto parcel IDs or MML kiinteistötunnus values; the map updates automatically when you leave the field.
+- **Draw a scratch polygon** — if you have no parcel or property IDs, right-click anywhere on the empty map to create a 300×300 m square centred on the cursor. The map enters vertex-drag edit mode immediately so you can reshape it freely. Parcel/property IDs are not required — the drawn polygon is the sole input for preview and save.
 - **Tune flight parameters** — subcategory (A2/A3 pills), drone, height (live GSD display), and warning radius (linked to 3× height by default; click the "3:1" label to restore the link after manual override).
 - **Tune polygon** — offset (expand/contract), simplify (Auto pill + −/+ step buttons), keep-out toggle.
-- **Preview the survey** — click **↻ Update** or edit any parameter to see the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all toggleable from the legend. UAS zone polygons are sorted so inner zones render on top and are clickable even when nested inside a larger zone. Click any zone to see all overlapping zones at that point, including altitude floor/ceiling ranges and nesting relationships. Inner concentric zones of an airfield that don't directly intersect the survey buffer are shown with a dashed border for context.
-- **Edit the polygon** — double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to exit and save. In edit mode, vertex handles are white squares and midpoint handles are smaller white diamonds — drag a midpoint to create a new vertex. Click a vertex to delete it. Clicking **Save** while still in edit mode auto-commits the edit before saving. Click **↻ Reset polygon** to revert all manual edits.
+- **Preview the survey** — click **↻ Update** or edit any parameter to see the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all toggleable from the legend. UAS zone polygons are sorted so inner zones render on top and are clickable even when nested inside a larger zone. Click any zone to see all overlapping zones at that point, including altitude floor/ceiling ranges and nesting relationships. Inner concentric zones of an airfield that don't directly intersect the survey buffer are shown with a dashed border for context. The UAS zones legend layer automatically turns on when zones first appear.
+- **Edit the polygon** — double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to exit and save. Exiting edit mode automatically refreshes buildings and UAS zones for the new polygon shape. In edit mode, vertex handles are white squares and midpoint handles are smaller white diamonds — drag a midpoint to create a new vertex. Click a vertex to delete it. Clicking **Save** while still in edit mode auto-commits the edit before saving. Click **↻ Reset polygon** to revert all manual edits.
 - **Bridge / Cut** — in edit mode, right-click any vertex to enter Bridge/Cut mode (the vertex turns orange). Newly created vertices (promoted midpoints) are immediately available for selection. Left-click up to three more vertices to define the operation:
   - **3 vertices on the same polygon** → triangle cut (subtracts the triangle from the polygon)
   - **2 vertices on each of two separate polygons** → bridge (connects them into a single continuous polygon with a quadrilateral corridor)
   - Selected vertices highlight orange as you pick them; a dashed preview line shows the shape. Right-click anywhere or press **Esc** to cancel. The **♦ Bridge / Cut** button in the Polygon section is an alternative entry point.
 - **Zone altitude cap** — when a preview returns zone hits that carry an altitude floor (Finnish vyöhyke B/C/D), flight height is automatically set to 75 % of the lowest floor and the warning radius re-syncs. Raising height above the floor triggers an orange warning in the status panel. The cap is advisory; you can override freely.
+- **Map base layer** — a layer switcher in the top-left corner (next to the zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires a valid `MML_API_KEY` in `.env` and is served directly from MML's WMTS; browser HTTP cache handles tile caching automatically.
 - **Save** — click **Save** to write the full job (KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, thumbnail) to disk. Unsaved changes are tracked; you will be prompted before opening a different job or starting a new one.
 
 Parcel and property geometries are cached locally (400-day TTL) so repeat previews of the same area do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL).
@@ -266,10 +268,12 @@ jobgen cache refresh --older-than 30
 ### Planning (office / laptop)
 
 1. Run `jobgen serve` and open http://localhost:8765.
-2. Paste parcel or property IDs — the survey polygon appears automatically.
+2. Define the survey area — either:
+   - Paste parcel or property IDs and let the polygon generate automatically, or
+   - Right-click on the empty map to draw a 300×300 m scratch square, then reshape it in edit mode.
 3. Adjust height, subcategory, simplify, and offset as needed.
-4. Review the map: survey polygon, keep-out circles, warning radius circles, buildings, UAS zones, and DSM elevation overlay (toggle layers via the legend).
-5. Edit the polygon if needed (double-click to enter, double-click background to save).
+4. Review the map: survey polygon, keep-out circles, warning radius circles, buildings, UAS zones, and DSM elevation overlay (toggle layers via the legend). Switch to MML Ortokuva aerial imagery via the layer control for ground-truth reference.
+5. Edit the polygon if needed (double-click to enter, double-click background to save). Buildings and zones refresh automatically on exit.
 6. Click **Save** when satisfied.
 7. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
 

@@ -510,43 +510,6 @@ def run_job(
 # ---------------------------------------------------------------------------
 
 
-class PreviewCache:
-    """Cached result of the expensive fetch stages (parcels + buildings).
-
-    Keyed by the sorted tuple of parcel/property IDs and the fetch bbox
-    expansion used for buildings. When the same IDs are re-submitted with
-    only flight-parameter changes (subcategory, height, simplify …) these
-    stages are skipped and the cached geometries are reused directly.
-    """
-
-    def __init__(
-        self,
-        input_geoms: list,
-        buildings: list,
-        prelim_bounds: tuple,
-        include_buf: float,
-        parcel_key: tuple,
-        property_key: tuple,
-    ) -> None:
-        self.input_geoms = input_geoms
-        self.buildings = buildings
-        self.prelim_bounds = prelim_bounds
-        self.include_buf = include_buf
-        self.parcel_key = parcel_key
-        self.property_key = property_key
-
-    def covers(
-        self,
-        parcel_ids: list[str] | None,
-        property_ids: list[str] | None,
-        include_buf: float,
-    ) -> bool:
-        pk = tuple(sorted(parcel_ids or []))
-        ppk = tuple(sorted(property_ids or []))
-        # Accept cache when the requested include_buf is ≤ what was fetched —
-        # the larger fetch area is a superset.
-        return pk == self.parcel_key and ppk == self.property_key and include_buf <= self.include_buf
-
 
 def run_preview(
     config: AppConfig,
@@ -556,16 +519,13 @@ def run_preview(
     bbox_3067: tuple[float, float, float, float] | None = None,
     refresh: bool = False,
     progress_cb: Callable[[str, str, int], None] | None = None,
-    _cache: PreviewCache | None = None,
     custom_polygon_4326: Any | None = None,
-) -> tuple[dict, PreviewCache]:
-    """Run parcels → buildings → geometry → zones; return (GeoJSON dict, cache).
+) -> dict:
+    """Run parcels → buildings → geometry → zones; return GeoJSON dict.
 
     No files are written. DEM and DSM stages are skipped to keep latency low.
     At least one of *parcel_ids*, *property_ids*, or *bbox_3067* must be provided.
-
-    Pass a :class:`PreviewCache` from a previous call as *_cache* to skip the
-    parcel and building-tile fetch stages when only flight parameters changed.
+    Building tiles are served from the SQLite tile cache — no in-memory caching needed.
     """
     from shapely.geometry import mapping
     from shapely.ops import unary_union
@@ -577,80 +537,61 @@ def run_preview(
     buf = config.home_safety.home_buffer_m
     include_buf = config.home_safety.resolved_include_buffer_m
 
-    # 1. Fetch input geometries (or reuse cache)
-    if _cache is not None and _cache.covers(parcel_ids, property_ids, include_buf):
-        log.info("Preview: reusing cached parcels + buildings")
-        input_geoms = _cache.input_geoms
-        buildings = _cache.buildings
-        prelim_bounds = _cache.prelim_bounds
-        new_cache = _cache
+    # 1. Fetch input geometries (parcels/properties are served from SQLite cache,
+    #    so this is a fast local lookup on repeat previews).
+    input_geoms = []
+    if parcel_ids is not None or bbox_3067 is not None:
+        _cb(progress_cb, "parcels", "Fetching parcels…", 10)
+        log.info("Preview: fetching parcels …")
+        parcels = fetch_parcels(
+            parcel_ids=parcel_ids, bbox=bbox_3067, config=config.parcels,
+            cache_config=config.cache,
+        )
+        if not parcels:
+            raise ValueError("No parcels returned — check parcel IDs or bbox.")
+        log.info("Preview: %d parcel(s)", len(parcels))
+        input_geoms.extend(parcels)
+
+    if property_ids is not None:
+        _cb(progress_cb, "properties", "Fetching properties…", 20)
+        log.info("Preview: fetching kiinteistöt …")
+        props = fetch_properties(
+            property_ids,
+            api_key,
+            timeout_s=config.properties.timeout_s,
+            page_size=config.properties.page_size,
+            cache_config=config.cache,
+        )
+        log.info("Preview: %d kiinteistö(t)", len(props))
+        input_geoms.extend(props)
+
+    if not input_geoms and custom_polygon_4326 is None:
+        raise ValueError("No input geometries — provide parcel IDs, property IDs, or bbox.")
+
+    # 2. Compute prelim_bounds for building fetch area.
+    if custom_polygon_4326 is not None and not input_geoms:
+        prelim_bounds = reproject_to_3067(custom_polygon_4326).bounds
     else:
-        input_geoms = []
-        if parcel_ids is not None or bbox_3067 is not None:
-            _cb(progress_cb, "parcels", "Fetching parcels…", 10)
-            log.info("Preview: fetching parcels …")
-            parcels = fetch_parcels(
-                parcel_ids=parcel_ids, bbox=bbox_3067, config=config.parcels,
-                cache_config=config.cache,
-            )
-            if not parcels:
-                raise ValueError("No parcels returned — check parcel IDs or bbox.")
-            log.info("Preview: %d parcel(s)", len(parcels))
-            input_geoms.extend(parcels)
+        prelim_bounds = make_valid(unary_union([p.geometry for p in input_geoms])).bounds
 
-        if property_ids is not None:
-            _cb(progress_cb, "properties", "Fetching properties…", 20)
-            log.info("Preview: fetching kiinteistöt …")
-            props = fetch_properties(
-                property_ids,
-                api_key,
-                timeout_s=config.properties.timeout_s,
-                page_size=config.properties.page_size,
-                cache_config=config.cache,
-            )
-            log.info("Preview: %d kiinteistö(t)", len(props))
-            input_geoms.extend(props)
-
-        if not input_geoms and custom_polygon_4326 is None:
-            raise ValueError("No input geometries — provide parcel IDs, property IDs, or bbox.")
-
-        if custom_polygon_4326 is not None and not input_geoms:
-            # Only a custom polygon was provided (no parcel/property IDs).
-            # Derive the building-fetch bounds from the custom polygon itself,
-            # mirroring the run_job() pattern.  Without this, unary_union([])
-            # returns an empty geometry whose NaN bounds crash covering_tiles().
-            prelim_bounds = reproject_to_3067(custom_polygon_4326).bounds
-        else:
-            prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
-            prelim_bounds = prelim.bounds
-
-        buildings_bbox = (
-            prelim_bounds[0] - include_buf,
-            prelim_bounds[1] - include_buf,
-            prelim_bounds[2] + include_buf,
-            prelim_bounds[3] + include_buf,
-        )
-
-        _cb(progress_cb, "buildings", "Fetching building tiles…", 35)
-        log.info("Preview: fetching building tiles …")
-        b_fetcher = buildings_fetcher(api_key)
-        b_records = get_tiles(
-            "buildings", buildings_bbox, b_fetcher, config.cache, refresh=refresh
-        )
-        raw_buildings: list[Building] = []
-        for rec in b_records:
-            raw_buildings.extend(load_tile(rec.path))
-        buildings = dedup_buildings(raw_buildings)
-        log.info("Preview: %d building(s)", len(buildings))
-
-        new_cache = PreviewCache(
-            input_geoms=input_geoms,
-            buildings=buildings,
-            prelim_bounds=prelim_bounds,
-            include_buf=include_buf,
-            parcel_key=tuple(sorted(parcel_ids or [])),
-            property_key=tuple(sorted(property_ids or [])),
-        )
+    # 3. Fetch buildings (tiles served from SQLite cache — fast local I/O).
+    buildings_bbox = (
+        prelim_bounds[0] - include_buf,
+        prelim_bounds[1] - include_buf,
+        prelim_bounds[2] + include_buf,
+        prelim_bounds[3] + include_buf,
+    )
+    _cb(progress_cb, "buildings", "Fetching building tiles…", 35)
+    log.info("Preview: fetching building tiles …")
+    b_fetcher = buildings_fetcher(api_key)
+    b_records = get_tiles(
+        "buildings", buildings_bbox, b_fetcher, config.cache, refresh=refresh
+    )
+    raw_buildings: list[Building] = []
+    for rec in b_records:
+        raw_buildings.extend(load_tile(rec.path))
+    buildings = dedup_buildings(raw_buildings)
+    log.info("Preview: %d building(s)", len(buildings))
 
     # 3. Survey polygon
     _cb(progress_cb, "geometry", "Computing survey polygon…", 55)
@@ -801,7 +742,7 @@ def run_preview(
             "has_properties": any(hasattr(g, "property_id") for g in input_geoms),
         },
     }
-    return result, new_cache
+    return result
 
 
 def _zone_geojson(hit: ZoneHit) -> dict | None:

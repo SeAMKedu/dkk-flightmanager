@@ -24,8 +24,23 @@ var _editVHandler = null;  // draw:editvertex → re-patch midpoint icons
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {attribution:'&copy; OpenStreetMap', maxZoom:19}).addTo(map);
+var _baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution:'&copy; OpenStreetMap', maxZoom:19});
+var _baseOrto = null;
+var _baseLayerCtrl = null;
+_baseOSM.addTo(map);
+
+function _initBaseLayers(mmlKey) {
+  if (!mmlKey) return;
+  var url = 'https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts'
+    + '?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0'
+    + '&LAYER=ortokuva&STYLE=default&TILEMATRIXSET=WGS84_Pseudo-Mercator'
+    + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg'
+    + '&api-key=' + mmlKey;
+  _baseOrto = L.tileLayer(url, {attribution:'&copy; <a href="https://maanmittauslaitos.fi">MML</a>', maxZoom:21});
+  if (_baseLayerCtrl) map.removeControl(_baseLayerCtrl);
+  _baseLayerCtrl = L.control.layers({'Map': _baseOSM, 'Ortho': _baseOrto}, null, {position:'topleft', collapsed:true}).addTo(map);
+}
 
 function resetMapToUserLocation() {
   if (navigator.geolocation) {
@@ -104,6 +119,7 @@ async function init() {
     }
     document.getElementById('kochk').checked = cfg.keepout !== false;
     updateGsd();
+    if (cfg.mml_api_key) _initBaseLayers(cfg.mml_api_key);
     console.log('[init] config loaded, outputDir='+outputDir+', drone='+cfg.default_drone);
   } catch(e) {
     console.error('[init] failed:', e);
@@ -227,6 +243,10 @@ _simpRender();
 document.getElementById('pids').addEventListener('input', clearPolyEdit);
 document.getElementById('kids').addEventListener('input', clearPolyEdit);
 function clearPolyEdit() {
+  // For parcel/property jobs the polygon is derived from the IDs — discard edits
+  // so param changes re-derive cleanly.  For custom-polygon-only jobs the polygon
+  // is the primary input and must survive param changes.
+  if (!document.getElementById('pids').value.trim() && !document.getElementById('kids').value.trim()) return;
   editedPoly = null; polyModified = false;
   document.getElementById('modbadge').style.display = 'none';
 }
@@ -428,10 +448,10 @@ async function startPreview() {
   if (isRunning || editMode) return;  // don't preview while editing — renderMap clears editLayers
   clearError();
   var p = getParams();
-  if (!p.parcel_ids.length && !p.property_ids.length) {
+  if (polyModified) p.custom_polygon = editedPoly;
+  if (!p.parcel_ids.length && !p.property_ids.length && !p.custom_polygon) {
     showError('Enter at least one parcel ID or property ID.'); return;
   }
-  if (polyModified) p.custom_polygon = editedPoly;
   await runJob('/api/preview', p, 'Preview', onPreviewDone);
 }
 
@@ -565,6 +585,9 @@ function onPreviewDone(payload) {
     if (_radiusLinked) setRadiusLinked(true);  // re-sync radius to new height
   }
   try {
+    // If zones are appearing for the first time (layer was absent before), force them
+    // visible regardless of the previously-saved eye state.
+    if (savedVis && (payload.zone_hits||[]).length && !lrs.zones) savedVis.zones = true;
     renderMap(payload);
     redrawRings();
     resetLegend(savedVis);  // null on first render → applies startOff defaults
@@ -843,6 +866,10 @@ function saveEdit() {
   _detachEditListeners();
   if (_editVHandler) { map.off('draw:editvertex', _editVHandler); _editVHandler = null; }
   document.getElementById('bridge-btn').disabled = true;
+  // Auto-fetch buildings + zones for the new polygon shape.
+  // Deferred so startExport()'s runJob() can set isRunning=true first if this
+  // saveEdit() was called from startExport(), preventing a double-run.
+  setTimeout(startPreview, 0);
 }
 
 // Dblclick on map background (not on polygon) saves the edit
@@ -855,6 +882,36 @@ document.addEventListener('keydown', function(e) {
     if (_bridgeMode) exitBridgeMode();
     else if (editMode) saveEdit();
   }
+});
+
+// ── Right-click scratch square ────────────────────────────────────────────────
+// Right-click on an empty map creates a 300×300 m square centred on the cursor.
+// Blocked when a polygon already exists or when edit/bridge mode is active.
+map.on('contextmenu', function(e) {
+  if (editMode || _bridgeMode || _currentSurveyGeom()) return;
+  var lat = e.latlng.lat, lng = e.latlng.lng;
+  var dLat = 150 / 111320;
+  var dLng = 150 / (111320 * Math.cos(lat * Math.PI / 180));
+  var geom = {
+    type: 'Polygon',
+    coordinates: [[
+      [lng - dLng, lat - dLat],
+      [lng + dLng, lat - dLat],
+      [lng + dLng, lat + dLat],
+      [lng - dLng, lat + dLat],
+      [lng - dLng, lat - dLat]
+    ]]
+  };
+  editedPoly = geom;
+  polyModified = true;
+  markDirty();
+  document.getElementById('modbadge').style.display = 'block';
+  previewData = {survey: geom};
+  _updateSurveyDisplay(geom);
+  map.fitBounds(lrs.survey.getBounds(), {padding: [60, 60]});
+  document.getElementById('xb').disabled = false;
+  document.getElementById('rstbtn').disabled = false;
+  toggleEdit();
 });
 
 // ── Edit-mode container listeners (capture phase, bypass Leaflet.draw) ────────
@@ -1406,13 +1463,22 @@ async function _doOpenJob(name) {
       } catch(ex) { console.error('[openJob] render error', ex); }
     } else {
       previewData = null;
-      document.getElementById('xb').disabled = true;
-      document.getElementById('rstbtn').disabled = true;
       document.getElementById('bridge-btn').disabled = true;
       renderStatus(null);
       document.getElementById('legend').classList.add('inactive');
-      resetMapToUserLocation();
-      focusArea();
+      if (editedPoly) {
+        // Custom-polygon-only job: show the polygon immediately; startPreview() below will fill in DSM etc.
+        previewData = {survey: editedPoly};
+        _updateSurveyDisplay(editedPoly);
+        map.fitBounds(lrs.survey.getBounds(), {padding: [40, 40]});
+        document.getElementById('xb').disabled = false;
+        document.getElementById('rstbtn').disabled = false;
+      } else {
+        document.getElementById('xb').disabled = true;
+        document.getElementById('rstbtn').disabled = true;
+        resetMapToUserLocation();
+        focusArea();
+      }
     }
     // Cache staleness notice
     if (data.cache_stale && data.cache_stale.length) showStaleNotice(data.cache_stale);

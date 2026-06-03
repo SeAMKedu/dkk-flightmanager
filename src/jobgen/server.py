@@ -27,7 +27,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from jobgen.config import AppConfig
-from jobgen.pipeline import PreviewCache, run_job, run_preview
+from jobgen.pipeline import run_job, run_preview
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _ui_html_cache: str | None = None
@@ -51,7 +51,6 @@ _job_lock = threading.Lock()
 _active_job_id: str | None = None
 _job_queues: dict[str, asyncio.Queue] = {}
 _config: AppConfig | None = None
-_preview_cache: PreviewCache | None = None
 _last_preview_result: dict | None = None   # full run_preview() result, for job_params.json
 
 
@@ -113,6 +112,7 @@ def create_app(config: AppConfig) -> FastAPI:
 
     @app.get("/api/config")
     async def get_config():
+        import os
         drone = _config.active_drone()
         return {
             "default_drone": _config.default_drone,
@@ -125,6 +125,7 @@ def create_app(config: AppConfig) -> FastAPI:
                 else str(_config.polygon.simplify_tolerance_m)
             ),
             "keepout": _config.home_safety.offset_enabled,
+            "mml_api_key": os.environ.get("MML_API_KEY", ""),
         }
 
     @app.post("/api/preview")
@@ -142,14 +143,7 @@ def create_app(config: AppConfig) -> FastAPI:
         loop = asyncio.get_running_loop()
         cfg = _prepare_config(req)
 
-        cached = _preview_cache is not None and _preview_cache.covers(
-            req.parcel_ids or None, req.property_ids or None,
-            cfg.home_safety.resolved_include_buffer_m,
-        )
-        print(
-            f"[preview] job {job_id[:8]} starting — parcels={req.parcel_ids} props={req.property_ids}"
-            + (" (cached parcels+buildings)" if cached else "")
-        )
+        print(f"[preview] job {job_id[:8]} starting — parcels={req.parcel_ids} props={req.property_ids}")
 
         def cb(stage: str, msg: str, pct: int) -> None:
             print(f"[preview] {pct:3d}% {stage}: {msg}")
@@ -161,19 +155,17 @@ def create_app(config: AppConfig) -> FastAPI:
                 print(f"[preview] callback error: {e}")
 
         def run() -> None:
-            global _active_job_id, _preview_cache, _last_preview_result
+            global _active_job_id, _last_preview_result
             try:
                 from shapely.geometry import shape as _shape
                 custom_poly_geom = _shape(req.custom_polygon) if req.custom_polygon else None
-                result, new_cache = run_preview(
+                result = run_preview(
                     cfg,
                     parcel_ids=req.parcel_ids or None,
                     property_ids=req.property_ids or None,
                     progress_cb=cb,
-                    _cache=_preview_cache,
                     custom_polygon_4326=custom_poly_geom,
                 )
-                _preview_cache = new_cache
                 _last_preview_result = result
                 print(f"[preview] job {job_id[:8]} done")
                 loop.call_soon_threadsafe(

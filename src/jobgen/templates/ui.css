@@ -126,3 +126,10 @@ button:disabled{opacity:.4;cursor:not-allowed}
    top/left 50% + translate(-50%,-50%) centres the diamond on the anchor point. */
 .ld-mid{background:transparent!important;border:none!important;overflow:visible!important}
 .ld-mid::before{content:''!important;position:absolute!important;width:7px!important;height:7px!important;top:50%!important;left:50%!important;transform:translate(-50%,-50%) rotate(45deg)!important;background:#fff!important;border:1px solid #94a3b8!important;box-sizing:border-box!important}
+
+/* Layer switcher — styled to match Leaflet zoom bar */
+.leaflet-control-layers{border:none!important;background:none!important;box-shadow:none!important}
+.leaflet-control-layers-toggle{width:26px!important;height:26px!important;background-color:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);background-size:16px 16px!important}
+.leaflet-control-layers-expanded{padding:6px 8px!important;background:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);font-size:12px;min-width:80px}
+.leaflet-control-layers-expanded label{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;color:#1e293b;margin:3px 0;cursor:pointer}
+.leaflet-control-layers-expanded input{width:auto;margin:0;cursor:pointer}
