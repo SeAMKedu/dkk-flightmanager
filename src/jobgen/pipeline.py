@@ -31,7 +31,7 @@ from jobgen.cache import FetcherFn, TileRecord, get_tiles, tile_provenance
 from jobgen.config import AppConfig
 from jobgen.elevation import tile_fetcher as dem_fetcher, validate_tile
 from jobgen.geometry import (
-    SurveyGeometry, build_keepout, process_survey,
+    SurveyGeometry, apply_survey_offset, build_keepout, process_survey,
     reproject_to_4326, reproject_to_3067, vertex_count,
 )
 from jobgen.logging_setup import setup_logging
@@ -201,19 +201,22 @@ def run_job(
     pieces_count = 1
     if custom_polygon_4326 is not None:
         # Synthesise a SurveyGeometry from the user-supplied polygon.
-        _area_ha = survey_3067.area / 10_000
-        _vc = vertex_count(custom_polygon_4326)
+        _offset = config.polygon.survey_offset_m
+        survey_3067_off = apply_survey_offset(survey_3067, _offset)
+        survey_4326_off = reproject_to_4326(survey_3067_off)
+        _area_ha = survey_3067_off.area / 10_000
+        _vc = vertex_count(survey_4326_off)
         survey_geom = SurveyGeometry(
-            survey_3067=survey_3067,
-            survey_4326=custom_polygon_4326,
-            pieces_3067=[survey_3067],
-            pieces_4326=[custom_polygon_4326],
-            bbox_3067=(prelim_bounds[0], prelim_bounds[1], prelim_bounds[2], prelim_bounds[3]),
+            survey_3067=survey_3067_off,
+            survey_4326=survey_4326_off,
+            pieces_3067=[survey_3067_off],
+            pieces_4326=[survey_4326_off],
+            bbox_3067=survey_3067_off.bounds,
             original_area_ha=_area_ha,
             final_area_ha=_area_ha,
             area_lost_pct=0.0,
             min_dist_to_home_m=None,
-            offset_applied=False,
+            offset_applied=_offset != 0.0,
             survey_vertex_count=_vc,
             needs_review=True,
             review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
@@ -510,43 +513,6 @@ def run_job(
 # ---------------------------------------------------------------------------
 
 
-class PreviewCache:
-    """Cached result of the expensive fetch stages (parcels + buildings).
-
-    Keyed by the sorted tuple of parcel/property IDs and the fetch bbox
-    expansion used for buildings. When the same IDs are re-submitted with
-    only flight-parameter changes (subcategory, height, simplify …) these
-    stages are skipped and the cached geometries are reused directly.
-    """
-
-    def __init__(
-        self,
-        input_geoms: list,
-        buildings: list,
-        prelim_bounds: tuple,
-        include_buf: float,
-        parcel_key: tuple,
-        property_key: tuple,
-    ) -> None:
-        self.input_geoms = input_geoms
-        self.buildings = buildings
-        self.prelim_bounds = prelim_bounds
-        self.include_buf = include_buf
-        self.parcel_key = parcel_key
-        self.property_key = property_key
-
-    def covers(
-        self,
-        parcel_ids: list[str] | None,
-        property_ids: list[str] | None,
-        include_buf: float,
-    ) -> bool:
-        pk = tuple(sorted(parcel_ids or []))
-        ppk = tuple(sorted(property_ids or []))
-        # Accept cache when the requested include_buf is ≤ what was fetched —
-        # the larger fetch area is a superset.
-        return pk == self.parcel_key and ppk == self.property_key and include_buf <= self.include_buf
-
 
 def run_preview(
     config: AppConfig,
@@ -556,16 +522,13 @@ def run_preview(
     bbox_3067: tuple[float, float, float, float] | None = None,
     refresh: bool = False,
     progress_cb: Callable[[str, str, int], None] | None = None,
-    _cache: PreviewCache | None = None,
     custom_polygon_4326: Any | None = None,
-) -> tuple[dict, PreviewCache]:
-    """Run parcels → buildings → geometry → zones; return (GeoJSON dict, cache).
+) -> dict:
+    """Run parcels → buildings → geometry → zones; return GeoJSON dict.
 
     No files are written. DEM and DSM stages are skipped to keep latency low.
     At least one of *parcel_ids*, *property_ids*, or *bbox_3067* must be provided.
-
-    Pass a :class:`PreviewCache` from a previous call as *_cache* to skip the
-    parcel and building-tile fetch stages when only flight parameters changed.
+    Building tiles are served from the SQLite tile cache — no in-memory caching needed.
     """
     from shapely.geometry import mapping
     from shapely.ops import unary_union
@@ -577,99 +540,83 @@ def run_preview(
     buf = config.home_safety.home_buffer_m
     include_buf = config.home_safety.resolved_include_buffer_m
 
-    # 1. Fetch input geometries (or reuse cache)
-    if _cache is not None and _cache.covers(parcel_ids, property_ids, include_buf):
-        log.info("Preview: reusing cached parcels + buildings")
-        input_geoms = _cache.input_geoms
-        buildings = _cache.buildings
-        prelim_bounds = _cache.prelim_bounds
-        new_cache = _cache
+    # 1. Fetch input geometries (parcels/properties are served from SQLite cache,
+    #    so this is a fast local lookup on repeat previews).
+    input_geoms = []
+    if parcel_ids is not None or bbox_3067 is not None:
+        _cb(progress_cb, "parcels", "Fetching parcels…", 10)
+        log.info("Preview: fetching parcels …")
+        parcels = fetch_parcels(
+            parcel_ids=parcel_ids, bbox=bbox_3067, config=config.parcels,
+            cache_config=config.cache,
+        )
+        if not parcels:
+            raise ValueError("No parcels returned — check parcel IDs or bbox.")
+        log.info("Preview: %d parcel(s)", len(parcels))
+        input_geoms.extend(parcels)
+
+    if property_ids is not None:
+        _cb(progress_cb, "properties", "Fetching properties…", 20)
+        log.info("Preview: fetching kiinteistöt …")
+        props = fetch_properties(
+            property_ids,
+            api_key,
+            timeout_s=config.properties.timeout_s,
+            page_size=config.properties.page_size,
+            cache_config=config.cache,
+        )
+        log.info("Preview: %d kiinteistö(t)", len(props))
+        input_geoms.extend(props)
+
+    if not input_geoms and custom_polygon_4326 is None:
+        raise ValueError("No input geometries — provide parcel IDs, property IDs, or bbox.")
+
+    # 2. Compute prelim_bounds for building fetch area.
+    if custom_polygon_4326 is not None and not input_geoms:
+        prelim_bounds = reproject_to_3067(custom_polygon_4326).bounds
     else:
-        input_geoms = []
-        if parcel_ids is not None or bbox_3067 is not None:
-            _cb(progress_cb, "parcels", "Fetching parcels…", 10)
-            log.info("Preview: fetching parcels …")
-            parcels = fetch_parcels(
-                parcel_ids=parcel_ids, bbox=bbox_3067, config=config.parcels,
-                cache_config=config.cache,
-            )
-            if not parcels:
-                raise ValueError("No parcels returned — check parcel IDs or bbox.")
-            log.info("Preview: %d parcel(s)", len(parcels))
-            input_geoms.extend(parcels)
+        prelim_bounds = make_valid(unary_union([p.geometry for p in input_geoms])).bounds
 
-        if property_ids is not None:
-            _cb(progress_cb, "properties", "Fetching properties…", 20)
-            log.info("Preview: fetching kiinteistöt …")
-            props = fetch_properties(
-                property_ids,
-                api_key,
-                timeout_s=config.properties.timeout_s,
-                page_size=config.properties.page_size,
-                cache_config=config.cache,
-            )
-            log.info("Preview: %d kiinteistö(t)", len(props))
-            input_geoms.extend(props)
-
-        if not input_geoms and custom_polygon_4326 is None:
-            raise ValueError("No input geometries — provide parcel IDs, property IDs, or bbox.")
-
-        if custom_polygon_4326 is not None and not input_geoms:
-            # Only a custom polygon was provided (no parcel/property IDs).
-            # Derive the building-fetch bounds from the custom polygon itself,
-            # mirroring the run_job() pattern.  Without this, unary_union([])
-            # returns an empty geometry whose NaN bounds crash covering_tiles().
-            prelim_bounds = reproject_to_3067(custom_polygon_4326).bounds
-        else:
-            prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
-            prelim_bounds = prelim.bounds
-
-        buildings_bbox = (
-            prelim_bounds[0] - include_buf,
-            prelim_bounds[1] - include_buf,
-            prelim_bounds[2] + include_buf,
-            prelim_bounds[3] + include_buf,
-        )
-
-        _cb(progress_cb, "buildings", "Fetching building tiles…", 35)
-        log.info("Preview: fetching building tiles …")
-        b_fetcher = buildings_fetcher(api_key)
-        b_records = get_tiles(
-            "buildings", buildings_bbox, b_fetcher, config.cache, refresh=refresh
-        )
-        raw_buildings: list[Building] = []
-        for rec in b_records:
-            raw_buildings.extend(load_tile(rec.path))
-        buildings = dedup_buildings(raw_buildings)
-        log.info("Preview: %d building(s)", len(buildings))
-
-        new_cache = PreviewCache(
-            input_geoms=input_geoms,
-            buildings=buildings,
-            prelim_bounds=prelim_bounds,
-            include_buf=include_buf,
-            parcel_key=tuple(sorted(parcel_ids or [])),
-            property_key=tuple(sorted(property_ids or [])),
-        )
+    # 3. Fetch buildings (tiles served from SQLite cache — fast local I/O).
+    buildings_bbox = (
+        prelim_bounds[0] - include_buf,
+        prelim_bounds[1] - include_buf,
+        prelim_bounds[2] + include_buf,
+        prelim_bounds[3] + include_buf,
+    )
+    _cb(progress_cb, "buildings", "Fetching building tiles…", 35)
+    log.info("Preview: fetching building tiles …")
+    b_fetcher = buildings_fetcher(api_key)
+    b_records = get_tiles(
+        "buildings", buildings_bbox, b_fetcher, config.cache, refresh=refresh
+    )
+    raw_buildings: list[Building] = []
+    for rec in b_records:
+        raw_buildings.extend(load_tile(rec.path))
+    buildings = dedup_buildings(raw_buildings)
+    log.info("Preview: %d building(s)", len(buildings))
 
     # 3. Survey polygon
     _cb(progress_cb, "geometry", "Computing survey polygon…", 55)
     if custom_polygon_4326 is not None:
         log.info("Preview: using custom polygon (bridge/cut applied)")
         _survey_3067 = reproject_to_3067(custom_polygon_4326)
-        _area_ha = _survey_3067.area / 10_000
-        _vc = vertex_count(custom_polygon_4326)
+        _offset = config.polygon.survey_offset_m
+        _survey_3067_off = apply_survey_offset(_survey_3067, _offset)
+        _survey_4326_off = reproject_to_4326(_survey_3067_off)
+        _area_ha = _survey_3067_off.area / 10_000
+        _vc = vertex_count(_survey_4326_off)
         survey_geom = SurveyGeometry(
-            survey_3067=_survey_3067,
-            survey_4326=custom_polygon_4326,
-            pieces_3067=[_survey_3067],
-            pieces_4326=[custom_polygon_4326],
-            bbox_3067=_survey_3067.bounds,
+            survey_3067=_survey_3067_off,
+            survey_4326=_survey_4326_off,
+            pieces_3067=[_survey_3067_off],
+            pieces_4326=[_survey_4326_off],
+            bbox_3067=_survey_3067_off.bounds,
             original_area_ha=_area_ha,
             final_area_ha=_area_ha,
             area_lost_pct=0.0,
             min_dist_to_home_m=None,
-            offset_applied=False,
+            offset_applied=_offset != 0.0,
             survey_vertex_count=_vc,
             needs_review=True,
             review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
@@ -801,7 +748,7 @@ def run_preview(
             "has_properties": any(hasattr(g, "property_id") for g in input_geoms),
         },
     }
-    return result, new_cache
+    return result
 
 
 def _zone_geojson(hit: ZoneHit) -> dict | None:
@@ -814,6 +761,107 @@ def _zone_geojson(hit: ZoneHit) -> dict | None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def create_skeleton_jobs(
+    ids: list[str],
+    id_type: str,
+    output_dir: Path,
+    folder: str | None,
+    params: dict,
+    progress_cb: Callable | None,
+    config: AppConfig,
+) -> list[dict]:
+    """Fetch geometry for each ID and write a skeleton job_params.json.
+
+    No KMZ, DSM, or manifest is written.  The polygon is stored as
+    ``custom_polygon_4326`` so ``openJob()`` can display it immediately
+    and a full export can skip the WFS re-fetch.
+
+    Returns a list of per-ID result dicts with keys ``id``, ``status``
+    (``"ok"`` | ``"skipped"`` | ``"error"``), and optional ``reason``.
+    """
+    from shapely.geometry import mapping as _mapping
+
+    api_key = _require_api_key() if id_type == "properties" else ""
+
+    target_dir = (output_dir / folder) if folder else output_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if folder:
+        marker = target_dir / ".dkk-folder"
+        if not marker.exists():
+            marker.write_text("", encoding="utf-8")
+
+    results: list[dict] = []
+    total = len(ids)
+
+    for i, id_ in enumerate(ids):
+        _cb(progress_cb, "batch", f"[{i + 1}/{total}] Fetching {id_}…", int(i / total * 90))
+
+        job_dir = target_dir / id_
+        if job_dir.exists():
+            results.append({"id": id_, "status": "skipped", "reason": "already exists"})
+            continue
+
+        try:
+            if id_type == "parcels":
+                geoms = fetch_parcels(
+                    parcel_ids=[id_], config=config.parcels, cache_config=config.cache
+                )
+                poly_3067 = geoms[0].geometry if geoms else None
+            else:
+                geoms = fetch_properties(
+                    [id_], api_key,
+                    timeout_s=config.properties.timeout_s,
+                    page_size=config.properties.page_size,
+                    cache_config=config.cache,
+                )
+                poly_3067 = geoms[0].geometry if geoms else None
+
+            if poly_3067 is None:
+                results.append({"id": id_, "status": "error", "reason": "no geometry returned"})
+                continue
+
+            poly_4326 = reproject_to_4326(poly_3067)
+            geojson = dict(_mapping(poly_4326))
+
+            job_dir.mkdir(parents=True, exist_ok=True)
+            job_params = {
+                "job_name": id_,
+                "saved_at": None,
+                "inputs": {
+                    "parcel_ids": [id_] if id_type == "parcels" else [],
+                    "property_ids": [id_] if id_type == "properties" else [],
+                },
+                "flight": {
+                    "drone": params.get("drone"),
+                    "height_m": params.get("height_m"),
+                    "subcategory": params.get("subcategory", "A3"),
+                },
+                "polygon": {
+                    "offset_m": params.get("offset_m", 0.0),
+                    "simplify": params.get("simplify", "auto"),
+                    "keepout": params.get("keepout", True),
+                },
+                "safety": {
+                    "preview_radius_m": params.get("preview_radius_m"),
+                },
+                "custom_polygon_4326": geojson,
+                "batch_created": True,
+                "color": None,
+                "last_preview_geojson": None,
+            }
+            (job_dir / "job_params.json").write_text(
+                json.dumps(job_params, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            results.append({"id": id_, "status": "ok"})
+
+        except Exception as exc:
+            log.warning("Batch: failed to create skeleton for %s: %s", id_, exc)
+            results.append({"id": id_, "status": "error", "reason": str(exc)})
+
+    _cb(progress_cb, "batch", f"Done — {sum(r['status']=='ok' for r in results)}/{total} created", 95)
+    return results
 
 
 def _require_api_key() -> str:

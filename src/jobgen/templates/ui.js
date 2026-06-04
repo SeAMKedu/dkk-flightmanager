@@ -4,6 +4,7 @@ var outputDir = '';
 var previewData = null;
 var editedPoly = null;
 var polyModified = false;
+var _polySetWithIds = false; // was the polygon established while ID fields were populated?
 var isRunning = false;
 var _pendingPreview = false;  // startPreview() deferred because isRunning was true
 var currentSSE = null;
@@ -11,9 +12,11 @@ var editMode = false;
 var _bridgeMode = false;
 // Jobs panel state
 var _dirty = false;
-var _activeJob = null;
+var _activeJob = null;       // full path (folder/name or name)
+var _activeJobFolder = null; // folder part, null for root
 var _jpOpen = localStorage.getItem('jp-open') !== 'false';
-var _jobsCache = [];
+var _jobsCache = [];         // flat list of all job cards (for filter search)
+var _jobsGroups = [];        // grouped structure from API
 var _bridgePts = [];        // [{coord:[lng,lat], polyIdx}]
 var _bridgeVerts = [];      // all vertices of current survey geometry
 var _bridgeGroup = null;
@@ -24,8 +27,34 @@ var _editVHandler = null;  // draw:editvertex → re-patch midpoint icons
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {attribution:'&copy; OpenStreetMap', maxZoom:19}).addTo(map);
+var _baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution:'&copy; OpenStreetMap', maxZoom:19});
+var _baseOrto = null;
+var _baseLayerCtrl = null;
+_baseOSM.addTo(map);
+
+function _initBaseLayers(mmlKey) {
+  if (!mmlKey) return;
+  var url = 'https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts'
+    + '?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0'
+    + '&LAYER=ortokuva&STYLE=default&TILEMATRIXSET=WGS84_Pseudo-Mercator'
+    + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg'
+    + '&api-key=' + mmlKey;
+  _baseOrto = L.tileLayer(url, {attribution:'&copy; <a href="https://maanmittauslaitos.fi">MML</a>', maxZoom:21});
+  if (_baseLayerCtrl) map.removeControl(_baseLayerCtrl);
+  _baseLayerCtrl = L.control.layers({'Map': _baseOSM, 'Ortho': _baseOrto}, null, {position:'topleft', collapsed:true}).addTo(map);
+}
+
+function resetMapToUserLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function(pos) {
+      map.setView([pos.coords.latitude, pos.coords.longitude], 15);
+    });
+  } else {
+    map.setView([64.5, 26.0], 5);
+  }
+}
+resetMapToUserLocation();
 
 // DSM pane sits below overlayPane (400) so vectors always render on top
 map.createPane('dsmPane');
@@ -37,9 +66,7 @@ map.addControl(new L.Control.Draw({draw:false, edit:{featureGroup:editLayers, re
 
 map.on(L.Draw.Event.EDITED, function(e) {
   e.layers.eachLayer(function(l) {
-    editedPoly = layerGeom(l);
-    polyModified = true; markDirty();
-    document.getElementById('modbadge').style.display = 'block';
+    _setEditedPoly(layerGeom(l)); markDirty();
   });
   editMode = false;
   map.doubleClickZoom.enable();
@@ -93,6 +120,8 @@ async function init() {
     }
     document.getElementById('kochk').checked = cfg.keepout !== false;
     updateGsd();
+    _mmlApiKey = cfg.mml_api_key || '';
+    if (_mmlApiKey) _initBaseLayers(_mmlApiKey);
     console.log('[init] config loaded, outputDir='+outputDir+', drone='+cfg.default_drone);
   } catch(e) {
     console.error('[init] failed:', e);
@@ -116,7 +145,8 @@ function defaultJobName() {
 
 function updatePathHint() {
   var jn = document.getElementById('jname').value.trim() || '(name)';
-  document.getElementById('pathint').textContent = 'Output: ' + outputDir + '/' + jn;
+  var rel = _activeJobFolder ? _activeJobFolder + '/' + jn : jn;
+  document.getElementById('pathint').textContent = 'Output: ' + outputDir + '/' + rel;
 }
 document.getElementById('jname').addEventListener('input', updatePathHint);
 
@@ -209,20 +239,47 @@ function getSimplify() {
 }
 _simpRender();
 
-// Clear polygon edit when geometry params change
-['offset','kochk','dsel'].forEach(function(id){
+// Clear polygon edit when geometry source params change
+['kochk','dsel'].forEach(function(id){
   document.getElementById(id).addEventListener('change', clearPolyEdit);
 });
 document.getElementById('pids').addEventListener('input', clearPolyEdit);
 document.getElementById('kids').addEventListener('input', clearPolyEdit);
 function clearPolyEdit() {
-  editedPoly = null; polyModified = false;
+  // Clear the custom polygon only when the polygon was established WITH IDs present.
+  // If the polygon was drawn/loaded while IDs were empty, changing IDs afterwards
+  // should keep the polygon as the survey area and just update the parcel-outline
+  // reference layer.  Only the explicit Reset button truly discards a custom polygon.
+  var hasPids = !!(document.getElementById('pids').value.trim() || document.getElementById('kids').value.trim());
+  if (!hasPids) return;              // no IDs → always keep (existing rule)
+  if (!_polySetWithIds) return;      // polygon pre-dates the IDs → keep it
+  _clearEditedPoly();
+}
+
+function _setEditedPoly(geom) {
+  /**
+   * Central assignment for editedPoly.  Records whether ID fields were already
+   * populated when the polygon was established — used by clearPolyEdit() to decide
+   * whether a later ID-field change should discard the polygon or keep it.
+   */
+  editedPoly = geom;
+  polyModified = true;
+  _polySetWithIds = !!(
+    document.getElementById('pids').value.trim() ||
+    document.getElementById('kids').value.trim()
+  );
+  document.getElementById('modbadge').style.display = 'block';
+}
+
+function _clearEditedPoly() {
+  editedPoly = null; polyModified = false; _polySetWithIds = false;
   document.getElementById('modbadge').style.display = 'none';
 }
 
 // Auto-update on flight / polygon param changes (only when a preview exists)
 var _autoTimer = null;
 var _lastPreviewedIds = '';
+var _fitBoundsOnNextRender = false;
 
 function idsKey() {
   return document.getElementById('pids').value.trim() + '||' + document.getElementById('kids').value.trim();
@@ -248,6 +305,7 @@ function onIdBlur() {
     var key = idsKey();
     if (!key.replace('||','').trim()) return; // no IDs entered
     if (key === _lastPreviewedIds) return;     // unchanged since last fetch
+    _fitBoundsOnNextRender = true;
     scheduleAutoUpdate(true);
   }, 150);
 }
@@ -257,6 +315,7 @@ document.getElementById('kids').addEventListener('blur', onIdBlur);
 // New Job — reset editor to a blank slate
 function newJob() {
   if (isRunning) return;
+  if (_mvMode) closeMapView();
   confirmIfDirty(_doNewJob);
 }
 function _doNewJob() {
@@ -274,8 +333,9 @@ function _doNewJob() {
   editMode = false;
   _detachEditListeners();
   // Reset state
-  previewData = null; editedPoly = null; polyModified = false; _lastPreviewedIds = '';
-  _activeJob = null; _dirty = false; _altCap = null;
+  previewData = null; _clearEditedPoly(); _lastPreviewedIds = '';
+  _activeJob = null; _activeJobFolder = null; _dirty = false; _altCap = null;
+  _setColorPicker(null);
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
   clearPolyEdit();
   clearError();
@@ -285,14 +345,13 @@ function _doNewJob() {
   hideStaleNotice();
   document.getElementById('xb').disabled = true;
   document.getElementById('rstbtn').disabled = true;
-  document.getElementById('bridge-btn').disabled = true;
   renderStatus(null);
   setRadiusLinked(true);
   document.getElementById('legend').classList.add('inactive');
   // Deselect panel card
   document.querySelectorAll('.jcard').forEach(function(c){ c.classList.remove('active'); });
   focusArea();
-  map.setView([64.5, 26.0], 5);
+  resetMapToUserLocation();
 }
 
 // ── Area section focus hint ───────────────────────────────────────────────────
@@ -417,10 +476,10 @@ async function startPreview() {
   if (isRunning || editMode) return;  // don't preview while editing — renderMap clears editLayers
   clearError();
   var p = getParams();
-  if (!p.parcel_ids.length && !p.property_ids.length) {
+  if (polyModified) p.custom_polygon = editedPoly;
+  if (!p.parcel_ids.length && !p.property_ids.length && !p.custom_polygon) {
     showError('Enter at least one parcel ID or property ID.'); return;
   }
-  if (polyModified) p.custom_polygon = editedPoly;
   await runJob('/api/preview', p, 'Preview', onPreviewDone);
 }
 
@@ -431,8 +490,11 @@ async function startExport() {
   var jn = document.getElementById('jname').value.trim();
   if (!jn) { showError('Enter a job name.'); return; }
   if (editMode) saveEdit();  // commit any pending vertex edits before saving
+  var colorEl = document.getElementById('job-color');
   var p = Object.assign(getParams(), {
     job_name: jn,
+    folder: _activeJobFolder || null,
+    color: colorEl.value !== _DEFAULT_JOB_COLOR ? colorEl.value : null,
     custom_polygon: polyModified ? editedPoly : null
   });
   await runJob('/api/export', p, 'Saving…', onSaveDone);
@@ -536,7 +598,6 @@ function onPreviewDone(payload) {
   clearAreaFocus();
   document.getElementById('xb').disabled = false;
   document.getElementById('rstbtn').disabled = false;
-  // bridge-btn stays disabled until the user enters edit mode
   // Compute the lowest zone floor (lower_limit) across all zone hits.
   // lower_limit is the binding altitude: fly below it to exit the zone without authorisation.
   // Zones with lower_limit=0/null apply from the ground — no safe altitude below them.
@@ -554,6 +615,12 @@ function onPreviewDone(payload) {
     if (_radiusLinked) setRadiusLinked(true);  // re-sync radius to new height
   }
   try {
+    // If zones are appearing for the first time (layer was absent before), force them
+    // visible regardless of the previously-saved eye state.
+    if (savedVis && (payload.zone_hits||[]).length && !lrs.zones) savedVis.zones = true;
+    // Force original-areas layer visible when IDs are added to a custom-polygon job
+    // (transition from no areas → has areas).
+    if (savedVis && (payload.original_areas||[]).length && !lrs.areas) savedVis.areas = true;
     renderMap(payload);
     redrawRings();
     resetLegend(savedVis);  // null on first render → applies startOff defaults
@@ -713,7 +780,7 @@ function renderMap(data) {
       l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!editMode && !_bridgeMode) toggleEdit(); });
     });
     console.log('[renderMap] survey bounds', lrs.survey.getBounds());
-    map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]});
+    if (_fitBoundsOnNextRender) { _fitBoundsOnNextRender = false; map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]}); }
   } else {
     console.warn('[renderMap] no survey polygons rendered, survey type:', data.survey && data.survey.type);
   }
@@ -804,7 +871,6 @@ function toggleEdit() {
   _editVHandler = function() { setTimeout(_patchMidpointIcons, 0); };
   map.on('draw:editvertex', _editVHandler);
   _attachEditListeners();
-  document.getElementById('bridge-btn').disabled = false;
 }
 
 function saveEdit() {
@@ -818,10 +884,12 @@ function saveEdit() {
     if (l.editing && l.editing.enabled()) l.editing.disable();
   });
   editLayers.clearLayers();
-  editedPoly = liveGeom;
   if (liveGeom) {
-    polyModified = true; markDirty();
-    document.getElementById('modbadge').style.display = 'block';
+    // Bake in the current visual state: the edited shape already incorporates any
+    // offset that was active when the user entered edit mode, so clear the offset
+    // to avoid double-applying it on the next preview.
+    document.getElementById('offset').value = 0;
+    _setEditedPoly(liveGeom); markDirty();
     _updateSurveyDisplay(liveGeom);
   } else {
     var _fallback = (previewData && previewData.survey) || null;
@@ -831,11 +899,15 @@ function saveEdit() {
   exitBridgeMode();
   _detachEditListeners();
   if (_editVHandler) { map.off('draw:editvertex', _editVHandler); _editVHandler = null; }
-  document.getElementById('bridge-btn').disabled = true;
+  // Auto-fetch buildings + zones for the new polygon shape.
+  // Deferred so startExport()'s runJob() can set isRunning=true first if this
+  // saveEdit() was called from startExport(), preventing a double-run.
+  setTimeout(startPreview, 0);
 }
 
 // Dblclick on map background (not on polygon) saves the edit
 map.on('dblclick', function(e) {
+  if (_mvMode) return;
   if (editMode) saveEdit();
 });
 
@@ -844,6 +916,35 @@ document.addEventListener('keydown', function(e) {
     if (_bridgeMode) exitBridgeMode();
     else if (editMode) saveEdit();
   }
+});
+
+// ── Right-click scratch square ────────────────────────────────────────────────
+// Right-click on an empty map creates a 300×300 m square centred on the cursor.
+// Blocked when a polygon already exists or when edit/bridge mode is active.
+map.on('contextmenu', function(e) {
+  if (_mvMode) { if (_mvSelected.size > 0) mvClearSel(); return; }
+  if (editMode || _bridgeMode || _currentSurveyGeom()) return;
+  var lat = e.latlng.lat, lng = e.latlng.lng;
+  var dLat = 150 / 111320;
+  var dLng = 150 / (111320 * Math.cos(lat * Math.PI / 180));
+  var geom = {
+    type: 'Polygon',
+    coordinates: [[
+      [lng - dLng, lat - dLat],
+      [lng + dLng, lat - dLat],
+      [lng + dLng, lat + dLat],
+      [lng - dLng, lat + dLat],
+      [lng - dLng, lat - dLat]
+    ]]
+  };
+  _setEditedPoly(geom);
+  markDirty();
+  previewData = {survey: geom};
+  _updateSurveyDisplay(geom);
+  map.fitBounds(lrs.survey.getBounds(), {padding: [60, 60]});
+  document.getElementById('xb').disabled = false;
+  document.getElementById('rstbtn').disabled = false;
+  toggleEdit();
 });
 
 // ── Edit-mode container listeners (capture phase, bypass Leaflet.draw) ────────
@@ -993,11 +1094,6 @@ function _nearestVertex(latlng, snapPx) {
   return best;
 }
 
-function toggleBridgeMode() {
-  if (_bridgeMode) exitBridgeMode();
-  else enterBridgeMode();
-}
-
 function enterBridgeMode() {
   if (!previewData) return;
   _bridgeMode = true;
@@ -1006,9 +1102,6 @@ function enterBridgeMode() {
   if (_bridgeGroup) map.removeLayer(_bridgeGroup);
   _bridgeGroup = L.layerGroup().addTo(map);
   map.boxZoom.disable();  // prevent Shift+drag box-zoom during picking
-  var btn = document.getElementById('bridge-btn');
-  btn.textContent = '✕ Cancel bridge/cut';
-  btn.classList.add('active');
   map.getContainer().style.cursor = 'crosshair';
   _updateBridgePreview();
 }
@@ -1062,9 +1155,6 @@ function exitBridgeMode() {
   hint.style.display = 'none';
   hint.style.background = '#1e293b';
   hint.style.color = '';
-  var btn = document.getElementById('bridge-btn');
-  btn.textContent = '⬡ Bridge / Cut';
-  btn.classList.remove('active');
   map.getContainer().style.cursor = '';
 }
 
@@ -1141,12 +1231,9 @@ async function _commitBridge() {
       editMode = false;
       map.doubleClickZoom.enable();
       editLayers.clearLayers();
-      document.getElementById('bridge-btn').disabled = true;
     }
     _detachEditListeners();
-    editedPoly = data.geometry;
-    polyModified = true; markDirty();
-    document.getElementById('modbadge').style.display = 'block';
+    _setEditedPoly(data.geometry); markDirty();
     document.getElementById('rstbtn').disabled = false;
     _updateSurveyDisplay(data.geometry);
   } catch(e) {
@@ -1172,9 +1259,8 @@ function _updateSurveyDisplay(geom) {
 }
 
 function resetPoly() {
-  if (!previewData) return;
   saveEdit();  // exit edit mode cleanly if active
-  clearPolyEdit();
+  _clearEditedPoly();  // unconditional — this is the explicit "start fresh from IDs" action
   // Cancel any pending auto-update so the stale simplify value doesn't fire after reset
   if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
   // Reset polygon controls to neutral: no offset, no simplification
@@ -1188,7 +1274,8 @@ function resetPoly() {
 function onSaveDone(payload) {
   console.log('[save done]', payload);
   document.getElementById('xb').disabled = false;
-  _activeJob = payload.job_name || null;
+  _activeJob = payload.job_name ? (payload.folder ? payload.folder + '/' + payload.job_name : payload.job_name) : null;
+  _activeJobFolder = payload.folder || null;
   _dirty = false;
   if (payload.stats) renderStatus(payload.stats);
   // Open the panel (first save reveals it) then refresh the job cards
@@ -1253,7 +1340,7 @@ function setJpOpen(open) {
 function toggleJp() { setJpOpen(!_jpOpen); }
 
 document.getElementById('jp-filter').addEventListener('input', function() {
-  renderJobsList(_jobsCache);
+  renderJobsList(_jobsGroups);
 });
 
 async function loadJobsList() {
@@ -1261,59 +1348,129 @@ async function loadJobsList() {
     var r = await fetch('/api/jobs');
     if (!r.ok) return;
     var data = await r.json();
-    _jobsCache = data.jobs || [];
+    _jobsGroups = data.groups || [];
+    // Flatten to cache for filter searching
+    _jobsCache = [];
+    _jobsGroups.forEach(function(g){ _jobsCache = _jobsCache.concat(g.jobs || []); });
+    // Drop selections for jobs that no longer exist
+    var validPaths = new Set(_jobsCache.map(function(j){return j.path;}));
+    _selectedJobs.forEach(function(p){ if (!validPaths.has(p)) { _selectedJobs.delete(p); _selectedMeta.delete(p); } });
+    _updateSelBar();
     // Auto-open panel on first ever load if jobs exist
     if (_jobsCache.length > 0 && localStorage.getItem('jp-open') === null) {
       setJpOpen(true);
     }
-    renderJobsList(_jobsCache);
-    // Highlight active job card
-    if (_activeJob) {
-      document.querySelectorAll('.jcard').forEach(function(c){
-        c.classList.toggle('active', c.dataset.name === _activeJob);
-      });
-    }
+    renderJobsList(_jobsGroups);
   } catch(e) { console.error('[loadJobsList]', e); }
 }
 
-function renderJobsList(jobs) {
+function renderJobsList(groups) {
   var list = document.getElementById('jp-list');
   var filter = (document.getElementById('jp-filter').value || '').toLowerCase();
   list.innerHTML = '';
-  var filtered = jobs.filter(function(j){ return !filter || j.name.toLowerCase().includes(filter); });
-  if (!filtered.length) {
-    list.innerHTML = '<div style="padding:16px 8px;color:#475569;font-size:11px;text-align:center">'
-      + (filter ? 'No matches' : 'No saved jobs yet') + '</div>';
+
+  // If filtering, flatten and show matching cards without folder headers
+  if (filter) {
+    var matched = _jobsCache.filter(function(j){ return j.name.toLowerCase().includes(filter); });
+    if (!matched.length) {
+      list.innerHTML = '<div style="padding:16px 8px;color:#475569;font-size:11px;text-align:center">No matches</div>';
+      return;
+    }
+    matched.forEach(function(j){ list.appendChild(buildJobCard(j)); });
     return;
   }
-  filtered.forEach(function(j) { list.appendChild(buildJobCard(j)); });
+
+  if (!_jobsCache.length) {
+    list.innerHTML = '<div style="padding:16px 8px;color:#475569;font-size:11px;text-align:center">No saved jobs yet</div>';
+    return;
+  }
+
+  groups.forEach(function(g) { list.appendChild(buildFolderSection(g)); });
+}
+
+function buildFolderSection(group) {
+  var frag = document.createDocumentFragment();
+  var isRoot = group.name === null || group.name === undefined;
+  var folderKey = isRoot ? null : group.name;
+  var storageKey = 'jf-open-' + (isRoot ? '__root__' : group.name);
+  var isOpen = localStorage.getItem(storageKey) !== 'false';
+
+  // Both root and named folders get a header — root uses the output dir basename
+  var displayName = isRoot ? (outputDir.split('/').pop() || 'output') : group.name;
+  var dataFolder = isRoot ? '' : escHtml(group.name);
+
+  var hdr = document.createElement('div');
+  hdr.className = 'jfolder-hdr';
+  hdr.innerHTML = '<span class="jfolder-caret' + (isOpen ? ' open' : '') + '">&#9658;</span>'
+    + '<span class="jfolder-name" title="' + escHtml(displayName) + '">' + escHtml(displayName) + '</span>'
+    + '<span class="jfolder-count">' + group.jobs.length + '</span>'
+    + '<button class="jfolder-map-btn" data-folder="' + dataFolder + '" title="Show jobs on map"'
+    + ' onclick="showFolderOnMap(event,' + (isRoot ? 'null' : '\'' + escHtml(group.name) + '\'') + ')">Map</button>';
+
+  var container = document.createElement('div');
+  container.className = 'jfolder';
+  var jobs = document.createElement('div');
+  jobs.className = 'jfolder-jobs' + (isOpen ? '' : ' hidden');
+
+  hdr.addEventListener('click', function(e) {
+    if (e.target.closest('.jfolder-map-btn')) return;
+    isOpen = !isOpen;
+    localStorage.setItem(storageKey, isOpen ? 'true' : 'false');
+    jobs.classList.toggle('hidden', !isOpen);
+    hdr.querySelector('.jfolder-caret').classList.toggle('open', isOpen);
+  });
+
+  (group.jobs || []).forEach(function(j){ jobs.appendChild(buildJobCard(j)); });
+  container.appendChild(hdr);
+  container.appendChild(jobs);
+  frag.appendChild(container);
+  return frag;
 }
 
 function buildJobCard(j) {
   var card = document.createElement('div');
-  card.className = 'jcard' + (j.name === _activeJob ? ' active' : '') + (j.status === 'failed' ? ' failed' : '');
-  card.dataset.name = j.name;
+  var isActive = j.path === _activeJob;
+  var isSelected = _selectedJobs.has(j.path);
+  card.className = 'jcard'
+    + (isActive ? ' active' : '')
+    + (j.status === 'failed' ? ' failed' : '')
+    + (isSelected ? ' selected' : '');
+  card.dataset.path = j.path;
   var date = j.saved_at || j.run_at || '';
   var dateStr = date ? new Date(date).toLocaleString('fi-FI',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
   var meta = [dateStr, j.area_ha != null ? j.area_ha.toFixed(1)+' ha' : '', j.drone||''].filter(Boolean).join(' · ');
   var badge = j.status === 'failed' ? '<span class="jbadge fail">!</span>'
+    : j.untouched              ? '<span class="jbadge untouched">new</span>'
     : j.flight_ready === true  ? '<span class="jbadge ok">&#10003;</span>'
     : j.needs_review === true  ? '<span class="jbadge wrn">!</span>'
     : '';
   var thumb = j.thumbnail_svg || '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#1e293b"/><text x="32" y="40" text-anchor="middle" font-size="28" fill="#334155">?</text></svg>';
   card.innerHTML =
-    '<div class="jcard-thumb">' + thumb + '</div>'
+    '<label class="jcard-sel" title="Select"><input type="checkbox" class="jcard-chk"' + (isSelected ? ' checked' : '') + '></label>'
+    + '<div class="jcard-thumb">' + thumb + '</div>'
     + '<div class="jcard-body">'
     +   '<div class="jcard-name">' + escHtml(j.name) + '</div>'
     +   '<div class="jcard-meta">' + escHtml(meta) + '</div>'
     + '</div>'
     + '<div class="jcard-right">' + badge
-    +   '<button class="jcard-menu-btn" title="Actions" onclick="toggleCardMenu(event,\'' + escHtml(j.name) + '\',\'' + j.status + '\')">&#8942;</button>'
+    +   '<button class="jcard-menu-btn" title="Actions">&#8942;</button>'
     + '</div>';
+
+  card.querySelector('.jcard-menu-btn').addEventListener('click', function(e) {
+    toggleCardMenu(e, j);
+  });
+
+  // Checkbox toggles selection
+  var chk = card.querySelector('.jcard-chk');
+  chk.addEventListener('change', function(e) {
+    e.stopPropagation();
+    toggleJobSelection(j, chk.checked);
+  });
+
   if (j.status !== 'failed') {
     card.addEventListener('click', function(e) {
-      if (e.target.closest('.jcard-menu-btn') || e.target.closest('.jmenu')) return;
-      openJob(j.name);
+      if (e.target.closest('.jcard-menu-btn') || e.target.closest('.jmenu') || e.target.closest('.jcard-sel')) return;
+      openJob(j.path);
     });
   }
   return card;
@@ -1321,20 +1478,21 @@ function buildJobCard(j) {
 
 // ── Card menu ─────────────────────────────────────────────────────────────────
 var _openMenu = null;
-function toggleCardMenu(e, name, status) {
+function toggleCardMenu(e, j) {
   e.stopPropagation();
   closeCardMenu();
   var btn = e.currentTarget;
   var menu = document.createElement('div');
   menu.className = 'jmenu';
-  var items = status === 'failed'
-    ? [['Delete', function(){ confirmDeleteJob(name); }]]
+  var items = j.status === 'failed'
+    ? [['Delete', function(){ confirmDeleteJob(j); }]]
     : [
-        ['Open',            function(){ openJob(name); }],
-        ['Show folder',     function(){ revealJob(name); }],
-        ['Clone',           function(){ cloneJob(name); }],
-        ['Rename',          function(){ startRename(name); }],
-        ['Delete',          function(){ confirmDeleteJob(name); }],
+        ['Open',            function(){ openJob(j.path); }],
+        ['Show folder',     function(){ revealJob(j.path); }],
+        ['Move to Folder',  function(){ showMoveMenu(btn, j); }],
+        ['Clone',           function(){ cloneJob(j.path); }],
+        ['Rename',          function(){ startRename(j); }],
+        ['Delete',          function(){ confirmDeleteJob(j); }],
       ];
   items.forEach(function(it) {
     var mi = document.createElement('button');
@@ -1343,7 +1501,6 @@ function toggleCardMenu(e, name, status) {
     mi.addEventListener('click', function(ev) { ev.stopPropagation(); closeCardMenu(); it[1](); });
     menu.appendChild(mi);
   });
-  // Position relative to the card's right area
   btn.closest('.jcard-right').appendChild(menu);
   _openMenu = menu;
   setTimeout(function() { document.addEventListener('click', closeCardMenu, {once:true}); }, 0);
@@ -1352,17 +1509,392 @@ function closeCardMenu() {
   if (_openMenu) { _openMenu.remove(); _openMenu = null; }
 }
 
-// ── Open job ──────────────────────────────────────────────────────────────────
-function openJob(name) {
-  if (isRunning) return;
-  confirmIfDirty(function() { _doOpenJob(name); });
+// ── Move to folder ─────────────────────────────────────────────────────────────
+function showMoveMenu(btn, j) {
+  closeCardMenu();
+  // Collect all folder names from current groups
+  var folderNames = [];
+  document.querySelectorAll('.jfolder-name').forEach(function(el){
+    var n = el.textContent.trim();
+    if (n) folderNames.push(n);
+  });
+
+  var sub = document.createElement('div');
+  sub.className = 'jmenu jmenu-sub';
+
+  var makeItem = function(label, fn) {
+    var mi = document.createElement('button');
+    mi.className = 'jmenu-item';
+    mi.textContent = label;
+    mi.addEventListener('click', function(ev){ ev.stopPropagation(); sub.remove(); fn(); });
+    sub.appendChild(mi);
+  };
+
+  if (j.folder) {
+    makeItem('Move to root', function(){ doMoveJob(j, null); });
+  }
+  folderNames.forEach(function(name) {
+    if (name !== j.folder) {
+      makeItem('→ ' + name, function(){ doMoveJob(j, name); });
+    }
+  });
+  makeItem('+ New folder…', function(){ promptNewFolderForJob(j); });
+
+  btn.closest('.jcard-right').appendChild(sub);
+  setTimeout(function(){ document.addEventListener('click', function(){ sub.remove(); }, {once:true}); }, 0);
 }
-async function _doOpenJob(name) {
+
+async function doMoveJob(j, toFolder) {
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(name));
+    var r = await fetch(jobApiUrl(j.path, '/move'), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({folder: toFolder})
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(err.detail || 'Move failed'); return;
+    }
+    var data = await r.json();
+    if (_activeJob === j.path) {
+      _activeJob = data.path;
+      _activeJobFolder = data.folder || null;
+    }
+    await loadJobsList();
+  } catch(e) { showError('Move failed: ' + e.message); }
+}
+
+async function promptNewFolderForJob(j) {
+  var name = window.prompt('New folder name:');
+  if (!name || !name.trim()) return;
+  name = name.trim();
+  try {
+    var r = await fetch('/api/folders', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      // 409 = already exists, still try the move
+      if (r.status !== 409) { showError(err.detail || 'Could not create folder'); return; }
+    }
+    await doMoveJob(j, name);
+  } catch(e) { showError('Failed: ' + e.message); }
+}
+
+// ── Map view (in-place — reuses existing #map, hides #sb) ─────────────────────
+var _mvMode = false;
+var _mvJobGroup = null;      // L.LayerGroup on the main map
+var _mvLayers = [];          // [{path, layer, feature}]
+var _mvSelected = new Set();
+var _mvAllFeatures = [];
+var _mvCurrentFolder = null;
+var _DEFAULT_COLOR = '#3b82f6';
+var _mmlApiKey = '';           // set from /api/config
+
+function showFolderOnMap(e, folderName) {
+  e.stopPropagation();
+  var f = folderName || null;
+  if (_mvMode && _mvCurrentFolder === f) { closeMapView(); return; }
+  openMapView(f);
+}
+
+function openMapView(folderFilter) {
+  _mvMode = true;
+  _mvCurrentFolder = folderFilter || null;
+  if (editMode) saveEdit();
+
+  // Remove any live preview layers (zones, keepout circles, etc.) left on the map
+  Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+  editLayers.clearLayers();
+
+  // Hide editor sidebar, swap legend
+  document.getElementById('sb').classList.add('mv-hidden');
+  document.getElementById('legend').classList.add('mv-hidden');
+  document.getElementById('sp').classList.add('mv-hidden');
+  document.getElementById('mv-status-legend').classList.add('visible');
+  // Highlight the active folder's Map button
+  document.querySelectorAll('.jfolder-map-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.folder === (folderFilter || ''));
+  });
+
+  _mvSelected.clear();
+  _mvUpdateSelBar();
+
+  if (!_mvJobGroup) { _mvJobGroup = L.layerGroup().addTo(map); }
+  _mvLoad(folderFilter);
+}
+
+function closeMapView() {
+  if (!_mvMode) return;
+  _mvMode = false;
+  _mvCurrentFolder = null;
+  _mvClearLayers();
+  _mvSelected.forEach(function(path) {
+    var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
+    if (card) card.classList.remove('selected');
+  });
+  _mvSelected.clear();
+  _mvUpdateSelBar();
+
+  document.getElementById('sb').classList.remove('mv-hidden');
+  document.getElementById('legend').classList.remove('mv-hidden');
+  document.getElementById('sp').classList.remove('mv-hidden');
+  document.getElementById('mv-status-legend').classList.remove('visible');
+  document.querySelectorAll('.jfolder-map-btn').forEach(function(btn) { btn.classList.remove('active'); });
+  map.closePopup();
+}
+
+async function _mvLoad(folderFilter) {
+  try {
+    var r = await fetch('/api/jobs/geojson');
+    if (!r.ok) return;
+    var fc = await r.json();
+    _mvAllFeatures = fc.features || [];
+    _mvApplyFilter(folderFilter);
+  } catch(e) { console.error('[mapview]', e); }
+}
+
+function _mvApplyFilter(folderFilter) {
+  _mvClearLayers();
+  var bounds = [];
+  var features = folderFilter
+    ? _mvAllFeatures.filter(function(f){ return f.properties.folder === folderFilter; })
+    : _mvAllFeatures;
+  features.forEach(function(f) {
+    if (!f.geometry) return;
+    var layer = _mvMakeLayer(f);
+    if (layer) {
+      _mvJobGroup.addLayer(layer);
+      _mvLayers.push({path: f.properties.path, layer: layer, feature: f});
+      try { bounds.push(layer.getBounds()); } catch(e) {}
+    }
+  });
+  if (bounds.length) {
+    var combined = bounds[0];
+    bounds.forEach(function(b){ combined = combined.extend(b); });
+    map.fitBounds(combined, {padding: [40, 40]});
+  }
+}
+
+function _mvClearLayers() {
+  _mvLayers.forEach(function(item){ if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); });
+  _mvLayers = [];
+}
+
+function _mvMakeLayer(feature) {
+  var p = feature.properties;
+  var color = p.color || _DEFAULT_COLOR;
+  var dashArray = _mvDash(p);
+  var geom = feature.geometry;
+  try {
+    var coords;
+    if (geom.type === 'Polygon') {
+      coords = geom.coordinates[0].map(function(c){ return [c[1], c[0]]; });
+    } else if (geom.type === 'MultiPolygon') {
+      // Leaflet polygon accepts array of rings
+      coords = geom.coordinates.map(function(poly){
+        return poly[0].map(function(c){ return [c[1], c[0]]; });
+      });
+    } else { return null; }
+
+    var layer = L.polygon(coords, {
+      color: color,
+      weight: 2.5,
+      fillColor: color,
+      fillOpacity: 0.18,
+      dashArray: dashArray,
+    });
+
+    var statusLabel = p.flight_ready === true ? '✓ Ready'
+      : p.needs_review === true ? '⚠ Review'
+      : p.untouched ? 'New' : '—';
+    var areaStr = p.area_ha != null ? ' · ' + p.area_ha.toFixed(1) + ' ha' : '';
+    var ttLabel = escHtml(p.name) + (p.folder ? ' (' + escHtml(p.folder) + ')' : '')
+      + '<br><span style="font-size:10px">' + statusLabel + areaStr + '</span>';
+    layer.bindTooltip(ttLabel, {direction: 'top', opacity: 0.92, sticky: false, className: 'mv-tooltip'});
+
+    layer.on('click', function(e) {
+      L.DomEvent.stopPropagation(e);
+      _mvToggleSel(p.path);
+    });
+    layer.on('dblclick', function(e) {
+      L.DomEvent.stopPropagation(e);
+      mvOpenJob(p.path);
+    });
+    return layer;
+  } catch(e) { return null; }
+}
+
+function _mvDash(p) {
+  if (p.status === 'failed') return '2, 6';
+  if (p.flight_ready === true) return null;
+  if (p.needs_review === true) return '10, 5';
+  if (p.untouched) return '4, 4';
+  return null;
+}
+
+function _mvShowPopup(latlng, feature, layer) {
+  var p = feature.properties;
+  var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
+    : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
+    : p.untouched ? '<span style="color:#64748b">New</span>'
+    : '<span style="color:#94a3b8">—</span>';
+  var area = p.area_ha != null ? p.area_ha.toFixed(1) + ' ha' : '';
+  var html = '<div style="font-size:12px;line-height:1.7;min-width:160px">'
+    + '<b style="font-size:13px">' + escHtml(p.name) + '</b><br>'
+    + (p.folder ? '<span style="font-size:10px;color:#64748b">' + escHtml(p.folder) + '</span><br>' : '')
+    + statusChip + (area ? ' &nbsp;' + area : '')
+    + '<div style="display:flex;gap:5px;margin-top:8px">'
+    + '<button onclick="mvOpenJob(\'' + escHtml(p.path) + '\')" style="flex:1;padding:4px;font-size:11px;background:#3b82f6;color:#fff;border:none;border-radius:3px;cursor:pointer">Open</button>'
+    + '<button onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')" style="flex:1;padding:4px;font-size:11px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer">Delete</button>'
+    + '</div></div>';
+
+  L.popup({closeButton: true, minWidth: 170}).setLatLng(latlng).setContent(html).openOn(map);
+}
+
+function mvOpenJob(path) {
+  map.closePopup();
+  closeMapView();
+  openJob(path);
+}
+
+async function mvDeleteJob(path, name) {
+  if (!window.confirm('Delete job "' + name + '"?')) return;
+  try {
+    var r = await fetch(jobApiUrl(path), {method: 'DELETE'});
+    if (!r.ok) { showError('Delete failed'); return; }
+    map.closePopup();
+    _mvLayers = _mvLayers.filter(function(item) {
+      if (item.path === path) { _mvJobGroup.removeLayer(item.layer); return false; }
+      return true;
+    });
+    _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== path; });
+    if (_activeJob === path) { _activeJob = null; _activeJobFolder = null; }
+    loadJobsList();
+  } catch(e) { showError('Delete failed: ' + e.message); }
+}
+
+// Map view multi-select
+function _mvToggleSel(path) {
+  var item = _mvLayers.find(function(i){ return i.path === path; });
+  if (!item) return;
+  var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
+  if (_mvSelected.has(path)) {
+    _mvSelected.delete(path);
+    var origColor = item.feature.properties.color || _DEFAULT_COLOR;
+    item.layer.setStyle({weight: 2.5, opacity: 1, color: origColor, fillColor: origColor});
+    if (card) card.classList.remove('selected');
+  } else {
+    _mvSelected.add(path);
+    item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
+    if (card) card.classList.add('selected');
+  }
+  _mvUpdateSelBar();
+}
+
+function mvClearSel() {
+  _mvSelected.forEach(function(path) {
+    var item = _mvLayers.find(function(i){ return i.path === path; });
+    if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
+    var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
+    if (card) card.classList.remove('selected');
+  });
+  _mvSelected.clear();
+  _mvUpdateSelBar();
+}
+
+function _mvUpdateSelBar() {
+  var n = _mvSelected.size;
+  document.getElementById('mv-actions').classList.toggle('visible', n > 0);
+  document.getElementById('mv-sel-count').textContent = n + ' selected';
+  document.getElementById('mv-merge-btn').disabled = n < 2;
+  var openBtn = document.getElementById('mv-open-btn');
+  if (openBtn) {
+    openBtn.style.display = n === 1 ? '' : 'none';
+    if (n === 1) openBtn.dataset.path = Array.from(_mvSelected)[0];
+  }
+}
+
+function mvMerge() {
+  // Populate list-view _selectedJobs from map selection and open merge modal
+  _selectedJobs.clear(); _selectedMeta.clear();
+  _mvSelected.forEach(function(path) {
+    var item = _mvLayers.find(function(i){ return i.path === path; });
+    if (item) {
+      var p = item.feature.properties;
+      _selectedJobs.add(path);
+      _selectedMeta.set(path, {path: path, name: p.name, folder: p.folder, untouched: p.untouched});
+    }
+  });
+  _updateSelBar();
+  closeMapView();
+  openMergeModal();
+}
+
+async function mvBulkMove() {
+  var paths = Array.from(_mvSelected);
+  var metas = paths.map(function(path) {
+    var item = _mvLayers.find(function(i){ return i.path === path; });
+    return item ? {path: path, name: item.feature.properties.name, folder: item.feature.properties.folder} : null;
+  }).filter(Boolean);
+  var folderNames = [];
+  document.querySelectorAll('.jfolder-name').forEach(function(el){
+    var n = el.textContent.trim(); if (n) folderNames.push(n);
+  });
+  var dest = window.prompt('Move to folder (blank = root, or folder name):\n\nAvailable: ' + (folderNames.join(', ') || '(none)'));
+  if (dest === null) return;
+  dest = dest.trim() || null;
+  for (var i = 0; i < metas.length; i++) {
+    try {
+      await fetch(jobApiUrl(metas[i].path, '/move'), {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({folder: dest})
+      });
+    } catch(e) { showError('Move failed: ' + e.message); }
+  }
+  mvClearSel();
+  await loadJobsList();
+  openMapView(dest);
+}
+
+async function mvBulkDelete() {
+  var n = _mvSelected.size;
+  if (!window.confirm('Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '?')) return;
+  var paths = Array.from(_mvSelected);
+  for (var i = 0; i < paths.length; i++) {
+    try {
+      await fetch(jobApiUrl(paths[i]), {method: 'DELETE'});
+      _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== paths[i]; });
+      _mvLayers = _mvLayers.filter(function(item) {
+        if (item.path === paths[i]) { if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); return false; }
+        return true;
+      });
+    } catch(e) { showError('Delete failed: ' + e.message); }
+  }
+  mvClearSel();
+  loadJobsList();
+}
+
+// ── URL helper ────────────────────────────────────────────────────────────────
+function jobApiUrl(path, suffix) {
+  var encoded = path.split('/').map(encodeURIComponent).join('/');
+  return '/api/jobs/' + encoded + (suffix || '');
+}
+
+// ── Open job ──────────────────────────────────────────────────────────────────
+function openJob(path) {
+  if (isRunning) return;
+  if (_mvMode) closeMapView();
+  confirmIfDirty(function() { _doOpenJob(path); });
+}
+async function _doOpenJob(path) {
+  try {
+    var r = await fetch(jobApiUrl(path));
     if (!r.ok) { showError('Could not load job: HTTP ' + r.status); return; }
     var data = await r.json();
     var p = data.params;
+    var name = path.includes('/') ? path.split('/').pop() : path;
     // Cancel any pending timer
     if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
     // Clear map first
@@ -1374,12 +1906,15 @@ async function _doOpenJob(name) {
     _restoreFormFromParams(p);
     document.getElementById('jname').value = name;
     updatePathHint();
-    _activeJob = name;
+    _activeJob = path;
+    _activeJobFolder = data.folder || null;
+    _setColorPicker(p && p.color);
     _dirty = false;
     clearError();
     // Highlight card
-    document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.name === name); });
-    // Restore map from stored preview (instant)
+    document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
+    // Restore map from stored preview (instant); fit bounds once for this job load
+    _fitBoundsOnNextRender = true;
     if (p && p.last_preview_geojson) {
       previewData = p.last_preview_geojson;
       _lastPreviewedIds = ((p.inputs && p.inputs.parcel_ids)||[]).join(',')
@@ -1391,17 +1926,24 @@ async function _doOpenJob(name) {
         renderStatus(previewData.stats);
         document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
-        document.getElementById('bridge-btn').disabled = true;
       } catch(ex) { console.error('[openJob] render error', ex); }
     } else {
       previewData = null;
-      document.getElementById('xb').disabled = true;
-      document.getElementById('rstbtn').disabled = true;
-      document.getElementById('bridge-btn').disabled = true;
       renderStatus(null);
       document.getElementById('legend').classList.add('inactive');
-      map.setView([64.5, 26.0], 5);
-      focusArea();
+      if (editedPoly) {
+        // Custom-polygon-only job: show the polygon immediately; startPreview() below will fill in DSM etc.
+        previewData = {survey: editedPoly};
+        _updateSurveyDisplay(editedPoly);
+        map.fitBounds(lrs.survey.getBounds(), {padding: [40, 40]});
+        document.getElementById('xb').disabled = false;
+        document.getElementById('rstbtn').disabled = false;
+      } else {
+        document.getElementById('xb').disabled = true;
+        document.getElementById('rstbtn').disabled = true;
+        resetMapToUserLocation();
+        focusArea();
+      }
     }
     // Cache staleness notice
     if (data.cache_stale && data.cache_stale.length) showStaleNotice(data.cache_stale);
@@ -1438,8 +1980,7 @@ function _restoreFormFromParams(p) {
     setRadiusLinked(true);
   }
   if (p.custom_polygon_4326) {
-    editedPoly = p.custom_polygon_4326; polyModified = true;
-    document.getElementById('modbadge').style.display = 'block';
+    _setEditedPoly(p.custom_polygon_4326);
   } else {
     editedPoly = null; polyModified = false;
     document.getElementById('modbadge').style.display = 'none';
@@ -1447,9 +1988,9 @@ function _restoreFormFromParams(p) {
 }
 
 // ── Reveal in file manager ────────────────────────────────────────────────────
-async function revealJob(name) {
+async function revealJob(path) {
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(name) + '/reveal', {method:'POST'});
+    var r = await fetch(jobApiUrl(path, '/reveal'), {method:'POST'});
     if (!r.ok) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Could not open folder');
@@ -1458,61 +1999,61 @@ async function revealJob(name) {
 }
 
 // ── Clone ─────────────────────────────────────────────────────────────────────
-async function cloneJob(name) {
+async function cloneJob(path) {
   if (isRunning) return;
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(name) + '/clone', {method:'POST'});
+    var r = await fetch(jobApiUrl(path, '/clone'), {method:'POST'});
     if (!r.ok) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Clone failed'); return;
     }
     var data = await r.json();
     await loadJobsList();
-    openJob(data.name);
+    openJob(data.path);
   } catch(e) { showError('Clone failed: ' + e.message); }
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────
-function confirmDeleteJob(name) {
-  var card = document.querySelector('.jcard[data-name="' + CSS.escape(name) + '"]');
+function confirmDeleteJob(j) {
+  var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (!card) return;
   card.innerHTML =
-    '<div style="padding:6px 10px;font-size:11px;color:#fca5a5;flex:1">Delete <b>' + escHtml(name) + '</b>?</div>'
+    '<div style="padding:6px 10px;font-size:11px;color:#fca5a5;flex:1">Delete <b>' + escHtml(j.name) + '</b>?</div>'
     + '<div style="display:flex;gap:4px;padding:6px 8px;flex-shrink:0">'
-    + '<button class="jcard-del-yes" onclick="deleteJob(\'' + escHtml(name).replace(/'/g,"\\'") + '\')">Delete</button>'
+    + '<button class="jcard-del-yes" onclick="deleteJob(' + escHtml(JSON.stringify(j)) + ')">Delete</button>'
     + '<button class="jcard-del-no" onclick="loadJobsList()">Cancel</button>'
     + '</div>';
   card.style.alignItems = 'center';
 }
-async function deleteJob(name) {
+async function deleteJob(j) {
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(name), {method:'DELETE'});
+    var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
     if (!r.ok) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Delete failed'); return;
     }
-    if (_activeJob === name) { _activeJob = null; _dirty = false; _doNewJob(); }
+    if (_activeJob === j.path) { _activeJob = null; _activeJobFolder = null; _dirty = false; _doNewJob(); }
     await loadJobsList();
   } catch(e) { showError('Delete failed: ' + e.message); }
 }
 
 // ── Rename ────────────────────────────────────────────────────────────────────
-function startRename(name) {
-  var card = document.querySelector('.jcard[data-name="' + CSS.escape(name) + '"]');
+function startRename(j) {
+  var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (!card) return;
   var nameEl = card.querySelector('.jcard-name');
   if (!nameEl) return;
   var input = document.createElement('input');
   input.className = 'jcard-rename-input';
-  input.value = name;
+  input.value = j.name;
   nameEl.replaceWith(input);
   input.focus(); input.select();
   var committed = false;
   function commit() {
     if (committed) return; committed = true;
     var newName = input.value.trim();
-    if (!newName || newName === name) { loadJobsList(); return; }
-    doRename(name, newName);
+    if (!newName || newName === j.name) { loadJobsList(); return; }
+    doRename(j, newName);
   }
   input.addEventListener('blur', commit);
   input.addEventListener('keydown', function(e) {
@@ -1520,9 +2061,9 @@ function startRename(name) {
     if (e.key === 'Escape') { committed = true; loadJobsList(); }
   });
 }
-async function doRename(oldName, newName) {
+async function doRename(j, newName) {
   try {
-    var r = await fetch('/api/jobs/' + encodeURIComponent(oldName), {
+    var r = await fetch(jobApiUrl(j.path), {
       method:'PATCH', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({new_name: newName})
     });
@@ -1530,8 +2071,9 @@ async function doRename(oldName, newName) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Rename failed'); await loadJobsList(); return;
     }
-    if (_activeJob === oldName) {
-      _activeJob = newName;
+    var data = await r.json();
+    if (_activeJob === j.path) {
+      _activeJob = data.path;
       document.getElementById('jname').value = newName;
       updatePathHint();
     }
@@ -1549,6 +2091,384 @@ function hideStaleNotice() {
   var el = document.getElementById('stale-notice');
   el.style.display = 'none'; el.textContent = '';
 }
+
+// ── Job color picker ──────────────────────────────────────────────────────────
+var _DEFAULT_JOB_COLOR = '#3b82f6';
+
+function _setColorPicker(color) {
+  var el = document.getElementById('job-color');
+  el.value = color || _DEFAULT_JOB_COLOR;
+  el.disabled = !_activeJob;
+}
+
+document.getElementById('job-color').addEventListener('change', async function() {
+  if (!_activeJob) return;
+  var color = this.value;
+  try {
+    await fetch(jobApiUrl(_activeJob), {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({color: color})
+    });
+  } catch(e) { console.warn('[color patch]', e); }
+});
+
+// ── Multi-select & bulk operations ────────────────────────────────────────────
+var _selectedJobs = new Set();   // Set of job path strings
+var _selectedMeta = new Map();   // path → job card object (for merge/move)
+
+function toggleJobSelection(j, selected) {
+  if (selected) {
+    _selectedJobs.add(j.path);
+    _selectedMeta.set(j.path, j);
+  } else {
+    _selectedJobs.delete(j.path);
+    _selectedMeta.delete(j.path);
+  }
+  // Update card class without re-rendering
+  var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
+  if (card) card.classList.toggle('selected', selected);
+  _updateSelBar();
+}
+
+function clearSelection() {
+  _selectedJobs.clear();
+  _selectedMeta.clear();
+  document.querySelectorAll('.jcard.selected').forEach(function(c) {
+    c.classList.remove('selected');
+    var chk = c.querySelector('.jcard-chk');
+    if (chk) chk.checked = false;
+  });
+  _updateSelBar();
+}
+
+function _updateSelBar() {
+  var n = _selectedJobs.size;
+  var bar = document.getElementById('jp-sel-bar');
+  bar.classList.toggle('visible', n > 0);
+  document.getElementById('jp-sel-count').textContent = n + ' selected';
+  // Merge requires ≥2
+  document.getElementById('sel-merge-btn').disabled = n < 2;
+}
+
+// ── Merge modal ───────────────────────────────────────────────────────────────
+function openMergeModal() {
+  if (_selectedJobs.size < 2) return;
+  var jobs = Array.from(_selectedMeta.values());
+  var names = jobs.map(function(j){ return j.name; });
+  // Detect strategy client-side: untouched = batch_created + no KMZ
+  var allUntouched = jobs.every(function(j){ return j.untouched; });
+  var strategyNote = allUntouched
+    ? '(IDs will be combined — geometry re-fetched on preview)'
+    : '(polygons will be unioned)';
+  document.getElementById('merge-sources').innerHTML =
+    'Merging: <b>' + names.map(escHtml).join(', ') + '</b><br>'
+    + '<span style="font-size:9px;color:#64748b">' + strategyNote + '</span>';
+  document.getElementById('merge-name').value = names[0] + '-merged';
+  document.getElementById('merge-folder').value = '';
+  document.getElementById('merge-del-src').checked = false;
+  document.getElementById('merge-modal').classList.add('open');
+  setTimeout(function(){ document.getElementById('merge-name').focus(); document.getElementById('merge-name').select(); }, 50);
+}
+
+function closeMergeModal() {
+  document.getElementById('merge-modal').classList.remove('open');
+}
+
+async function submitMerge() {
+  var newName = document.getElementById('merge-name').value.trim();
+  if (!newName) { document.getElementById('merge-name').focus(); return; }
+  var folder = document.getElementById('merge-folder').value.trim() || null;
+  var delSrc  = document.getElementById('merge-del-src').checked;
+  closeMergeModal();
+
+  try {
+    var r = await fetch('/api/merge', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        job_paths: Array.from(_selectedJobs),
+        new_name: newName,
+        folder: folder,
+        delete_sources: delSrc
+      })
+    });
+    if (!r.ok) {
+      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(e.detail || 'Merge failed'); return;
+    }
+    var merged = await r.json().catch(function(){return null;});
+    clearSelection();
+    await loadJobsList();
+    if (merged && merged.path) openJob(merged.path);
+  } catch(e) { showError('Merge failed: ' + e.message); }
+}
+
+// ── Bulk move ─────────────────────────────────────────────────────────────────
+function bulkMove() {
+  if (!_selectedJobs.size) return;
+  // Reuse the move submenu logic but for all selected jobs
+  var folderNames = [];
+  document.querySelectorAll('.jfolder-name').forEach(function(el){
+    var n = el.textContent.trim(); if (n) folderNames.push(n);
+  });
+
+  // Build a small inline picker anchored to the Move button
+  var btn = document.getElementById('jp-sel-bar').querySelector('.sel-action:nth-child(3)');
+  closeCardMenu();
+  var sub = document.createElement('div');
+  sub.className = 'jmenu';
+  sub.style.cssText = 'position:fixed;z-index:9999';
+  var rect = btn.getBoundingClientRect();
+  sub.style.top = (rect.bottom + 4) + 'px';
+  sub.style.left = rect.left + 'px';
+
+  var makeItem = function(label, fn) {
+    var mi = document.createElement('button');
+    mi.className = 'jmenu-item'; mi.textContent = label;
+    mi.addEventListener('click', function(ev){ ev.stopPropagation(); sub.remove(); fn(); });
+    sub.appendChild(mi);
+  };
+
+  makeItem('Move to root', function(){ _bulkMoveToFolder(null); });
+  folderNames.forEach(function(name){ makeItem('→ ' + name, function(){ _bulkMoveToFolder(name); }); });
+  makeItem('+ New folder…', function(){
+    var name = window.prompt('New folder name:');
+    if (!name || !name.trim()) return;
+    name = name.trim();
+    fetch('/api/folders', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+      .then(function(){ _bulkMoveToFolder(name); })
+      .catch(function(e){ showError('Failed: ' + e.message); });
+  });
+
+  document.body.appendChild(sub);
+  _openMenu = sub;
+  setTimeout(function(){ document.addEventListener('click', closeCardMenu, {once:true}); }, 0);
+}
+
+async function _bulkMoveToFolder(toFolder) {
+  var paths = Array.from(_selectedJobs);
+  var metas = Array.from(_selectedMeta.values());
+  for (var i = 0; i < metas.length; i++) {
+    var j = metas[i];
+    try {
+      var r = await fetch(jobApiUrl(j.path, '/move'), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({folder: toFolder})
+      });
+      if (!r.ok) {
+        var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+        showError('Move failed for ' + j.name + ': ' + (e.detail||''));
+      } else {
+        var data = await r.json();
+        if (_activeJob === j.path) { _activeJob = data.path; _activeJobFolder = data.folder || null; }
+      }
+    } catch(err) { showError('Move failed: ' + err.message); }
+  }
+  clearSelection();
+  await loadJobsList();
+}
+
+// ── Bulk delete ───────────────────────────────────────────────────────────────
+async function bulkDelete() {
+  var n = _selectedJobs.size;
+  if (!n) return;
+  if (!window.confirm('Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '? This cannot be undone.')) return;
+  var metas = Array.from(_selectedMeta.values());
+  for (var i = 0; i < metas.length; i++) {
+    var j = metas[i];
+    try {
+      var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
+      if (r.ok && _activeJob === j.path) { _activeJob = null; _activeJobFolder = null; _dirty = false; _doNewJob(); }
+    } catch(err) { showError('Delete failed: ' + err.message); }
+  }
+  clearSelection();
+  await loadJobsList();
+}
+
+// ── Batch dialog ──────────────────────────────────────────────────────────────
+var _batchType = 'parcels';
+
+function openBatchDialog() {
+  // Pre-fill folder with today's date
+  var today = new Date();
+  var iso = today.getFullYear() + '-'
+    + String(today.getMonth()+1).padStart(2,'0') + '-'
+    + String(today.getDate()).padStart(2,'0');
+  var folderEl = document.getElementById('batch-folder');
+  if (!folderEl.value) folderEl.value = 'batch-' + iso;
+
+  // Populate drone select if empty
+  var bdr = document.getElementById('batch-drone');
+  if (!bdr.options.length) {
+    var defOpt = document.createElement('option');
+    defOpt.value = ''; defOpt.textContent = '(default)';
+    bdr.appendChild(defOpt);
+    drones.forEach(function(d) {
+      var o = document.createElement('option');
+      o.value = d.name; o.textContent = d.name;
+      bdr.appendChild(o);
+    });
+  }
+
+  document.getElementById('batch-form').style.display = 'flex';
+  document.getElementById('batch-progress').style.display = 'none';
+  document.getElementById('batch-modal').classList.add('open');
+  _updateBatchCount();
+}
+
+function closeBatchDialog() {
+  document.getElementById('batch-modal').classList.remove('open');
+}
+
+var _batchPlaceholders = {
+  parcels:    'One parcel ID per line\n5241087453\n5241087454\n\nOr paste comma-separated',
+  properties: 'One property ID per line\n214-407-3-22\n214-407-3-23\n\nOr paste comma-separated'
+};
+
+function setBatchType(type) {
+  _batchType = type;
+  document.getElementById('btype-parcels').classList.toggle('active', type === 'parcels');
+  document.getElementById('btype-props').classList.toggle('active', type === 'properties');
+  document.getElementById('batch-ids').placeholder = _batchPlaceholders[type];
+}
+
+function _parseBatchIds() {
+  var raw = document.getElementById('batch-ids').value;
+  var ids = [];
+  raw.split('\n').forEach(function(line) {
+    line = line.trim();
+    if (!line || line.startsWith('#')) return;
+    line.split(',').forEach(function(part) {
+      var id = part.trim();
+      if (id) ids.push(id);
+    });
+  });
+  return ids;
+}
+
+function _updateBatchCount() {
+  var n = _parseBatchIds().length;
+  document.getElementById('batch-count').textContent = n;
+  document.getElementById('batch-n').textContent = n;
+  document.getElementById('batch-submit').disabled = n === 0;
+}
+
+document.getElementById('batch-ids').addEventListener('input', _updateBatchCount);
+
+// File upload
+document.getElementById('batch-file-input').addEventListener('change', function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  document.getElementById('batch-file-name').textContent = file.name;
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    var existing = document.getElementById('batch-ids').value.trim();
+    var added = ev.target.result;
+    document.getElementById('batch-ids').value = existing ? existing + '\n' + added : added;
+    _updateBatchCount();
+  };
+  reader.readAsText(file);
+  // Reset so same file can be loaded again
+  e.target.value = '';
+});
+
+async function submitBatch() {
+  var ids = _parseBatchIds();
+  if (!ids.length) return;
+
+  var folder = document.getElementById('batch-folder').value.trim() || null;
+  var drone  = document.getElementById('batch-drone').value || null;
+  var height = parseFloat(document.getElementById('batch-height').value) || null;
+  var sub    = document.getElementById('batch-sub').value;
+
+  var params = {
+    drone: drone,
+    height_m: height,
+    subcategory: sub,
+    offset_m: 0,
+    simplify: 'auto',
+    keepout: true,
+    preview_radius_m: null,
+  };
+
+  // Switch to progress view
+  document.getElementById('batch-form').style.display = 'none';
+  document.getElementById('batch-progress').style.display = 'flex';
+  document.getElementById('batch-prog-title').textContent = 'Creating ' + ids.length + ' jobs…';
+  document.getElementById('bpgfill').style.width = '0%';
+  document.getElementById('bpgmsg').textContent = 'Starting…';
+  document.getElementById('batch-results').innerHTML = '';
+  document.getElementById('batch-prog-close').disabled = true;
+
+  var res;
+  try {
+    res = await fetch('/api/batch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ids: ids, id_type: _batchType, folder: folder, params: params})
+    });
+  } catch(e) {
+    _batchError('Network error: ' + e.message); return;
+  }
+  if (!res.ok) {
+    var e2 = await res.json().catch(function(){return{detail:'HTTP '+res.status};});
+    _batchError(e2.detail || 'Batch failed'); return;
+  }
+
+  var jobId = (await res.json()).job_id;
+  var sse = new EventSource('/api/progress/' + jobId);
+
+  sse.onmessage = function(ev) {
+    var data = JSON.parse(ev.data);
+    if (data.stage === 'keepalive') return;
+    if (data.stage === 'batch') {
+      document.getElementById('bpgfill').style.width = data.pct + '%';
+      document.getElementById('bpgmsg').textContent = data.msg || '';
+    } else if (data.stage === 'done') {
+      sse.close();
+      _batchDone(data.payload);
+    } else if (data.stage === 'error') {
+      sse.close();
+      _batchError(data.msg || 'Unknown error');
+    }
+  };
+  sse.onerror = function() {
+    sse.close();
+    _batchError('Connection lost');
+  };
+}
+
+function _batchDone(payload) {
+  var results = payload.results || [];
+  document.getElementById('bpgfill').style.width = '100%';
+  document.getElementById('batch-prog-title').textContent =
+    'Done — ' + payload.created + ' created, ' + payload.skipped + ' skipped, ' + payload.failed + ' failed';
+  document.getElementById('bpgmsg').textContent = '';
+  document.getElementById('batch-prog-close').disabled = false;
+
+  var container = document.getElementById('batch-results');
+  results.forEach(function(r) {
+    var row = document.createElement('div');
+    row.className = 'bres-row ' + r.status;
+    var icon = r.status === 'ok' ? '✓' : r.status === 'skipped' ? '–' : '✗';
+    row.innerHTML = '<span class="bres-icon">' + icon + '</span>'
+      + '<span class="bres-id">' + escHtml(r.id) + '</span>'
+      + (r.reason ? '<span class="bres-reason" title="' + escHtml(r.reason) + '">' + escHtml(r.reason) + '</span>' : '');
+    container.appendChild(row);
+  });
+
+  // Refresh job list and open the new folder if one was created
+  loadJobsList();
+}
+
+function _batchError(msg) {
+  document.getElementById('batch-prog-title').textContent = 'Error';
+  document.getElementById('bpgmsg').textContent = msg;
+  document.getElementById('batch-prog-close').disabled = false;
+}
+
+// Close on backdrop click
+document.getElementById('batch-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeBatchDialog();
+});
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');

@@ -84,7 +84,7 @@ survey_offset_m = 0
 # CLI: --simplify auto | --simplify <metres>
 simplify_mode = "fixed"
 simplify_tolerance_m = 1.0    # used when simplify_mode = "fixed"; 0 = disabled
-auto_simplify_max_vertices = 50  # target for simplify_mode = "auto"
+auto_simplify_max_vertices = 15  # target for simplify_mode = "auto"
 # What to do if difference() produces a MultiPolygon:
 #   split   → emit one KMZ per piece
 #   largest → keep only the largest piece

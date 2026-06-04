@@ -239,7 +239,7 @@ class PolygonConfig(BaseModel):
     # simplified polygon never exits the original parcel boundary.
     simplify_mode: Literal["fixed", "auto"] = "fixed"
     simplify_tolerance_m: float = Field(default=1.0, ge=0)
-    auto_simplify_max_vertices: int = Field(default=50, ge=4)
+    auto_simplify_max_vertices: int = Field(default=15, ge=4)
     multipart_policy: Literal["split", "largest", "review"] = "review"
     hole_policy: Literal["review", "fill", "clip"] = "fill"
 

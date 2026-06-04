@@ -115,7 +115,7 @@ def process_survey(
     survey = _apply_edge_buffer(merged, polygon_cfg.edge_buffer_m)
 
     # 4. Optional survey offset (±metres relative to parcel boundary)
-    survey = _apply_survey_offset(survey, polygon_cfg.survey_offset_m)
+    survey = apply_survey_offset(survey, polygon_cfg.survey_offset_m)
 
     # 5. Build keep-out zone
     keepout = build_keepout(buildings, home_safety)
@@ -218,7 +218,7 @@ def _apply_edge_buffer(geom: BaseGeometry, buffer_m: float) -> BaseGeometry:
     return buffered
 
 
-def _apply_survey_offset(geom: BaseGeometry, offset_m: float) -> BaseGeometry:
+def apply_survey_offset(geom: BaseGeometry, offset_m: float) -> BaseGeometry:
     """Expand (positive) or contract (negative) the survey polygon by offset_m metres.
 
     A negative offset can produce holes or split the polygon when corners pinch
@@ -444,12 +444,70 @@ def _simplify_within(geom: BaseGeometry, tolerance_m: float) -> BaseGeometry:
 
 
 def _auto_simplify(geom: BaseGeometry, max_vertices: int) -> BaseGeometry:
-    """Binary-search for the largest tolerance that keeps vertex count ≤ max_vertices."""
-    if _vertex_count(geom) <= max_vertices:
+    """Pick the simplification tolerance at the knee of the complexity curve.
+
+    Samples vertex count at log-spaced tolerances, then finds the sample whose
+    (log-tolerance, vertex-count) point lies farthest from the chord connecting
+    the first and last samples — the elbow/knee method.  This picks the tolerance
+    where the curve bends: beyond it you keep trading shape accuracy for very few
+    extra vertices removed.
+
+    max_vertices is kept as a hard cap: if the knee result still exceeds it the
+    binary-search fallback is used instead.
+    """
+    import math
+
+    original_vc = _vertex_count(geom)
+    if original_vc <= 5:
         return geom
-    lo, hi = 0.0, 2000.0  # metres; 2 km is well beyond any single field polygon
-    result = geom
-    for _ in range(24):  # 24 iterations → sub-0.1 m precision from 2000 m range
+
+    # Log-spaced probe tolerances (metres).  The range covers fine noise removal
+    # through full field-scale simplification.
+    tolerances = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500]
+    samples: list[tuple[float, int, BaseGeometry]] = []
+    for tol in tolerances:
+        s = _simplify_within(geom, tol)
+        vc = _vertex_count(s)
+        samples.append((tol, vc, s))
+        if vc <= 4:
+            break
+
+    if len(samples) < 2:
+        return samples[0][2] if samples else geom
+
+    # Knee detection: perpendicular distance from chord in (log10(tol), vc) space.
+    # The curve runs top-left → bottom-right; the knee is the point that bulges
+    # most away from the straight line between the endpoints.
+    log_tols = [math.log10(t) for t, _, _ in samples]
+    vcs      = [vc            for _, vc, _ in samples]
+
+    x0, x1 = log_tols[0], log_tols[-1]
+    y0, y1 = vcs[0],      vcs[-1]
+    dx, dy  = x1 - x0,    y1 - y0
+    line_len = math.hypot(dx, dy)
+
+    if line_len == 0:
+        return samples[-1][2]
+
+    best_idx, best_dist = 0, -1.0
+    for i, (xi, yi) in enumerate(zip(log_tols, vcs)):
+        d = (dy * (xi - x0) - dx * (yi - y0)) / line_len
+        if d > best_dist:
+            best_dist, best_idx = d, i
+
+    tol_chosen, vc_chosen, geom_chosen = samples[best_idx]
+    log.info("Auto-simplify knee at %.1f m → %d vertices (was %d)",
+             tol_chosen, vc_chosen, original_vc)
+
+    if vc_chosen <= max_vertices:
+        return geom_chosen
+
+    # Knee is above the hard cap — fall back to binary search at the cap.
+    log.info("Knee vertex count %d exceeds cap %d, falling back to binary search",
+             vc_chosen, max_vertices)
+    lo, hi = float(tol_chosen), 500.0
+    result = geom_chosen
+    for _ in range(20):
         mid = (lo + hi) / 2.0
         candidate = _simplify_within(geom, mid)
         if _vertex_count(candidate) <= max_vertices:
@@ -459,8 +517,7 @@ def _auto_simplify(geom: BaseGeometry, max_vertices: int) -> BaseGeometry:
             lo = mid
         if hi - lo < 0.1:
             break
-    actual = _vertex_count(result)
-    log.debug("Auto-simplify converged at %.1f m tolerance → %d vertices", hi, actual)
+    log.debug("Binary-search fallback converged at %.1f m → %d vertices", hi, _vertex_count(result))
     return result
 
 
