@@ -2344,6 +2344,103 @@ async function _bulkMoveToFolder(toFolder) {
   await loadJobsList();
 }
 
+// ── Google Maps export ────────────────────────────────────────────────────────
+function _hexToKmlColor(hex, alpha) {
+  // CSS #RRGGBB → KML AABBGGRR
+  var h = (hex || '#3b82f6').replace('#', '');
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  return alpha + h.slice(4,6) + h.slice(2,4) + h.slice(0,2);
+}
+
+function _escapeXml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+
+async function exportGoogleMaps() {
+  // Works from both list-view (_selectedJobs) and map-view (_mvSelected)
+  var paths = _mvMode ? Array.from(_mvSelected) : Array.from(_selectedJobs);
+  if (!paths.length) return;
+
+  var jobs = [];
+  for (var i = 0; i < paths.length; i++) {
+    try {
+      var r = await fetch(jobApiUrl(paths[i]));
+      if (!r.ok) continue;
+      var data = await r.json();
+      jobs.push({path: paths[i], params: data.params});
+    } catch (e) { /* skip */ }
+  }
+  if (!jobs.length) return;
+
+  var kml = ['<?xml version="1.0" encoding="UTF-8"?>',
+    '<kml xmlns="http://www.opengis.net/kml/2.2">',
+    '<Document><name>DKK Jobs</name>'];
+
+  var navPoints = [];
+
+  jobs.forEach(function(job) {
+    var p = job.params;
+    var name = p.job_name || job.path;
+    var lineColor = _hexToKmlColor(p.color, 'ff');
+    var fillColor = _hexToKmlColor(p.color, '55');
+
+    kml.push('<Folder><name>' + _escapeXml(name) + '</name>');
+
+    // Polygon
+    var poly = p.custom_polygon_4326;
+    if (poly && poly.coordinates && poly.coordinates[0]) {
+      var ring = poly.coordinates[0];
+      var coords = ring.map(function(c){ return c[0]+','+c[1]+',0'; }).join(' ');
+      kml.push('<Placemark>');
+      kml.push('<name>' + _escapeXml(name) + '</name>');
+      kml.push('<Style>');
+      kml.push('<LineStyle><color>' + lineColor + '</color><width>2</width></LineStyle>');
+      kml.push('<PolyStyle><color>' + fillColor + '</color></PolyStyle>');
+      kml.push('</Style>');
+      kml.push('<Polygon><outerBoundaryIs><LinearRing>');
+      kml.push('<coordinates>' + coords + '</coordinates>');
+      kml.push('</LinearRing></outerBoundaryIs></Polygon>');
+      kml.push('</Placemark>');
+    }
+
+    // Takeoff marker
+    var tp = p.takeoff_point_4326;
+    if (tp) {
+      navPoints.push(tp[1] + ',' + tp[0]);
+      kml.push('<Placemark>');
+      kml.push('<name>' + _escapeXml(name) + '</name>');
+      kml.push('<Style><IconStyle><color>' + lineColor + '</color></IconStyle></Style>');
+      kml.push('<Point><coordinates>' + tp[0] + ',' + tp[1] + ',0</coordinates></Point>');
+      kml.push('</Placemark>');
+    }
+
+    kml.push('</Folder>');
+  });
+
+  kml.push('</Document></kml>');
+
+  // Derive filename from folder if all selected jobs share one subfolder
+  var folders = new Set(paths.map(function(p){ var s = p.indexOf('/'); return s >= 0 ? p.slice(0, s) : null; }));
+  var fileName = (folders.size === 1 && Array.from(folders)[0] !== null)
+    ? 'dkk-' + Array.from(folders)[0] + '.kml'
+    : 'dkk-jobs.kml';
+
+  // Download KML
+  var blob = new Blob([kml.join('\n')], {type: 'application/vnd.google-earth.kml+xml'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = fileName; a.click();
+  URL.revokeObjectURL(url);
+
+  // Open Google Maps with takeoff points as navigation waypoints (max 10)
+  if (navPoints.length === 1) {
+    window.open('https://www.google.com/maps/search/?api=1&query=' + navPoints[0], '_blank');
+  } else if (navPoints.length >= 2) {
+    var pts = navPoints.slice(0, 10);
+    window.open('https://www.google.com/maps/dir/' + pts.join('/'), '_blank');
+  }
+}
+
 // ── Bulk delete ───────────────────────────────────────────────────────────────
 async function bulkDelete() {
   var n = _selectedJobs.size;

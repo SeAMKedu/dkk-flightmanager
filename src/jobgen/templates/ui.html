@@ -25,6 +25,7 @@
       <div id="jp-sel-bar">
         <span id="jp-sel-count">0 selected</span>
         <button class="sel-action" id="sel-merge-btn" onclick="openMergeModal()">Merge</button>
+        <button class="sel-action" onclick="exportGoogleMaps()">Google Maps</button>
         <button class="sel-action" onclick="bulkMove()">Move</button>
         <button class="sel-action danger" onclick="bulkDelete()">Delete</button>
         <button class="sel-clear" onclick="clearSelection()" title="Clear selection">&#10005;</button>
@@ -110,6 +111,7 @@
       <span id="mv-sel-count"></span>
       <button class="sel-action" id="mv-open-btn" onclick="mvOpenJob(this.dataset.path)" style="display:none">Open</button>
       <button class="sel-action" id="mv-merge-btn" onclick="mvMerge()">Merge</button>
+      <button class="sel-action" onclick="exportGoogleMaps()">Google Maps</button>
       <button class="sel-action" onclick="mvBulkMove()">Move</button>
       <button class="sel-action danger" id="mv-delete-btn" onclick="mvBulkDelete()">Delete</button>
       <button class="sel-clear" onclick="mvClearSel()" title="Clear selection">&#10005;</button>
