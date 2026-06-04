@@ -121,7 +121,8 @@ async function init() {
     }
     document.getElementById('kochk').checked = cfg.keepout !== false;
     updateGsd();
-    if (cfg.mml_api_key) _initBaseLayers(cfg.mml_api_key);
+    _mmlApiKey = cfg.mml_api_key || '';
+    if (_mmlApiKey) _initBaseLayers(_mmlApiKey);
     console.log('[init] config loaded, outputDir='+outputDir+', drone='+cfg.default_drone);
   } catch(e) {
     console.error('[init] failed:', e);
@@ -310,6 +311,7 @@ function _doNewJob() {
   // Reset state
   previewData = null; editedPoly = null; polyModified = false; _lastPreviewedIds = '';
   _activeJob = null; _activeJobFolder = null; _dirty = false; _altCap = null;
+  _setColorPicker(null);
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
   clearPolyEdit();
   clearError();
@@ -465,9 +467,11 @@ async function startExport() {
   var jn = document.getElementById('jname').value.trim();
   if (!jn) { showError('Enter a job name.'); return; }
   if (editMode) saveEdit();  // commit any pending vertex edits before saving
+  var colorEl = document.getElementById('job-color');
   var p = Object.assign(getParams(), {
     job_name: jn,
     folder: _activeJobFolder || null,
+    color: colorEl.value !== _DEFAULT_JOB_COLOR ? colorEl.value : null,
     custom_polygon: polyModified ? editedPoly : null
   });
   await runJob('/api/export', p, 'Saving…', onSaveDone);
@@ -1561,11 +1565,291 @@ async function promptNewFolderForJob(j) {
   } catch(e) { showError('Failed: ' + e.message); }
 }
 
-// ── Map view for folder (Phase 4 stub) ────────────────────────────────────────
+// ── Map view ──────────────────────────────────────────────────────────────────
+var _mvMap = null;           // Leaflet map instance for map view
+var _mvBaseOSM = null;
+var _mvBaseOrto = null;
+var _mvLayers = [];          // [{path, layer, feature}]
+var _mvSelected = new Set(); // selected paths in map view
+var _mvAllFeatures = [];     // all loaded features (for client-side folder filter)
+var _DEFAULT_COLOR = '#3b82f6';
+var _mmlApiKey = '';           // set from /api/config; used to add MML layer to map view
+
 function showFolderOnMap(e, folderName) {
   e.stopPropagation();
-  // Phase 4: open map management overlay for this folder
-  console.log('[map view] folder:', folderName, '(not yet implemented)');
+  openMapView(folderName || null);
+}
+
+function openMapView(folderFilter) {
+  var overlay = document.getElementById('mapview');
+  overlay.classList.add('open');
+  _mvClearLayers();
+  _mvSelected.clear();
+  _mvUpdateSelBar();
+
+  // Populate folder selector
+  var sel = document.getElementById('mv-folder-sel');
+  sel.innerHTML = '<option value="">All folders</option>';
+  document.querySelectorAll('.jfolder-name').forEach(function(el) {
+    var n = el.textContent.trim();
+    if (n) { var o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); }
+  });
+  sel.value = folderFilter || '';
+  document.getElementById('mv-title').textContent = folderFilter ? 'Map — ' + folderFilter : 'Job Map';
+
+  if (!_mvMap) {
+    // Initialise lazily — container must be visible first
+    requestAnimationFrame(function() {
+      _mvInitMap();
+      _mvLoad(folderFilter);
+    });
+  } else {
+    _mvLoad(folderFilter);
+  }
+}
+
+function closeMapView() {
+  document.getElementById('mapview').classList.remove('open');
+}
+
+function _mvInitMap() {
+  _mvMap = L.map('mv-map', {preferCanvas: true}).setView([64.5, 26.0], 6);
+  _mvBaseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {attribution: '&copy; OpenStreetMap', maxZoom: 19}).addTo(_mvMap);
+  if (_mmlApiKey) {
+    var mvOrtoUrl = 'https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts'
+      + '?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0'
+      + '&LAYER=ortokuva&STYLE=default&TILEMATRIXSET=WGS84_Pseudo-Mercator'
+      + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fjpeg'
+      + '&api-key=' + encodeURIComponent(_mmlApiKey);
+    _mvBaseOrto = L.tileLayer(mvOrtoUrl, {attribution: '&copy; MML', maxZoom: 21});
+    L.control.layers({'OSM': _mvBaseOSM, 'MML Ortokuva': _mvBaseOrto}).addTo(_mvMap);
+  }
+  document.getElementById('mv-folder-sel').addEventListener('change', function() {
+    var f = this.value || null;
+    document.getElementById('mv-title').textContent = f ? 'Map — ' + f : 'Job Map';
+    _mvApplyFilter(f);
+  });
+}
+
+async function _mvLoad(folderFilter) {
+  try {
+    var url = '/api/jobs/geojson';
+    if (folderFilter) url += '?folder=' + encodeURIComponent(folderFilter);
+    // Load all, filter client-side for fast folder switching
+    var r = await fetch('/api/jobs/geojson');
+    if (!r.ok) return;
+    var fc = await r.json();
+    _mvAllFeatures = fc.features || [];
+    _mvApplyFilter(folderFilter);
+  } catch(e) { console.error('[mapview load]', e); }
+}
+
+function _mvApplyFilter(folderFilter) {
+  _mvClearLayers();
+  _mvSelected.clear();
+  _mvUpdateSelBar();
+  var bounds = [];
+  var features = folderFilter
+    ? _mvAllFeatures.filter(function(f){ return f.properties.folder === folderFilter; })
+    : _mvAllFeatures;
+  features.forEach(function(f) {
+    if (!f.geometry) return;
+    var layer = _mvMakeLayer(f);
+    if (layer) {
+      layer.addTo(_mvMap);
+      _mvLayers.push({path: f.properties.path, layer: layer, feature: f});
+      try { bounds.push(layer.getBounds()); } catch(e) {}
+    }
+  });
+  if (bounds.length) {
+    var combined = bounds[0];
+    bounds.forEach(function(b){ combined = combined.extend(b); });
+    _mvMap.fitBounds(combined, {padding: [30, 30]});
+  }
+}
+
+function _mvClearLayers() {
+  _mvLayers.forEach(function(item){ if (_mvMap) _mvMap.removeLayer(item.layer); });
+  _mvLayers = [];
+}
+
+function _mvMakeLayer(feature) {
+  var p = feature.properties;
+  var color = p.color || _DEFAULT_COLOR;
+  var dashArray = _mvDash(p);
+  var geom = feature.geometry;
+  try {
+    var coords;
+    if (geom.type === 'Polygon') {
+      coords = geom.coordinates[0].map(function(c){ return [c[1], c[0]]; });
+    } else if (geom.type === 'MultiPolygon') {
+      // Leaflet polygon accepts array of rings
+      coords = geom.coordinates.map(function(poly){
+        return poly[0].map(function(c){ return [c[1], c[0]]; });
+      });
+    } else { return null; }
+
+    var layer = L.polygon(coords, {
+      color: color,
+      weight: 2.5,
+      fillColor: color,
+      fillOpacity: 0.18,
+      dashArray: dashArray,
+    });
+
+    layer.on('click', function(e) {
+      if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
+        _mvToggleSel(p.path);
+      } else {
+        _mvShowPopup(e.latlng, feature, layer);
+      }
+    });
+    return layer;
+  } catch(e) { return null; }
+}
+
+function _mvDash(p) {
+  if (p.status === 'failed') return '2, 6';
+  if (p.flight_ready === true) return null;
+  if (p.needs_review === true) return '10, 5';
+  if (p.untouched) return '4, 4';
+  return null;
+}
+
+function _mvShowPopup(latlng, feature, layer) {
+  var p = feature.properties;
+  var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
+    : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
+    : p.untouched ? '<span style="color:#64748b">New</span>'
+    : '<span style="color:#94a3b8">—</span>';
+  var area = p.area_ha != null ? p.area_ha.toFixed(1) + ' ha' : '';
+  var html = '<div style="font-size:12px;line-height:1.7;min-width:160px">'
+    + '<b style="font-size:13px">' + escHtml(p.name) + '</b><br>'
+    + (p.folder ? '<span style="font-size:10px;color:#64748b">' + escHtml(p.folder) + '</span><br>' : '')
+    + statusChip + (area ? ' &nbsp;' + area : '')
+    + '<div style="display:flex;gap:5px;margin-top:8px">'
+    + '<button onclick="mvOpenJob(\'' + escHtml(p.path) + '\')" style="flex:1;padding:4px;font-size:11px;background:#3b82f6;color:#fff;border:none;border-radius:3px;cursor:pointer">Open</button>'
+    + '<button onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')" style="flex:1;padding:4px;font-size:11px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer">Delete</button>'
+    + '</div></div>';
+
+  if (_mvMap) {
+    L.popup({closeButton: true, minWidth: 170}).setLatLng(latlng).setContent(html).openOn(_mvMap);
+  }
+}
+
+function mvOpenJob(path) {
+  closeMapView();
+  if (_mvMap) { _mvMap.closePopup(); }
+  openJob(path);
+}
+
+async function mvDeleteJob(path, name) {
+  if (!window.confirm('Delete job "' + name + '"?')) return;
+  try {
+    var r = await fetch(jobApiUrl(path), {method: 'DELETE'});
+    if (!r.ok) { showError('Delete failed'); return; }
+    if (_mvMap) _mvMap.closePopup();
+    // Remove layer
+    _mvLayers = _mvLayers.filter(function(item) {
+      if (item.path === path) { _mvMap.removeLayer(item.layer); return false; }
+      return true;
+    });
+    _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== path; });
+    if (_activeJob === path) { _activeJob = null; _activeJobFolder = null; _doNewJob(); }
+    loadJobsList();
+  } catch(e) { showError('Delete failed: ' + e.message); }
+}
+
+// Map view multi-select
+function _mvToggleSel(path) {
+  var item = _mvLayers.find(function(i){ return i.path === path; });
+  if (!item) return;
+  if (_mvSelected.has(path)) {
+    _mvSelected.delete(path);
+    item.layer.setStyle({weight: 2.5, opacity: 1});
+  } else {
+    _mvSelected.add(path);
+    item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b'});
+  }
+  _mvUpdateSelBar();
+}
+
+function mvClearSel() {
+  _mvSelected.forEach(function(path) {
+    var item = _mvLayers.find(function(i){ return i.path === path; });
+    if (item) item.layer.setStyle({weight: 2.5, opacity: 1, color: item.feature.properties.color || _DEFAULT_COLOR});
+  });
+  _mvSelected.clear();
+  _mvUpdateSelBar();
+}
+
+function _mvUpdateSelBar() {
+  var n = _mvSelected.size;
+  var bar = document.getElementById('mv-sel-bar');
+  bar.style.display = n > 0 ? 'flex' : 'none';
+  document.getElementById('mv-sel-count').textContent = n + ' selected';
+  document.getElementById('mv-merge-btn').disabled = n < 2;
+}
+
+function mvMerge() {
+  // Populate list-view _selectedJobs from map selection and open merge modal
+  _selectedJobs.clear(); _selectedMeta.clear();
+  _mvSelected.forEach(function(path) {
+    var item = _mvLayers.find(function(i){ return i.path === path; });
+    if (item) {
+      var p = item.feature.properties;
+      _selectedJobs.add(path);
+      _selectedMeta.set(path, {path: path, name: p.name, folder: p.folder});
+    }
+  });
+  _updateSelBar();
+  closeMapView();
+  openMergeModal();
+}
+
+async function mvBulkMove() {
+  var paths = Array.from(_mvSelected);
+  var metas = paths.map(function(path) {
+    var item = _mvLayers.find(function(i){ return i.path === path; });
+    return item ? {path: path, name: item.feature.properties.name, folder: item.feature.properties.folder} : null;
+  }).filter(Boolean);
+  var folderNames = [];
+  document.querySelectorAll('.jfolder-name').forEach(function(el){
+    var n = el.textContent.trim(); if (n) folderNames.push(n);
+  });
+  var dest = window.prompt('Move to folder (blank = root, or folder name):\n\nAvailable: ' + (folderNames.join(', ') || '(none)'));
+  if (dest === null) return;
+  dest = dest.trim() || null;
+  for (var i = 0; i < metas.length; i++) {
+    try {
+      await fetch(jobApiUrl(metas[i].path, '/move'), {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({folder: dest})
+      });
+    } catch(e) { showError('Move failed: ' + e.message); }
+  }
+  mvClearSel();
+  await loadJobsList();
+  openMapView(dest);
+}
+
+async function mvBulkDelete() {
+  var n = _mvSelected.size;
+  if (!window.confirm('Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '?')) return;
+  var paths = Array.from(_mvSelected);
+  for (var i = 0; i < paths.length; i++) {
+    try {
+      await fetch(jobApiUrl(paths[i]), {method: 'DELETE'});
+      _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== paths[i]; });
+      _mvLayers = _mvLayers.filter(function(item) {
+        if (item.path === paths[i]) { if (_mvMap) _mvMap.removeLayer(item.layer); return false; }
+        return true;
+      });
+    } catch(e) { showError('Delete failed: ' + e.message); }
+  }
+  mvClearSel();
+  loadJobsList();
 }
 
 // ── URL helper ────────────────────────────────────────────────────────────────
@@ -1599,6 +1883,7 @@ async function _doOpenJob(path) {
     updatePathHint();
     _activeJob = path;
     _activeJobFolder = data.folder || null;
+    _setColorPicker(p && p.color);
     _dirty = false;
     clearError();
     // Highlight card
@@ -1783,6 +2068,26 @@ function hideStaleNotice() {
   var el = document.getElementById('stale-notice');
   el.style.display = 'none'; el.textContent = '';
 }
+
+// ── Job color picker ──────────────────────────────────────────────────────────
+var _DEFAULT_JOB_COLOR = '#3b82f6';
+
+function _setColorPicker(color) {
+  var el = document.getElementById('job-color');
+  el.value = color || _DEFAULT_JOB_COLOR;
+  el.disabled = !_activeJob;
+}
+
+document.getElementById('job-color').addEventListener('change', async function() {
+  if (!_activeJob) return;
+  var color = this.value;
+  try {
+    await fetch(jobApiUrl(_activeJob), {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({color: color})
+    });
+  } catch(e) { console.warn('[color patch]', e); }
+});
 
 // ── Multi-select & bulk operations ────────────────────────────────────────────
 var _selectedJobs = new Set();   // Set of job path strings

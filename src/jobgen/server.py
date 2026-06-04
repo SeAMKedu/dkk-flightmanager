@@ -75,6 +75,7 @@ class PreviewRequest(BaseModel):
 class ExportRequest(PreviewRequest):
     job_name: str
     folder: str | None = None
+    color: str | None = None
 
 
 class PolygonOpRequest(BaseModel):
@@ -400,6 +401,35 @@ def create_app(config: AppConfig) -> FastAPI:
     async def list_jobs():
         output_dir = Path(_config.output.output_dir).resolve()
         return {"groups": _scan_jobs(output_dir)}
+
+    @app.get("/api/jobs/geojson")
+    async def jobs_geojson(folder: str | None = None):
+        """Return all jobs as a GeoJSON FeatureCollection for the map view."""
+        output_dir = Path(_config.output.output_dir).resolve()
+        groups = _scan_jobs(output_dir)
+        features = []
+        for group in groups:
+            if folder is not None and group["name"] != folder:
+                continue
+            for card in group["jobs"]:
+                _, _, job_dir = _resolve_job_dir(output_dir, card["path"])
+                geom = _best_polygon(job_dir)
+                features.append({
+                    "type": "Feature",
+                    "geometry": geom,
+                    "properties": {
+                        "path":        card["path"],
+                        "name":        card["name"],
+                        "folder":      card["folder"],
+                        "color":       card["color"],
+                        "untouched":   card["untouched"],
+                        "flight_ready": card.get("flight_ready"),
+                        "needs_review": card.get("needs_review"),
+                        "area_ha":     card.get("area_ha"),
+                        "status":      card.get("status", "ok"),
+                    },
+                })
+        return {"type": "FeatureCollection", "features": features}
 
     @app.get("/api/jobs/{path:path}")
     async def get_job(path: str):
@@ -923,9 +953,17 @@ def _write_job_params(
             "preview_radius_m": req.preview_radius_m,
         },
         "custom_polygon_4326": req.custom_polygon,
+        "color": req.color or None,
         "last_preview_geojson": {k: v for k, v in preview_result.items() if k != "dsm_b64"}
         if preview_result else None,
     }
+    # Preserve color from existing job_params if not provided in this request
+    if params["color"] is None and (job_dir / "job_params.json").exists():
+        try:
+            existing = json.loads((job_dir / "job_params.json").read_text(encoding="utf-8"))
+            params["color"] = existing.get("color")
+        except Exception:
+            pass
     params_path = job_dir / "job_params.json"
     params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -938,6 +976,24 @@ def _write_job_params(
 # ---------------------------------------------------------------------------
 # Job list API helpers
 # ---------------------------------------------------------------------------
+
+
+def _best_polygon(job_dir: Path) -> dict | None:
+    """Return the best available GeoJSON polygon for a job directory."""
+    params_path = job_dir / "job_params.json"
+    if params_path.exists():
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+            geom = params.get("custom_polygon_4326")
+            if geom:
+                return geom
+            preview = params.get("last_preview_geojson") or {}
+            geom = preview.get("survey")
+            if geom:
+                return geom
+        except Exception:
+            pass
+    return None
 
 
 def _is_job_dir(d: Path) -> bool:
