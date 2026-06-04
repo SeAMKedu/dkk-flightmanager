@@ -115,7 +115,7 @@ def process_survey(
     survey = _apply_edge_buffer(merged, polygon_cfg.edge_buffer_m)
 
     # 4. Optional survey offset (±metres relative to parcel boundary)
-    survey = _apply_survey_offset(survey, polygon_cfg.survey_offset_m)
+    survey = apply_survey_offset(survey, polygon_cfg.survey_offset_m)
 
     # 5. Build keep-out zone
     keepout = build_keepout(buildings, home_safety)
@@ -218,7 +218,7 @@ def _apply_edge_buffer(geom: BaseGeometry, buffer_m: float) -> BaseGeometry:
     return buffered
 
 
-def _apply_survey_offset(geom: BaseGeometry, offset_m: float) -> BaseGeometry:
+def apply_survey_offset(geom: BaseGeometry, offset_m: float) -> BaseGeometry:
     """Expand (positive) or contract (negative) the survey polygon by offset_m metres.
 
     A negative offset can produce holes or split the polygon when corners pinch

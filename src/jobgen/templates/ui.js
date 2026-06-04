@@ -239,8 +239,8 @@ function getSimplify() {
 }
 _simpRender();
 
-// Clear polygon edit when geometry params change
-['offset','kochk','dsel'].forEach(function(id){
+// Clear polygon edit when geometry source params change
+['kochk','dsel'].forEach(function(id){
   document.getElementById(id).addEventListener('change', clearPolyEdit);
 });
 document.getElementById('pids').addEventListener('input', clearPolyEdit);
@@ -886,6 +886,10 @@ function saveEdit() {
   });
   editLayers.clearLayers();
   if (liveGeom) {
+    // Bake in the current visual state: the edited shape already incorporates any
+    // offset that was active when the user entered edit mode, so clear the offset
+    // to avoid double-applying it on the next preview.
+    document.getElementById('offset').value = 0;
     _setEditedPoly(liveGeom); markDirty();
     _updateSurveyDisplay(liveGeom);
   } else {

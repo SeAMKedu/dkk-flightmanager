@@ -31,7 +31,7 @@ from jobgen.cache import FetcherFn, TileRecord, get_tiles, tile_provenance
 from jobgen.config import AppConfig
 from jobgen.elevation import tile_fetcher as dem_fetcher, validate_tile
 from jobgen.geometry import (
-    SurveyGeometry, build_keepout, process_survey,
+    SurveyGeometry, apply_survey_offset, build_keepout, process_survey,
     reproject_to_4326, reproject_to_3067, vertex_count,
 )
 from jobgen.logging_setup import setup_logging
@@ -201,19 +201,22 @@ def run_job(
     pieces_count = 1
     if custom_polygon_4326 is not None:
         # Synthesise a SurveyGeometry from the user-supplied polygon.
-        _area_ha = survey_3067.area / 10_000
-        _vc = vertex_count(custom_polygon_4326)
+        _offset = config.polygon.survey_offset_m
+        survey_3067_off = apply_survey_offset(survey_3067, _offset)
+        survey_4326_off = reproject_to_4326(survey_3067_off)
+        _area_ha = survey_3067_off.area / 10_000
+        _vc = vertex_count(survey_4326_off)
         survey_geom = SurveyGeometry(
-            survey_3067=survey_3067,
-            survey_4326=custom_polygon_4326,
-            pieces_3067=[survey_3067],
-            pieces_4326=[custom_polygon_4326],
-            bbox_3067=(prelim_bounds[0], prelim_bounds[1], prelim_bounds[2], prelim_bounds[3]),
+            survey_3067=survey_3067_off,
+            survey_4326=survey_4326_off,
+            pieces_3067=[survey_3067_off],
+            pieces_4326=[survey_4326_off],
+            bbox_3067=survey_3067_off.bounds,
             original_area_ha=_area_ha,
             final_area_ha=_area_ha,
             area_lost_pct=0.0,
             min_dist_to_home_m=None,
-            offset_applied=False,
+            offset_applied=_offset != 0.0,
             survey_vertex_count=_vc,
             needs_review=True,
             review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
@@ -598,19 +601,22 @@ def run_preview(
     if custom_polygon_4326 is not None:
         log.info("Preview: using custom polygon (bridge/cut applied)")
         _survey_3067 = reproject_to_3067(custom_polygon_4326)
-        _area_ha = _survey_3067.area / 10_000
-        _vc = vertex_count(custom_polygon_4326)
+        _offset = config.polygon.survey_offset_m
+        _survey_3067_off = apply_survey_offset(_survey_3067, _offset)
+        _survey_4326_off = reproject_to_4326(_survey_3067_off)
+        _area_ha = _survey_3067_off.area / 10_000
+        _vc = vertex_count(_survey_4326_off)
         survey_geom = SurveyGeometry(
-            survey_3067=_survey_3067,
-            survey_4326=custom_polygon_4326,
-            pieces_3067=[_survey_3067],
-            pieces_4326=[custom_polygon_4326],
-            bbox_3067=_survey_3067.bounds,
+            survey_3067=_survey_3067_off,
+            survey_4326=_survey_4326_off,
+            pieces_3067=[_survey_3067_off],
+            pieces_4326=[_survey_4326_off],
+            bbox_3067=_survey_3067_off.bounds,
             original_area_ha=_area_ha,
             final_area_ha=_area_ha,
             area_lost_pct=0.0,
             min_dist_to_home_m=None,
-            offset_applied=False,
+            offset_applied=_offset != 0.0,
             survey_vertex_count=_vc,
             needs_review=True,
             review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
