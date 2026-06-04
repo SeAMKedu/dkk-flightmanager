@@ -1463,8 +1463,12 @@ function buildJobCard(j) {
     +   '<div class="jcard-meta">' + escHtml(meta) + '</div>'
     + '</div>'
     + '<div class="jcard-right">' + badge
-    +   '<button class="jcard-menu-btn" title="Actions" onclick="toggleCardMenu(event,' + JSON.stringify(j) + ')">&#8942;</button>'
+    +   '<button class="jcard-menu-btn" title="Actions">&#8942;</button>'
     + '</div>';
+
+  card.querySelector('.jcard-menu-btn').addEventListener('click', function(e) {
+    toggleCardMenu(e, j);
+  });
 
   // Checkbox toggles selection
   var chk = card.querySelector('.jcard-chk');
