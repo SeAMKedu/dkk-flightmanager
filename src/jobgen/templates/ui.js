@@ -4,6 +4,7 @@ var outputDir = '';
 var previewData = null;
 var editedPoly = null;
 var polyModified = false;
+var _polySetWithIds = false; // was the polygon established while ID fields were populated?
 var isRunning = false;
 var _pendingPreview = false;  // startPreview() deferred because isRunning was true
 var currentSSE = null;
@@ -65,9 +66,7 @@ map.addControl(new L.Control.Draw({draw:false, edit:{featureGroup:editLayers, re
 
 map.on(L.Draw.Event.EDITED, function(e) {
   e.layers.eachLayer(function(l) {
-    editedPoly = layerGeom(l);
-    polyModified = true; markDirty();
-    document.getElementById('modbadge').style.display = 'block';
+    _setEditedPoly(layerGeom(l)); markDirty();
   });
   editMode = false;
   map.doubleClickZoom.enable();
@@ -247,11 +246,33 @@ _simpRender();
 document.getElementById('pids').addEventListener('input', clearPolyEdit);
 document.getElementById('kids').addEventListener('input', clearPolyEdit);
 function clearPolyEdit() {
-  // For parcel/property jobs the polygon is derived from the IDs — discard edits
-  // so param changes re-derive cleanly.  For custom-polygon-only jobs the polygon
-  // is the primary input and must survive param changes.
-  if (!document.getElementById('pids').value.trim() && !document.getElementById('kids').value.trim()) return;
-  editedPoly = null; polyModified = false;
+  // Clear the custom polygon only when the polygon was established WITH IDs present.
+  // If the polygon was drawn/loaded while IDs were empty, changing IDs afterwards
+  // should keep the polygon as the survey area and just update the parcel-outline
+  // reference layer.  Only the explicit Reset button truly discards a custom polygon.
+  var hasPids = !!(document.getElementById('pids').value.trim() || document.getElementById('kids').value.trim());
+  if (!hasPids) return;              // no IDs → always keep (existing rule)
+  if (!_polySetWithIds) return;      // polygon pre-dates the IDs → keep it
+  _clearEditedPoly();
+}
+
+function _setEditedPoly(geom) {
+  /**
+   * Central assignment for editedPoly.  Records whether ID fields were already
+   * populated when the polygon was established — used by clearPolyEdit() to decide
+   * whether a later ID-field change should discard the polygon or keep it.
+   */
+  editedPoly = geom;
+  polyModified = true;
+  _polySetWithIds = !!(
+    document.getElementById('pids').value.trim() ||
+    document.getElementById('kids').value.trim()
+  );
+  document.getElementById('modbadge').style.display = 'block';
+}
+
+function _clearEditedPoly() {
+  editedPoly = null; polyModified = false; _polySetWithIds = false;
   document.getElementById('modbadge').style.display = 'none';
 }
 
@@ -310,7 +331,7 @@ function _doNewJob() {
   editMode = false;
   _detachEditListeners();
   // Reset state
-  previewData = null; editedPoly = null; polyModified = false; _lastPreviewedIds = '';
+  previewData = null; _clearEditedPoly(); _lastPreviewedIds = '';
   _activeJob = null; _activeJobFolder = null; _dirty = false; _altCap = null;
   _setColorPicker(null);
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
@@ -597,6 +618,9 @@ function onPreviewDone(payload) {
     // If zones are appearing for the first time (layer was absent before), force them
     // visible regardless of the previously-saved eye state.
     if (savedVis && (payload.zone_hits||[]).length && !lrs.zones) savedVis.zones = true;
+    // Force original-areas layer visible when IDs are added to a custom-polygon job
+    // (transition from no areas → has areas).
+    if (savedVis && (payload.original_areas||[]).length && !lrs.areas) savedVis.areas = true;
     renderMap(payload);
     redrawRings();
     resetLegend(savedVis);  // null on first render → applies startOff defaults
@@ -861,10 +885,8 @@ function saveEdit() {
     if (l.editing && l.editing.enabled()) l.editing.disable();
   });
   editLayers.clearLayers();
-  editedPoly = liveGeom;
   if (liveGeom) {
-    polyModified = true; markDirty();
-    document.getElementById('modbadge').style.display = 'block';
+    _setEditedPoly(liveGeom); markDirty();
     _updateSurveyDisplay(liveGeom);
   } else {
     var _fallback = (previewData && previewData.survey) || null;
@@ -912,10 +934,8 @@ map.on('contextmenu', function(e) {
       [lng - dLng, lat - dLat]
     ]]
   };
-  editedPoly = geom;
-  polyModified = true;
+  _setEditedPoly(geom);
   markDirty();
-  document.getElementById('modbadge').style.display = 'block';
   previewData = {survey: geom};
   _updateSurveyDisplay(geom);
   map.fitBounds(lrs.survey.getBounds(), {padding: [60, 60]});
@@ -1222,9 +1242,7 @@ async function _commitBridge() {
       document.getElementById('bridge-btn').disabled = true;
     }
     _detachEditListeners();
-    editedPoly = data.geometry;
-    polyModified = true; markDirty();
-    document.getElementById('modbadge').style.display = 'block';
+    _setEditedPoly(data.geometry); markDirty();
     document.getElementById('rstbtn').disabled = false;
     _updateSurveyDisplay(data.geometry);
   } catch(e) {
@@ -1250,9 +1268,8 @@ function _updateSurveyDisplay(geom) {
 }
 
 function resetPoly() {
-  if (!previewData) return;
   saveEdit();  // exit edit mode cleanly if active
-  clearPolyEdit();
+  _clearEditedPoly();  // unconditional — this is the explicit "start fresh from IDs" action
   // Cancel any pending auto-update so the stale simplify value doesn't fire after reset
   if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
   // Reset polygon controls to neutral: no offset, no simplification
@@ -1937,8 +1954,7 @@ function _restoreFormFromParams(p) {
     setRadiusLinked(true);
   }
   if (p.custom_polygon_4326) {
-    editedPoly = p.custom_polygon_4326; polyModified = true;
-    document.getElementById('modbadge').style.display = 'block';
+    _setEditedPoly(p.custom_polygon_4326);
   } else {
     editedPoly = null; polyModified = false;
     document.getElementById('modbadge').style.display = 'none';

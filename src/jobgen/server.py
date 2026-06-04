@@ -1120,7 +1120,7 @@ def _read_job_card(job_dir: Path, folder: str | None = None) -> dict:
             "path": path,
             "status": "failed",
             "saved_at": None,
-            "modified_at": job_dir.stat().st_mtime,
+            "modified_at": datetime.fromtimestamp(job_dir.stat().st_mtime, tz=timezone.utc).isoformat(),
             "untouched": False,
             "color": None,
         }
