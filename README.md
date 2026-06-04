@@ -1,9 +1,12 @@
 # dkk-jobgen
 
-DJI terrain-following mapping job generator for Finnish field parcels.
+DJI terrain-following mapping job generator for Finnish agricultural field parcels.
 
-Given Ruokavirasto *peruslohko* parcel IDs, MML *kiinteistötunnus* property IDs, or a
-bounding box, produces a ready-to-fly DJI Pilot 2 mapping job:
+`dkk-jobgen` is a planning tool for drone mapping surveys over Finnish farmland. Identify the survey area by pasting *peruslohkotunnus* field parcel IDs (Ruokavirasto), *kiinteistötunnus* cadastral property IDs, a bounding box, or a polygon drawn directly on the map — the tool fetches field boundaries, 2 m terrain elevation, and building footprints from National Land Survey of Finland (MML) open data APIs, checks Traficom UAS restriction zones, and writes a ready-to-fly DJI Pilot 2 mapping job. A built-in browser UI handles everything from parcel lookup and polygon editing to flight parameter tuning and batch job creation for large parcel sets.
+
+All underlying data — field boundaries (Ruokavirasto *Peltolohkorekisteri*), terrain elevation and buildings (MML *Maastotietokanta*), cadastral geometry (MML *Kiinteistötietojärjestelmä*), and UAS restriction zones (Traficom) — is sourced from free Finnish open data APIs, with attribution recorded in every manifest. Only an MML API key (free) is required.
+
+Output files written per job:
 
 | File | Description |
 |---|---|
@@ -100,7 +103,7 @@ Parcel and property geometries are cached locally (400-day TTL) so repeat previe
 
 ---
 
-## CLI Usage
+## CLI usage
 
 ### Specifying the survey area
 
