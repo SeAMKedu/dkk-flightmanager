@@ -25,6 +25,12 @@ var _editCHandler = null;  // container-level contextmenu capture (edit mode)
 var _editKHandler = null;  // container-level click capture (bridge picking)
 var _editVHandler = null;  // draw:editvertex → re-patch midpoint icons
 
+// ── Takeoff position ──────────────────────────────────────────────────────────
+var _takeoffAuto = null;        // [lng, lat] suggested by server
+var _takeoffPt   = null;        // [lng, lat] current (auto or user-dragged)
+var _takeoffUserMoved = false;  // true once user drags the marker
+var _takeoffMarker = null;      // Leaflet draggable marker
+
 // ── Map ───────────────────────────────────────────────────────────────────────
 var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
 var _baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -335,6 +341,7 @@ function _doNewJob() {
   // Reset state
   previewData = null; _clearEditedPoly(); _lastPreviewedIds = '';
   _activeJob = null; _activeJobFolder = null; _dirty = false; _altCap = null;
+  _clearTakeoff();
   _setColorPicker(null);
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
   clearPolyEdit();
@@ -495,7 +502,8 @@ async function startExport() {
     job_name: jn,
     folder: _activeJobFolder || null,
     color: colorEl.value !== _DEFAULT_JOB_COLOR ? colorEl.value : null,
-    custom_polygon: polyModified ? editedPoly : null
+    custom_polygon: polyModified ? editedPoly : null,
+    takeoff_point_4326: _takeoffPt || null
   });
   await runJob('/api/export', p, 'Saving…', onSaveDone);
 }
@@ -625,6 +633,11 @@ function onPreviewDone(payload) {
     redrawRings();
     resetLegend(savedVis);  // null on first render → applies startOff defaults
     renderStatus(payload.stats);
+    // Takeoff marker: update auto position; only move marker if user hasn't dragged it
+    if (payload.takeoff_point_4326) {
+      _takeoffAuto = payload.takeoff_point_4326;
+      if (!_takeoffUserMoved) _renderTakeoffMarker(_takeoffAuto);
+    }
   } catch(e) {
     console.error('[onPreviewDone]', e);
     showError('Render error: ' + e.message);
@@ -809,6 +822,53 @@ function centroid(geom) {
   } catch(e){}
   return null;
 }
+
+function _renderTakeoffMarker(lngLat) {
+  if (_takeoffMarker) { map.removeLayer(_takeoffMarker); _takeoffMarker = null; }
+  var row = document.getElementById('leg-takeoff-row');
+  if (!lngLat) { if (row) row.style.display = 'none'; return; }
+  _takeoffPt = lngLat;
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
+    + '<line x1="4" y1="4" x2="20" y2="20" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>'
+    + '<line x1="20" y1="4" x2="4" y2="20" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>'
+    + '<line x1="4" y1="4" x2="20" y2="20" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>'
+    + '<line x1="20" y1="4" x2="4" y2="20" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>'
+    + '</svg>';
+  _takeoffMarker = L.marker([lngLat[1], lngLat[0]], {
+    icon: L.divIcon({className:'takeoff-icon', html:svg, iconSize:[24,24], iconAnchor:[12,12], tooltipAnchor:[0,-14]}),
+    draggable: true,
+    zIndexOffset: 1000,
+  }).addTo(map);
+  _takeoffMarker.bindTooltip('Takeoff / Landing', {permanent:false, direction:'top', className:'takeoff-tooltip'});
+  _takeoffMarker.on('dragstart', function() { _takeoffUserMoved = true; });
+  _takeoffMarker.on('dragend', function() {
+    var ll = _takeoffMarker.getLatLng();
+    _takeoffPt = [ll.lng, ll.lat];
+  });
+  if (row) row.style.display = '';
+  document.getElementById('takeoff-recalc-btn').disabled = false;
+  var btn = document.getElementById('leg-takeoff');
+  if (btn && btn.classList.contains('off')) map.removeLayer(_takeoffMarker);
+}
+
+function recalcTakeoff() {
+  if (!_takeoffAuto) return;
+  _takeoffUserMoved = false;
+  _renderTakeoffMarker(_takeoffAuto);
+}
+
+function _clearTakeoff() {
+  _takeoffAuto = null; _takeoffPt = null; _takeoffUserMoved = false;
+  _renderTakeoffMarker(null);
+  document.getElementById('takeoff-recalc-btn').disabled = true;
+}
+
+// Eye-toggle for takeoff marker (not in lrs, handled separately)
+document.getElementById('leg-takeoff').addEventListener('click', function() {
+  if (!_takeoffMarker) return;
+  if (this.classList.toggle('off')) map.removeLayer(_takeoffMarker);
+  else _takeoffMarker.addTo(map);
+});
 
 // ── Status panel ──────────────────────────────────────────────────────────────
 var _dash = '<span style="color:#cbd5e1">—</span>';
@@ -1902,6 +1962,12 @@ async function _doOpenJob(path) {
     lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
     editLayers.clearLayers();
     editMode = false; _detachEditListeners();
+    _clearTakeoff();
+    if (p && p.takeoff_point_4326) {
+      _takeoffAuto = p.takeoff_point_4326;
+      _takeoffUserMoved = true;   // preserve saved position; ↺ resets to auto
+      _renderTakeoffMarker(p.takeoff_point_4326);
+    }
     // Restore form
     _restoreFormFromParams(p);
     document.getElementById('jname').value = name;

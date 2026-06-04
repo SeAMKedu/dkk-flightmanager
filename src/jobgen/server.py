@@ -76,6 +76,7 @@ class ExportRequest(PreviewRequest):
     job_name: str
     folder: str | None = None
     color: str | None = None
+    takeoff_point_4326: list | None = None
 
 
 class PolygonOpRequest(BaseModel):
@@ -1002,6 +1003,7 @@ def _write_job_params(
             "preview_radius_m": req.preview_radius_m,
         },
         "custom_polygon_4326": req.custom_polygon,
+        "takeoff_point_4326": req.takeoff_point_4326,
         "color": req.color or None,
         "last_preview_geojson": {k: v for k, v in preview_result.items() if k != "dsm_b64"}
         if preview_result else None,

@@ -96,6 +96,7 @@ The single-page Leaflet map interface lets you:
   - **2 vertices on each of two separate polygons** → bridge (connects them into a single continuous polygon with a quadrilateral corridor)
   - Selected vertices highlight orange as you pick them; a dashed preview line shows the shape. Right-click anywhere or press **Esc** to cancel.
 - **Zone altitude cap** — when a preview returns zone hits that carry an altitude floor (Finnish vyöhyke B/C/D), flight height is automatically set to 75 % of the lowest floor and the warning radius re-syncs. Raising height above the floor triggers an orange warning in the status panel. The cap is advisory; you can override freely.
+- **Takeoff / Landing position** — every preview computes a suggested takeoff and landing point on the polygon boundary using a minimax algorithm: the boundary point that minimises the maximum distance to any polygon vertex, giving the shortest worst-case VLOS distance to the drone throughout the mission. The suggestion appears as a white ✕ marker on the map (toggleable in the legend). You can drag it anywhere to pick a more convenient spot — e.g. one closer to a road. Click **↺ Reset takeoff position** in the Polygon section to revert to the auto-suggested point. The position is saved with the job and restored when you reopen it.
 - **Map base layer** — a layer switcher in the top-left corner (next to the zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires a valid `MML_API_KEY` in `.env` and is served directly from MML's WMTS; browser HTTP cache handles tile caching automatically.
 - **Save** — click **Save** to write the full job (KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, thumbnail) to disk. Unsaved changes are tracked; you will be prompted before opening a different job or starting a new one.
 
@@ -318,7 +319,8 @@ jobgen cache refresh --older-than 30
 3. Adjust height, subcategory, simplify, and offset as needed.
 4. Review the map: survey polygon, keep-out circles, warning radius circles, buildings, UAS zones, and DSM elevation overlay (toggle layers via the legend). Switch to MML Ortokuva aerial imagery via the layer control for ground-truth reference.
 5. Edit the polygon if needed (double-click to enter, double-click background to save). Buildings and zones refresh automatically on exit.
-6. Click **Save** when satisfied.
+6. Check the white ✕ takeoff/landing marker — the tool suggests a boundary point that minimises your worst-case VLOS distance to the drone. Drag it to a more accessible location if needed (e.g. closer to a road or gate). Use **↺ Reset takeoff position** to go back to the auto suggestion.
+7. Click **Save** when satisfied.
 7. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
 
 ### On the RC
