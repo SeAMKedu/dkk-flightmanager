@@ -645,10 +645,6 @@ def create_app(config: AppConfig) -> FastAPI:
 
     @app.post("/api/merge")
     async def merge_jobs(req: MergeRequest):
-        from shapely.geometry import mapping, shape
-        from shapely.ops import unary_union
-        from shapely.validation import make_valid
-
         if len(req.job_paths) < 2:
             raise HTTPException(400, detail="At least two jobs are required to merge")
         new_name = req.new_name.strip()
@@ -657,8 +653,8 @@ def create_app(config: AppConfig) -> FastAPI:
 
         output_dir = Path(_config.output.output_dir).resolve()
 
-        # Collect polygons from source jobs
-        polys = []
+        # Load params from all source jobs
+        all_params: list[tuple[Path, dict]] = []
         for path in req.job_paths:
             _, _, job_dir = _resolve_job_dir(output_dir, path)
             params_path = job_dir / "job_params.json"
@@ -668,26 +664,92 @@ def create_app(config: AppConfig) -> FastAPI:
                 params = json.loads(params_path.read_text(encoding="utf-8"))
             except Exception as exc:
                 raise HTTPException(500, detail=f"Could not read params for '{path}': {exc}")
-            geojson = params.get("custom_polygon_4326")
-            if not geojson:
-                raise HTTPException(400, detail=f"Job '{path}' has no polygon (run a preview first)")
-            try:
-                geom = shape(geojson)
-                if not geom.is_valid:
-                    geom = make_valid(geom)
-                polys.append(geom)
-            except Exception as exc:
-                raise HTTPException(400, detail=f"Invalid geometry for '{path}': {exc}")
+            all_params.append((job_dir, params))
 
-        merged = unary_union(polys)
-        if not merged.is_valid:
-            merged = make_valid(merged)
-        if merged.is_empty:
-            raise HTTPException(400, detail="Union produced empty geometry")
+        # Strategy: if ALL jobs are untouched batch jobs with source IDs,
+        # combine the IDs so the pipeline handles geometry correctly
+        # (gap-fill, keepout, simplification all work on multi-parcel input).
+        # Fallback: polygon union for exported/edited jobs that lack clean IDs.
+        def _is_id_job(job_dir: Path, p: dict) -> bool:
+            inputs = p.get("inputs", {})
+            has_ids = bool(inputs.get("parcel_ids") or inputs.get("property_ids"))
+            return has_ids and p.get("batch_created", False) and not any(job_dir.glob("*.kmz"))
 
-        merged_geojson = dict(mapping(merged))
+        use_id_strategy = all(_is_id_job(d, p) for d, p in all_params)
 
-        # Create destination dir
+        if use_id_strategy:
+            # Combine source IDs — geometry will be fetched fresh on next preview
+            parcel_ids: list[str] = []
+            property_ids: list[str] = []
+            for _, p in all_params:
+                inputs = p.get("inputs", {})
+                parcel_ids.extend(inputs.get("parcel_ids") or [])
+                property_ids.extend(inputs.get("property_ids") or [])
+            # Deduplicate while preserving order
+            seen: set[str] = set()
+            parcel_ids  = [x for x in parcel_ids  if not (x in seen or seen.add(x))]
+            seen.clear()
+            property_ids = [x for x in property_ids if not (x in seen or seen.add(x))]
+
+            # Borrow flight/polygon params from the first source job
+            first = all_params[0][1]
+            merged_params = {
+                "job_name": new_name,
+                "saved_at": None,
+                "inputs": {"parcel_ids": parcel_ids, "property_ids": property_ids},
+                "flight":  first.get("flight", {}),
+                "polygon": first.get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
+                "safety":  first.get("safety",  {"preview_radius_m": None}),
+                "custom_polygon_4326": None,   # pipeline re-fetches from IDs
+                "batch_created": False,
+                "color": None,
+                "last_preview_geojson": None,
+                "merge_strategy": "ids",
+            }
+        else:
+            # Polygon-union fallback for exported/edited jobs
+            from shapely.geometry import mapping, shape
+            from shapely.ops import unary_union
+            from shapely.validation import make_valid
+
+            polys = []
+            for job_dir, p in all_params:
+                geojson = p.get("custom_polygon_4326") or (
+                    (p.get("last_preview_geojson") or {}).get("survey")
+                )
+                if not geojson:
+                    raise HTTPException(
+                        400, detail=f"Job '{job_dir.name}' has no polygon — run a preview first"
+                    )
+                try:
+                    geom = shape(geojson)
+                    if not geom.is_valid:
+                        geom = make_valid(geom)
+                    polys.append(geom)
+                except Exception as exc:
+                    raise HTTPException(400, detail=f"Invalid geometry for '{job_dir.name}': {exc}")
+
+            merged = unary_union(polys)
+            if not merged.is_valid:
+                merged = make_valid(merged)
+            if merged.is_empty:
+                raise HTTPException(400, detail="Union produced empty geometry")
+
+            merged_params = {
+                "job_name": new_name,
+                "saved_at": None,
+                "inputs": {"parcel_ids": [], "property_ids": []},
+                "flight": all_params[0][1].get("flight", {}),
+                "polygon": all_params[0][1].get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
+                "safety": all_params[0][1].get("safety", {"preview_radius_m": None}),
+                "custom_polygon_4326": dict(mapping(merged)),
+                "batch_created": False,
+                "color": None,
+                "last_preview_geojson": None,
+                "merge_strategy": "polygon_union",
+            }
+
+        # Write destination
         dest_parent = (output_dir / req.folder) if req.folder else output_dir
         dest_parent.mkdir(parents=True, exist_ok=True)
         if req.folder:
@@ -698,20 +760,7 @@ def create_app(config: AppConfig) -> FastAPI:
         dest_dir = dest_parent / new_name
         if dest_dir.exists():
             raise HTTPException(409, detail=f"A job named '{new_name}' already exists in that location")
-
         dest_dir.mkdir(parents=True, exist_ok=True)
-        merged_params = {
-            "job_name": new_name,
-            "saved_at": None,
-            "inputs": {"parcel_ids": [], "property_ids": []},
-            "flight": {},
-            "polygon": {"offset_m": 0.0, "simplify": "auto", "keepout": True},
-            "safety": {"preview_radius_m": None},
-            "custom_polygon_4326": merged_geojson,
-            "batch_created": False,
-            "color": None,
-            "last_preview_geojson": None,
-        }
         (dest_dir / "job_params.json").write_text(
             json.dumps(merged_params, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -722,7 +771,6 @@ def create_app(config: AppConfig) -> FastAPI:
                 _, _, job_dir = _resolve_job_dir(output_dir, path)
                 if job_dir.is_dir():
                     shutil.rmtree(job_dir)
-            # Clean up empty source folders
             for path in req.job_paths:
                 parts = path.strip("/").split("/", 1)
                 if len(parts) == 2:
@@ -732,8 +780,9 @@ def create_app(config: AppConfig) -> FastAPI:
                         if not remaining:
                             shutil.rmtree(parent)
 
-        new_path = f"{req.folder}/{new_name}" if req.folder else new_name
-        return _read_job_card(dest_dir, folder=req.folder)
+        card = _read_job_card(dest_dir, folder=req.folder)
+        card["merge_strategy"] = merged_params["merge_strategy"]
+        return card
 
     # -----------------------------------------------------------------------
     # Batch skeleton job creation

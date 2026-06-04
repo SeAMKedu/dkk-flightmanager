@@ -1780,7 +1780,7 @@ function mvMerge() {
     if (item) {
       var p = item.feature.properties;
       _selectedJobs.add(path);
-      _selectedMeta.set(path, {path: path, name: p.name, folder: p.folder});
+      _selectedMeta.set(path, {path: path, name: p.name, folder: p.folder, untouched: p.untouched});
     }
   });
   _updateSelBar();
@@ -2111,8 +2111,16 @@ function _updateSelBar() {
 // ── Merge modal ───────────────────────────────────────────────────────────────
 function openMergeModal() {
   if (_selectedJobs.size < 2) return;
-  var names = Array.from(_selectedMeta.values()).map(function(j){ return j.name; });
-  document.getElementById('merge-sources').textContent = 'Merging: ' + names.join(', ');
+  var jobs = Array.from(_selectedMeta.values());
+  var names = jobs.map(function(j){ return j.name; });
+  // Detect strategy client-side: untouched = batch_created + no KMZ
+  var allUntouched = jobs.every(function(j){ return j.untouched; });
+  var strategyNote = allUntouched
+    ? '(IDs will be combined — geometry re-fetched on preview)'
+    : '(polygons will be unioned)';
+  document.getElementById('merge-sources').innerHTML =
+    'Merging: <b>' + names.map(escHtml).join(', ') + '</b><br>'
+    + '<span style="font-size:9px;color:#64748b">' + strategyNote + '</span>';
   document.getElementById('merge-name').value = names[0] + '-merged';
   document.getElementById('merge-folder').value = '';
   document.getElementById('merge-del-src').checked = false;
