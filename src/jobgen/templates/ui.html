@@ -16,12 +16,12 @@
   <div id="jp">
     <div id="jp-inner">
       <div id="jp-hdr">
-        <span>Jobs</span>
-        <input type="text" id="jp-filter" placeholder="Filter&#8230;">
-        <button id="jp-mapview" onclick="openMapView(null)" title="Show all jobs on map">&#9633;</button>
+        <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
+        <button id="jp-batch" onclick="openBatchDialog()">&#8659; Batch</button>
       </div>
-      <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
-      <button id="jp-batch" onclick="openBatchDialog()">&#8659; Batch</button>
+      <div id="jp-filter-row">
+        <input type="text" id="jp-filter" placeholder="Filter&#8230;">
+      </div>
       <div id="jp-sel-bar">
         <span id="jp-sel-count">0 selected</span>
         <button class="sel-action" id="sel-merge-btn" onclick="openMergeModal()">Merge</button>

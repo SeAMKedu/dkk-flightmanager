@@ -1400,37 +1400,39 @@ function renderJobsList(groups) {
 function buildFolderSection(group) {
   var frag = document.createDocumentFragment();
   var isRoot = group.name === null || group.name === undefined;
+  var folderKey = isRoot ? null : group.name;
   var storageKey = 'jf-open-' + (isRoot ? '__root__' : group.name);
   var isOpen = localStorage.getItem(storageKey) !== 'false';
 
-  if (!isRoot) {
-    var hdr = document.createElement('div');
-    hdr.className = 'jfolder-hdr';
-    hdr.innerHTML = '<span class="jfolder-caret' + (isOpen ? ' open' : '') + '">&#9658;</span>'
-      + '<span class="jfolder-name" title="' + escHtml(group.name) + '">' + escHtml(group.name) + '</span>'
-      + '<span class="jfolder-count">' + group.jobs.length + '</span>'
-      + '<button class="jfolder-map-btn" title="Show jobs on map" onclick="showFolderOnMap(event,\'' + escHtml(group.name) + '\')">Map</button>';
+  // Both root and named folders get a header — root uses the output dir basename
+  var displayName = isRoot ? (outputDir.split('/').pop() || 'output') : group.name;
+  var dataFolder = isRoot ? '' : escHtml(group.name);
 
-    var container = document.createElement('div');
-    container.className = 'jfolder';
-    var jobs = document.createElement('div');
-    jobs.className = 'jfolder-jobs' + (isOpen ? '' : ' hidden');
+  var hdr = document.createElement('div');
+  hdr.className = 'jfolder-hdr';
+  hdr.innerHTML = '<span class="jfolder-caret' + (isOpen ? ' open' : '') + '">&#9658;</span>'
+    + '<span class="jfolder-name" title="' + escHtml(displayName) + '">' + escHtml(displayName) + '</span>'
+    + '<span class="jfolder-count">' + group.jobs.length + '</span>'
+    + '<button class="jfolder-map-btn" data-folder="' + dataFolder + '" title="Show jobs on map"'
+    + ' onclick="showFolderOnMap(event,' + (isRoot ? 'null' : '\'' + escHtml(group.name) + '\'') + ')">Map</button>';
 
-    hdr.addEventListener('click', function(e) {
-      if (e.target.closest('.jfolder-map-btn')) return;
-      isOpen = !isOpen;
-      localStorage.setItem(storageKey, isOpen ? 'true' : 'false');
-      jobs.classList.toggle('hidden', !isOpen);
-      hdr.querySelector('.jfolder-caret').classList.toggle('open', isOpen);
-    });
+  var container = document.createElement('div');
+  container.className = 'jfolder';
+  var jobs = document.createElement('div');
+  jobs.className = 'jfolder-jobs' + (isOpen ? '' : ' hidden');
 
-    (group.jobs || []).forEach(function(j){ jobs.appendChild(buildJobCard(j)); });
-    container.appendChild(hdr);
-    container.appendChild(jobs);
-    frag.appendChild(container);
-  } else {
-    (group.jobs || []).forEach(function(j){ frag.appendChild(buildJobCard(j)); });
-  }
+  hdr.addEventListener('click', function(e) {
+    if (e.target.closest('.jfolder-map-btn')) return;
+    isOpen = !isOpen;
+    localStorage.setItem(storageKey, isOpen ? 'true' : 'false');
+    jobs.classList.toggle('hidden', !isOpen);
+    hdr.querySelector('.jfolder-caret').classList.toggle('open', isOpen);
+  });
+
+  (group.jobs || []).forEach(function(j){ jobs.appendChild(buildJobCard(j)); });
+  container.appendChild(hdr);
+  container.appendChild(jobs);
+  frag.appendChild(container);
   return frag;
 }
 
@@ -1611,7 +1613,10 @@ function openMapView(folderFilter) {
   document.getElementById('legend').classList.add('mv-hidden');
   document.getElementById('sp').classList.add('mv-hidden');
   document.getElementById('mv-status-legend').classList.add('visible');
-  document.getElementById('jp-mapview').classList.add('active');
+  // Highlight the active folder's Map button
+  document.querySelectorAll('.jfolder-map-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.folder === (folderFilter || ''));
+  });
 
   _mvSelected.clear();
   _mvUpdateSelBar();
@@ -1632,7 +1637,7 @@ function closeMapView() {
   document.getElementById('legend').classList.remove('mv-hidden');
   document.getElementById('sp').classList.remove('mv-hidden');
   document.getElementById('mv-status-legend').classList.remove('visible');
-  document.getElementById('jp-mapview').classList.remove('active');
+  document.querySelectorAll('.jfolder-map-btn').forEach(function(btn) { btn.classList.remove('active'); });
   map.closePopup();
 }
 
