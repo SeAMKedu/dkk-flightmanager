@@ -343,7 +343,6 @@ function _doNewJob() {
   hideStaleNotice();
   document.getElementById('xb').disabled = true;
   document.getElementById('rstbtn').disabled = true;
-  document.getElementById('bridge-btn').disabled = true;
   renderStatus(null);
   setRadiusLinked(true);
   document.getElementById('legend').classList.add('inactive');
@@ -597,7 +596,6 @@ function onPreviewDone(payload) {
   clearAreaFocus();
   document.getElementById('xb').disabled = false;
   document.getElementById('rstbtn').disabled = false;
-  // bridge-btn stays disabled until the user enters edit mode
   // Compute the lowest zone floor (lower_limit) across all zone hits.
   // lower_limit is the binding altitude: fly below it to exit the zone without authorisation.
   // Zones with lower_limit=0/null apply from the ground — no safe altitude below them.
@@ -871,7 +869,6 @@ function toggleEdit() {
   _editVHandler = function() { setTimeout(_patchMidpointIcons, 0); };
   map.on('draw:editvertex', _editVHandler);
   _attachEditListeners();
-  document.getElementById('bridge-btn').disabled = false;
 }
 
 function saveEdit() {
@@ -900,7 +897,6 @@ function saveEdit() {
   exitBridgeMode();
   _detachEditListeners();
   if (_editVHandler) { map.off('draw:editvertex', _editVHandler); _editVHandler = null; }
-  document.getElementById('bridge-btn').disabled = true;
   // Auto-fetch buildings + zones for the new polygon shape.
   // Deferred so startExport()'s runJob() can set isRunning=true first if this
   // saveEdit() was called from startExport(), preventing a double-run.
@@ -1096,11 +1092,6 @@ function _nearestVertex(latlng, snapPx) {
   return best;
 }
 
-function toggleBridgeMode() {
-  if (_bridgeMode) exitBridgeMode();
-  else enterBridgeMode();
-}
-
 function enterBridgeMode() {
   if (!previewData) return;
   _bridgeMode = true;
@@ -1109,9 +1100,6 @@ function enterBridgeMode() {
   if (_bridgeGroup) map.removeLayer(_bridgeGroup);
   _bridgeGroup = L.layerGroup().addTo(map);
   map.boxZoom.disable();  // prevent Shift+drag box-zoom during picking
-  var btn = document.getElementById('bridge-btn');
-  btn.textContent = '✕ Cancel bridge/cut';
-  btn.classList.add('active');
   map.getContainer().style.cursor = 'crosshair';
   _updateBridgePreview();
 }
@@ -1165,9 +1153,6 @@ function exitBridgeMode() {
   hint.style.display = 'none';
   hint.style.background = '#1e293b';
   hint.style.color = '';
-  var btn = document.getElementById('bridge-btn');
-  btn.textContent = '⬡ Bridge / Cut';
-  btn.classList.remove('active');
   map.getContainer().style.cursor = '';
 }
 
@@ -1244,7 +1229,6 @@ async function _commitBridge() {
       editMode = false;
       map.doubleClickZoom.enable();
       editLayers.clearLayers();
-      document.getElementById('bridge-btn').disabled = true;
     }
     _detachEditListeners();
     _setEditedPoly(data.geometry); markDirty();
@@ -1939,11 +1923,9 @@ async function _doOpenJob(path) {
         renderStatus(previewData.stats);
         document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
-        document.getElementById('bridge-btn').disabled = true;
       } catch(ex) { console.error('[openJob] render error', ex); }
     } else {
       previewData = null;
-      document.getElementById('bridge-btn').disabled = true;
       renderStatus(null);
       document.getElementById('legend').classList.add('inactive');
       if (editedPoly) {
