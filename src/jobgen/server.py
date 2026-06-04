@@ -83,6 +83,13 @@ class PolygonOpRequest(BaseModel):
     points: list            # 4 [lng, lat] coordinates
 
 
+class MergeRequest(BaseModel):
+    job_paths: list[str]
+    new_name: str
+    folder: str | None = None
+    delete_sources: bool = False
+
+
 class BatchRequest(BaseModel):
     ids: list[str]
     id_type: str = "parcels"   # "parcels" | "properties"
@@ -601,6 +608,102 @@ def create_app(config: AppConfig) -> FastAPI:
         else:
             subprocess.Popen(["xdg-open", job_path])
         return {"revealed": job_path}
+
+    # -----------------------------------------------------------------------
+    # Merge jobs
+    # -----------------------------------------------------------------------
+
+    @app.post("/api/merge")
+    async def merge_jobs(req: MergeRequest):
+        from shapely.geometry import mapping, shape
+        from shapely.ops import unary_union
+        from shapely.validation import make_valid
+
+        if len(req.job_paths) < 2:
+            raise HTTPException(400, detail="At least two jobs are required to merge")
+        new_name = req.new_name.strip()
+        if not new_name:
+            raise HTTPException(400, detail="new_name is required")
+
+        output_dir = Path(_config.output.output_dir).resolve()
+
+        # Collect polygons from source jobs
+        polys = []
+        for path in req.job_paths:
+            _, _, job_dir = _resolve_job_dir(output_dir, path)
+            params_path = job_dir / "job_params.json"
+            if not params_path.exists():
+                raise HTTPException(404, detail=f"job_params.json not found for '{path}'")
+            try:
+                params = json.loads(params_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise HTTPException(500, detail=f"Could not read params for '{path}': {exc}")
+            geojson = params.get("custom_polygon_4326")
+            if not geojson:
+                raise HTTPException(400, detail=f"Job '{path}' has no polygon (run a preview first)")
+            try:
+                geom = shape(geojson)
+                if not geom.is_valid:
+                    geom = make_valid(geom)
+                polys.append(geom)
+            except Exception as exc:
+                raise HTTPException(400, detail=f"Invalid geometry for '{path}': {exc}")
+
+        merged = unary_union(polys)
+        if not merged.is_valid:
+            merged = make_valid(merged)
+        if merged.is_empty:
+            raise HTTPException(400, detail="Union produced empty geometry")
+
+        merged_geojson = dict(mapping(merged))
+
+        # Create destination dir
+        dest_parent = (output_dir / req.folder) if req.folder else output_dir
+        dest_parent.mkdir(parents=True, exist_ok=True)
+        if req.folder:
+            marker = dest_parent / ".dkk-folder"
+            if not marker.exists():
+                marker.write_text("", encoding="utf-8")
+
+        dest_dir = dest_parent / new_name
+        if dest_dir.exists():
+            raise HTTPException(409, detail=f"A job named '{new_name}' already exists in that location")
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        merged_params = {
+            "job_name": new_name,
+            "saved_at": None,
+            "inputs": {"parcel_ids": [], "property_ids": []},
+            "flight": {},
+            "polygon": {"offset_m": 0.0, "simplify": "auto", "keepout": True},
+            "safety": {"preview_radius_m": None},
+            "custom_polygon_4326": merged_geojson,
+            "batch_created": False,
+            "color": None,
+            "last_preview_geojson": None,
+        }
+        (dest_dir / "job_params.json").write_text(
+            json.dumps(merged_params, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        # Delete sources if requested
+        if req.delete_sources:
+            for path in req.job_paths:
+                _, _, job_dir = _resolve_job_dir(output_dir, path)
+                if job_dir.is_dir():
+                    shutil.rmtree(job_dir)
+            # Clean up empty source folders
+            for path in req.job_paths:
+                parts = path.strip("/").split("/", 1)
+                if len(parts) == 2:
+                    parent = output_dir / parts[0]
+                    if parent.is_dir():
+                        remaining = [d for d in parent.iterdir() if not d.name.startswith(".")]
+                        if not remaining:
+                            shutil.rmtree(parent)
+
+        new_path = f"{req.folder}/{new_name}" if req.folder else new_name
+        return _read_job_card(dest_dir, folder=req.folder)
 
     # -----------------------------------------------------------------------
     # Batch skeleton job creation

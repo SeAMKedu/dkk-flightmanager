@@ -1338,6 +1338,10 @@ async function loadJobsList() {
     // Flatten to cache for filter searching
     _jobsCache = [];
     _jobsGroups.forEach(function(g){ _jobsCache = _jobsCache.concat(g.jobs || []); });
+    // Drop selections for jobs that no longer exist
+    var validPaths = new Set(_jobsCache.map(function(j){return j.path;}));
+    _selectedJobs.forEach(function(p){ if (!validPaths.has(p)) { _selectedJobs.delete(p); _selectedMeta.delete(p); } });
+    _updateSelBar();
     // Auto-open panel on first ever load if jobs exist
     if (_jobsCache.length > 0 && localStorage.getItem('jp-open') === null) {
       setJpOpen(true);
@@ -1410,7 +1414,11 @@ function buildFolderSection(group) {
 function buildJobCard(j) {
   var card = document.createElement('div');
   var isActive = j.path === _activeJob;
-  card.className = 'jcard' + (isActive ? ' active' : '') + (j.status === 'failed' ? ' failed' : '');
+  var isSelected = _selectedJobs.has(j.path);
+  card.className = 'jcard'
+    + (isActive ? ' active' : '')
+    + (j.status === 'failed' ? ' failed' : '')
+    + (isSelected ? ' selected' : '');
   card.dataset.path = j.path;
   var date = j.saved_at || j.run_at || '';
   var dateStr = date ? new Date(date).toLocaleString('fi-FI',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
@@ -1422,7 +1430,8 @@ function buildJobCard(j) {
     : '';
   var thumb = j.thumbnail_svg || '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#1e293b"/><text x="32" y="40" text-anchor="middle" font-size="28" fill="#334155">?</text></svg>';
   card.innerHTML =
-    '<div class="jcard-thumb">' + thumb + '</div>'
+    '<label class="jcard-sel" title="Select"><input type="checkbox" class="jcard-chk"' + (isSelected ? ' checked' : '') + '></label>'
+    + '<div class="jcard-thumb">' + thumb + '</div>'
     + '<div class="jcard-body">'
     +   '<div class="jcard-name">' + escHtml(j.name) + '</div>'
     +   '<div class="jcard-meta">' + escHtml(meta) + '</div>'
@@ -1430,9 +1439,17 @@ function buildJobCard(j) {
     + '<div class="jcard-right">' + badge
     +   '<button class="jcard-menu-btn" title="Actions" onclick="toggleCardMenu(event,' + JSON.stringify(j) + ')">&#8942;</button>'
     + '</div>';
+
+  // Checkbox toggles selection
+  var chk = card.querySelector('.jcard-chk');
+  chk.addEventListener('change', function(e) {
+    e.stopPropagation();
+    toggleJobSelection(j, chk.checked);
+  });
+
   if (j.status !== 'failed') {
     card.addEventListener('click', function(e) {
-      if (e.target.closest('.jcard-menu-btn') || e.target.closest('.jmenu')) return;
+      if (e.target.closest('.jcard-menu-btn') || e.target.closest('.jmenu') || e.target.closest('.jcard-sel')) return;
       openJob(j.path);
     });
   }
@@ -1765,6 +1782,170 @@ function showStaleNotice(stale) {
 function hideStaleNotice() {
   var el = document.getElementById('stale-notice');
   el.style.display = 'none'; el.textContent = '';
+}
+
+// ── Multi-select & bulk operations ────────────────────────────────────────────
+var _selectedJobs = new Set();   // Set of job path strings
+var _selectedMeta = new Map();   // path → job card object (for merge/move)
+
+function toggleJobSelection(j, selected) {
+  if (selected) {
+    _selectedJobs.add(j.path);
+    _selectedMeta.set(j.path, j);
+  } else {
+    _selectedJobs.delete(j.path);
+    _selectedMeta.delete(j.path);
+  }
+  // Update card class without re-rendering
+  var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
+  if (card) card.classList.toggle('selected', selected);
+  _updateSelBar();
+}
+
+function clearSelection() {
+  _selectedJobs.clear();
+  _selectedMeta.clear();
+  document.querySelectorAll('.jcard.selected').forEach(function(c) {
+    c.classList.remove('selected');
+    var chk = c.querySelector('.jcard-chk');
+    if (chk) chk.checked = false;
+  });
+  _updateSelBar();
+}
+
+function _updateSelBar() {
+  var n = _selectedJobs.size;
+  var bar = document.getElementById('jp-sel-bar');
+  bar.classList.toggle('visible', n > 0);
+  document.getElementById('jp-sel-count').textContent = n + ' selected';
+  // Merge requires ≥2
+  document.getElementById('sel-merge-btn').disabled = n < 2;
+}
+
+// ── Merge modal ───────────────────────────────────────────────────────────────
+function openMergeModal() {
+  if (_selectedJobs.size < 2) return;
+  var names = Array.from(_selectedMeta.values()).map(function(j){ return j.name; });
+  document.getElementById('merge-sources').textContent = 'Merging: ' + names.join(', ');
+  document.getElementById('merge-name').value = names[0] + '-merged';
+  document.getElementById('merge-folder').value = '';
+  document.getElementById('merge-del-src').checked = false;
+  document.getElementById('merge-modal').classList.add('open');
+  setTimeout(function(){ document.getElementById('merge-name').focus(); document.getElementById('merge-name').select(); }, 50);
+}
+
+function closeMergeModal() {
+  document.getElementById('merge-modal').classList.remove('open');
+}
+
+async function submitMerge() {
+  var newName = document.getElementById('merge-name').value.trim();
+  if (!newName) { document.getElementById('merge-name').focus(); return; }
+  var folder = document.getElementById('merge-folder').value.trim() || null;
+  var delSrc  = document.getElementById('merge-del-src').checked;
+  closeMergeModal();
+
+  try {
+    var r = await fetch('/api/merge', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        job_paths: Array.from(_selectedJobs),
+        new_name: newName,
+        folder: folder,
+        delete_sources: delSrc
+      })
+    });
+    if (!r.ok) {
+      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(e.detail || 'Merge failed'); return;
+    }
+    var merged = await r.json().catch(function(){return null;});
+    clearSelection();
+    await loadJobsList();
+    if (merged && merged.path) openJob(merged.path);
+  } catch(e) { showError('Merge failed: ' + e.message); }
+}
+
+// ── Bulk move ─────────────────────────────────────────────────────────────────
+function bulkMove() {
+  if (!_selectedJobs.size) return;
+  // Reuse the move submenu logic but for all selected jobs
+  var folderNames = [];
+  document.querySelectorAll('.jfolder-name').forEach(function(el){
+    var n = el.textContent.trim(); if (n) folderNames.push(n);
+  });
+
+  // Build a small inline picker anchored to the Move button
+  var btn = document.getElementById('jp-sel-bar').querySelector('.sel-action:nth-child(3)');
+  closeCardMenu();
+  var sub = document.createElement('div');
+  sub.className = 'jmenu';
+  sub.style.cssText = 'position:fixed;z-index:9999';
+  var rect = btn.getBoundingClientRect();
+  sub.style.top = (rect.bottom + 4) + 'px';
+  sub.style.left = rect.left + 'px';
+
+  var makeItem = function(label, fn) {
+    var mi = document.createElement('button');
+    mi.className = 'jmenu-item'; mi.textContent = label;
+    mi.addEventListener('click', function(ev){ ev.stopPropagation(); sub.remove(); fn(); });
+    sub.appendChild(mi);
+  };
+
+  makeItem('Move to root', function(){ _bulkMoveToFolder(null); });
+  folderNames.forEach(function(name){ makeItem('→ ' + name, function(){ _bulkMoveToFolder(name); }); });
+  makeItem('+ New folder…', function(){
+    var name = window.prompt('New folder name:');
+    if (!name || !name.trim()) return;
+    name = name.trim();
+    fetch('/api/folders', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+      .then(function(){ _bulkMoveToFolder(name); })
+      .catch(function(e){ showError('Failed: ' + e.message); });
+  });
+
+  document.body.appendChild(sub);
+  _openMenu = sub;
+  setTimeout(function(){ document.addEventListener('click', closeCardMenu, {once:true}); }, 0);
+}
+
+async function _bulkMoveToFolder(toFolder) {
+  var paths = Array.from(_selectedJobs);
+  var metas = Array.from(_selectedMeta.values());
+  for (var i = 0; i < metas.length; i++) {
+    var j = metas[i];
+    try {
+      var r = await fetch(jobApiUrl(j.path, '/move'), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({folder: toFolder})
+      });
+      if (!r.ok) {
+        var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+        showError('Move failed for ' + j.name + ': ' + (e.detail||''));
+      } else {
+        var data = await r.json();
+        if (_activeJob === j.path) { _activeJob = data.path; _activeJobFolder = data.folder || null; }
+      }
+    } catch(err) { showError('Move failed: ' + err.message); }
+  }
+  clearSelection();
+  await loadJobsList();
+}
+
+// ── Bulk delete ───────────────────────────────────────────────────────────────
+async function bulkDelete() {
+  var n = _selectedJobs.size;
+  if (!n) return;
+  if (!window.confirm('Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '? This cannot be undone.')) return;
+  var metas = Array.from(_selectedMeta.values());
+  for (var i = 0; i < metas.length; i++) {
+    var j = metas[i];
+    try {
+      var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
+      if (r.ok && _activeJob === j.path) { _activeJob = null; _activeJobFolder = null; _dirty = false; _doNewJob(); }
+    } catch(err) { showError('Delete failed: ' + err.message); }
+  }
+  clearSelection();
+  await loadJobsList();
 }
 
 // ── Batch dialog ──────────────────────────────────────────────────────────────

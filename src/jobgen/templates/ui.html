@@ -21,6 +21,13 @@
       </div>
       <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
       <button id="jp-batch" onclick="openBatchDialog()">&#8659; Batch</button>
+      <div id="jp-sel-bar">
+        <span id="jp-sel-count">0 selected</span>
+        <button class="sel-action" id="sel-merge-btn" onclick="openMergeModal()">Merge</button>
+        <button class="sel-action" onclick="bulkMove()">Move</button>
+        <button class="sel-action danger" onclick="bulkDelete()">Delete</button>
+        <button class="sel-clear" onclick="clearSelection()" title="Clear selection">&#10005;</button>
+      </div>
       <div id="jp-list"></div>
     </div>
     <button id="jp-tog" onclick="toggleJp()" title="Toggle jobs panel">&#9664;</button>
@@ -141,6 +148,25 @@
   </div>
 </div>
 
+
+<div id="merge-modal">
+  <div id="merge-card">
+    <h3>Merge Jobs</h3>
+    <div id="merge-sources" style="font-size:10px;color:#64748b;margin-bottom:10px"></div>
+    <label>New job name</label>
+    <input type="text" id="merge-name" placeholder="merged-field">
+    <label style="margin-top:8px">Group folder <span style="font-weight:400">(optional)</span></label>
+    <input type="text" id="merge-folder" placeholder="leave blank for root">
+    <label class="merge-del-row">
+      <input type="checkbox" id="merge-del-src">
+      Delete source jobs after merge
+    </label>
+    <div class="btn-pair">
+      <button id="merge-cancel" onclick="closeMergeModal()">Cancel</button>
+      <button id="merge-submit" onclick="submitMerge()">Merge</button>
+    </div>
+  </div>
+</div>
 
 <div id="batch-modal">
   <div id="batch-card">
