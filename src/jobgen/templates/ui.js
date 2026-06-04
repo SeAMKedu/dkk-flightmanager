@@ -2303,10 +2303,16 @@ function closeBatchDialog() {
   document.getElementById('batch-modal').classList.remove('open');
 }
 
+var _batchPlaceholders = {
+  parcels:    'One parcel ID per line\n5241087453\n5241087454\n\nOr paste comma-separated',
+  properties: 'One property ID per line\n214-407-3-22\n214-407-3-23\n\nOr paste comma-separated'
+};
+
 function setBatchType(type) {
   _batchType = type;
   document.getElementById('btype-parcels').classList.toggle('active', type === 'parcels');
   document.getElementById('btype-props').classList.toggle('active', type === 'properties');
+  document.getElementById('batch-ids').placeholder = _batchPlaceholders[type];
 }
 
 function _parseBatchIds() {
