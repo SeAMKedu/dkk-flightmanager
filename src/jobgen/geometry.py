@@ -525,6 +525,52 @@ vertex_count = _vertex_count     # public alias used by pipeline.py
 _build_keepout = build_keepout   # backward-compat alias for existing tests
 
 
+def suggest_takeoff_point(polygon_3067: "BaseGeometry") -> tuple[float, float]:
+    """Return (x, y) in EPSG:3067 of the best takeoff/landing boundary point.
+
+    Minimises the maximum distance from the chosen point to any polygon vertex
+    (minimax / 1-centre projected to boundary).  This minimises the operator's
+    worst-case VLOS distance to the drone throughout the mission.
+
+    Works in metric EPSG:3067 space so distance comparisons are accurate.
+    """
+    coords: list[tuple[float, float]] = []
+    if polygon_3067.geom_type == "Polygon":
+        coords = list(polygon_3067.exterior.coords)
+    elif polygon_3067.geom_type == "MultiPolygon":
+        for p in polygon_3067.geoms:
+            coords.extend(p.exterior.coords)
+
+    if not coords:
+        c = polygon_3067.centroid
+        return (c.x, c.y)
+
+    boundary = polygon_3067.boundary
+    total_len = boundary.length
+    if total_len == 0:
+        c = polygon_3067.centroid
+        return (c.x, c.y)
+
+    # Sample boundary at ~5 m spacing, capped to keep it fast for large polygons.
+    n_samples = max(60, min(300, int(total_len / 5.0)))
+
+    best_pt = None
+    best_max_d2 = float("inf")
+
+    for i in range(n_samples):
+        pt = boundary.interpolate(i / n_samples, normalized=True)
+        max_d2 = max((pt.x - vx) ** 2 + (pt.y - vy) ** 2 for vx, vy in coords)
+        if max_d2 < best_max_d2:
+            best_max_d2 = max_d2
+            best_pt = pt
+
+    if best_pt is None:
+        c = polygon_3067.centroid
+        return (c.x, c.y)
+
+    return (best_pt.x, best_pt.y)
+
+
 def _simplify_pieces(
     pieces: list[BaseGeometry],
     cfg,  # PolygonConfig — avoid circular import by not type-hinting here

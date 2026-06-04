@@ -32,7 +32,7 @@ from jobgen.config import AppConfig
 from jobgen.elevation import tile_fetcher as dem_fetcher, validate_tile
 from jobgen.geometry import (
     SurveyGeometry, apply_survey_offset, build_keepout, process_survey,
-    reproject_to_4326, reproject_to_3067, vertex_count,
+    reproject_to_4326, reproject_to_3067, vertex_count, suggest_takeoff_point,
 )
 from jobgen.logging_setup import setup_logging
 from jobgen.parcels import fetch_parcels
@@ -719,12 +719,22 @@ def run_preview(
 
     _cb(progress_cb, "complete", "Preview complete", 100)
 
+    # Suggest takeoff/landing position: boundary point minimising max VLOS distance.
+    try:
+        _tkx, _tky = suggest_takeoff_point(survey_geom.survey_3067)
+        from shapely.geometry import Point as _Point
+        _tk_4326 = reproject_to_4326(_Point(_tkx, _tky))
+        takeoff_point_4326 = [_tk_4326.x, _tk_4326.y]
+    except Exception:
+        takeoff_point_4326 = None
+
     result = {
         "survey": dict(mapping(survey_geom.survey_4326)),
         "original_areas": [dict(mapping(reproject_to_4326(p.geometry))) for p in input_geoms],
         "buildings": buildings_data,
         "keepout_zone": dict(mapping(keepout_4326)) if keepout_4326 else None,
         "zone_hits": zone_hits_data,
+        "takeoff_point_4326": takeoff_point_4326,
         "dsm_b64": dsm_b64,
         "dsm_bounds": list(dsm_bounds) if dsm_bounds else None,
         "stats": {

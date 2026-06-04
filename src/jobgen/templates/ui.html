@@ -25,6 +25,7 @@
       <div id="jp-sel-bar">
         <span id="jp-sel-count">0 selected</span>
         <button class="sel-action" id="sel-merge-btn" onclick="openMergeModal()">Merge</button>
+        <button class="sel-action" onclick="exportGoogleMaps()">Google Maps</button>
         <button class="sel-action" onclick="bulkMove()">Move</button>
         <button class="sel-action danger" onclick="bulkDelete()">Delete</button>
         <button class="sel-clear" onclick="clearSelection()" title="Clear selection">&#10005;</button>
@@ -95,7 +96,8 @@
         Keep-out subtraction
       </label>
       <div id="modbadge">&#9888; Polygon manually edited</div>
-      <button class="rst-btn" id="rstbtn" onclick="resetPoly()" disabled style="margin-top:6px">&#8635; Reset polygon</button>
+      <button class="rst-btn" id="takeoff-recalc-btn" onclick="recalcTakeoff()" disabled style="margin-top:6px">&#8635; Reset takeoff position</button>
+      <button class="rst-btn" id="rstbtn" onclick="resetPoly()" disabled style="margin-top:4px">&#8635; Reset polygon</button>
     </div>
 
 
@@ -109,6 +111,7 @@
       <span id="mv-sel-count"></span>
       <button class="sel-action" id="mv-open-btn" onclick="mvOpenJob(this.dataset.path)" style="display:none">Open</button>
       <button class="sel-action" id="mv-merge-btn" onclick="mvMerge()">Merge</button>
+      <button class="sel-action" onclick="exportGoogleMaps()">Google Maps</button>
       <button class="sel-action" onclick="mvBulkMove()">Move</button>
       <button class="sel-action danger" id="mv-delete-btn" onclick="mvBulkDelete()">Delete</button>
       <button class="sel-clear" onclick="mvClearSel()" title="Clear selection">&#10005;</button>
@@ -162,6 +165,11 @@
         <button class="leg-eye" id="leg-zones" title="UAS zones"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><div class="l-swatch" style="background:#f97316;opacity:.4;border:1px solid #ea580c;"></div></div>
         <span>UAS zones</span>
+      </div>
+      <div class="leg-row" id="leg-takeoff-row" style="display:none">
+        <button class="leg-eye" id="leg-takeoff" title="Takeoff / Landing position"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><div class="l-takeoff-icon">&#10005;</div></div>
+        <span>Takeoff point</span>
       </div>
     </div>
     <div id="sp">

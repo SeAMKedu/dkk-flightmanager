@@ -1,0 +1,169 @@
+# Built-in drone + payload profiles for dkk-jobgen.
+#
+# Each [[drone]] entry maps to a DroneConfig.  Fields match the Pydantic model;
+# all are required unless a default is noted in the model (drone_sub_enum,
+# payload_sub_enum, payload_position_index, image_format, battery_minutes).
+#
+# To add or override profiles without editing this file, add [[drones]] entries
+# to your config.toml — any entries there replace this entire list.
+
+# ── Mavic 3 Multispectral ─────────────────────────────────────────────────────
+# drone_enum 77 / payload_enum 68 confirmed from DJI Pilot 2 KMZ fixture
+# (FIXTURE_NOTES.md).  payload_sub_enum 3 = RGB + multispectral simultaneous
+# capture (DJI Pilot 2 always shoots both; MS-only mode is not available).
+
+[[drone]]
+name               = "m3m"
+label              = "DJI Mavic 3 Multispectral — RGB channel"
+drone_enum         = 77
+drone_sub_enum     = 0
+payload_enum       = 68
+payload_sub_enum   = 3
+payload_position_index = 0
+# 20 MP 4/3" sensor, confirmed from EXIF (2026-05-29).
+focal_length_mm    = 12.3
+pixel_pitch_um     = 3.3
+image_width_px     = 5280
+image_height_px    = 3956
+image_format       = "visable,narrow_band"
+battery_minutes    = 28.0
+
+[[drone]]
+name               = "m3m-ms"
+label              = "DJI Mavic 3 Multispectral — MS-limited GSD"
+drone_enum         = 77
+drone_sub_enum     = 0
+payload_enum       = 68
+payload_sub_enum   = 3
+payload_position_index = 0
+# 5 × 5 MP narrowband sensors (Green/Red/Red-edge/NIR + RGB ref), 1/2.8" sensor.
+# Focal length 7.06 mm (HFOV 58°); pixel pitch derived from sensor width:
+#   2 * tan(29°) * 7.06 mm / 2592 px ≈ 3.02 µm.
+# Height is planned against the MS optics — the coarser, limiting sensor.
+# RGB comes out ~60 % finer at the same altitude.
+focal_length_mm    = 7.06
+pixel_pitch_um     = 3.02
+image_width_px     = 2592
+image_height_px    = 1944
+image_format       = "visable,narrow_band"
+battery_minutes    = 28.0
+
+# ── Mavic 3 Enterprise ────────────────────────────────────────────────────────
+# Same airframe and RGB sensor as M3M; payload_sub_enum 0 = RGB-only capture.
+# drone_enum 77 confirmed; payload_sub_enum 0 is inferred (no M3E KMZ fixture).
+# Verify against a real M3E KMZ export before flying.
+
+[[drone]]
+name               = "m3e"
+label              = "DJI Mavic 3 Enterprise — RGB camera"
+drone_enum         = 77
+drone_sub_enum     = 0
+payload_enum       = 68
+payload_sub_enum   = 0
+payload_position_index = 0
+focal_length_mm    = 12.3
+pixel_pitch_um     = 3.3
+image_width_px     = 5280
+image_height_px    = 3956
+image_format       = "wide"
+battery_minutes    = 28.0
+
+# ── Matrice 300 RTK + Zenmuse P1 ─────────────────────────────────────────────
+# drone_enum 60, payload_enum 50 confirmed from DJI Cloud-API-Doc.
+# payload_sub_enum: 0 = 24 mm, 1 = 35 mm, 2 = 50 mm (interchangeable DL lenses).
+# Pixel pitch 4.4 µm confirmed from DJI P1 spec sheet.
+
+[[drone]]
+name               = "m300-p1-24"
+label              = "DJI Matrice 300 RTK + Zenmuse P1 (24 mm)"
+drone_enum         = 60
+drone_sub_enum     = 0
+payload_enum       = 50
+payload_sub_enum   = 0
+payload_position_index = 0
+focal_length_mm    = 24.0
+pixel_pitch_um     = 4.4
+image_width_px     = 8192
+image_height_px    = 5460
+image_format       = "wide"
+battery_minutes    = 35.0
+
+[[drone]]
+name               = "m300-p1-35"
+label              = "DJI Matrice 300 RTK + Zenmuse P1 (35 mm)"
+drone_enum         = 60
+drone_sub_enum     = 0
+payload_enum       = 50
+payload_sub_enum   = 1
+payload_position_index = 0
+focal_length_mm    = 35.0
+pixel_pitch_um     = 4.4
+image_width_px     = 8192
+image_height_px    = 5460
+image_format       = "wide"
+battery_minutes    = 35.0
+
+[[drone]]
+name               = "m300-p1-50"
+label              = "DJI Matrice 300 RTK + Zenmuse P1 (50 mm)"
+drone_enum         = 60
+drone_sub_enum     = 0
+payload_enum       = 50
+payload_sub_enum   = 2
+payload_position_index = 0
+focal_length_mm    = 50.0
+pixel_pitch_um     = 4.4
+image_width_px     = 8192
+image_height_px    = 5460
+image_format       = "wide"
+battery_minutes    = 35.0
+
+# ── Matrice 350 RTK + Zenmuse P1 ─────────────────────────────────────────────
+# drone_enum 89 is from community sources — NOT confirmed from official DJI WPML
+# documentation.  Verify by exporting a test mission from DJI Pilot 2 on an
+# M350 RTK and inspecting wpml:droneEnumValue before flying.
+
+[[drone]]
+name               = "m350-p1-24"
+label              = "DJI Matrice 350 RTK + Zenmuse P1 (24 mm)"
+drone_enum         = 89
+drone_sub_enum     = 0
+payload_enum       = 50
+payload_sub_enum   = 0
+payload_position_index = 0
+focal_length_mm    = 24.0
+pixel_pitch_um     = 4.4
+image_width_px     = 8192
+image_height_px    = 5460
+image_format       = "wide"
+battery_minutes    = 40.0
+
+[[drone]]
+name               = "m350-p1-35"
+label              = "DJI Matrice 350 RTK + Zenmuse P1 (35 mm)"
+drone_enum         = 89
+drone_sub_enum     = 0
+payload_enum       = 50
+payload_sub_enum   = 1
+payload_position_index = 0
+focal_length_mm    = 35.0
+pixel_pitch_um     = 4.4
+image_width_px     = 8192
+image_height_px    = 5460
+image_format       = "wide"
+battery_minutes    = 40.0
+
+[[drone]]
+name               = "m350-p1-50"
+label              = "DJI Matrice 350 RTK + Zenmuse P1 (50 mm)"
+drone_enum         = 89
+drone_sub_enum     = 0
+payload_enum       = 50
+payload_sub_enum   = 2
+payload_position_index = 0
+focal_length_mm    = 50.0
+pixel_pitch_um     = 4.4
+image_width_px     = 8192
+image_height_px    = 5460
+image_format       = "wide"
+battery_minutes    = 40.0

@@ -25,6 +25,12 @@ var _editCHandler = null;  // container-level contextmenu capture (edit mode)
 var _editKHandler = null;  // container-level click capture (bridge picking)
 var _editVHandler = null;  // draw:editvertex → re-patch midpoint icons
 
+// ── Takeoff position ──────────────────────────────────────────────────────────
+var _takeoffAuto = null;        // [lng, lat] suggested by server
+var _takeoffPt   = null;        // [lng, lat] current (auto or user-dragged)
+var _takeoffUserMoved = false;  // true once user drags the marker
+var _takeoffMarker = null;      // Leaflet draggable marker
+
 // ── Map ───────────────────────────────────────────────────────────────────────
 var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
 var _baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -335,6 +341,7 @@ function _doNewJob() {
   // Reset state
   previewData = null; _clearEditedPoly(); _lastPreviewedIds = '';
   _activeJob = null; _activeJobFolder = null; _dirty = false; _altCap = null;
+  _clearTakeoff();
   _setColorPicker(null);
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
   clearPolyEdit();
@@ -495,7 +502,8 @@ async function startExport() {
     job_name: jn,
     folder: _activeJobFolder || null,
     color: colorEl.value !== _DEFAULT_JOB_COLOR ? colorEl.value : null,
-    custom_polygon: polyModified ? editedPoly : null
+    custom_polygon: polyModified ? editedPoly : null,
+    takeoff_point_4326: _takeoffPt || null
   });
   await runJob('/api/export', p, 'Saving…', onSaveDone);
 }
@@ -625,6 +633,11 @@ function onPreviewDone(payload) {
     redrawRings();
     resetLegend(savedVis);  // null on first render → applies startOff defaults
     renderStatus(payload.stats);
+    // Takeoff marker: update auto position; only move marker if user hasn't dragged it
+    if (payload.takeoff_point_4326) {
+      _takeoffAuto = payload.takeoff_point_4326;
+      if (!_takeoffUserMoved) _renderTakeoffMarker(_takeoffAuto);
+    }
   } catch(e) {
     console.error('[onPreviewDone]', e);
     showError('Render error: ' + e.message);
@@ -809,6 +822,53 @@ function centroid(geom) {
   } catch(e){}
   return null;
 }
+
+function _renderTakeoffMarker(lngLat) {
+  if (_takeoffMarker) { map.removeLayer(_takeoffMarker); _takeoffMarker = null; }
+  var row = document.getElementById('leg-takeoff-row');
+  if (!lngLat) { if (row) row.style.display = 'none'; return; }
+  _takeoffPt = lngLat;
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
+    + '<line x1="4" y1="4" x2="20" y2="20" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>'
+    + '<line x1="20" y1="4" x2="4" y2="20" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>'
+    + '<line x1="4" y1="4" x2="20" y2="20" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>'
+    + '<line x1="20" y1="4" x2="4" y2="20" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>'
+    + '</svg>';
+  _takeoffMarker = L.marker([lngLat[1], lngLat[0]], {
+    icon: L.divIcon({className:'takeoff-icon', html:svg, iconSize:[24,24], iconAnchor:[12,12], tooltipAnchor:[0,-14]}),
+    draggable: true,
+    zIndexOffset: 1000,
+  }).addTo(map);
+  _takeoffMarker.bindTooltip('Takeoff / Landing', {permanent:false, direction:'top', className:'takeoff-tooltip'});
+  _takeoffMarker.on('dragstart', function() { _takeoffUserMoved = true; });
+  _takeoffMarker.on('dragend', function() {
+    var ll = _takeoffMarker.getLatLng();
+    _takeoffPt = [ll.lng, ll.lat];
+  });
+  if (row) row.style.display = '';
+  document.getElementById('takeoff-recalc-btn').disabled = false;
+  var btn = document.getElementById('leg-takeoff');
+  if (btn && btn.classList.contains('off')) map.removeLayer(_takeoffMarker);
+}
+
+function recalcTakeoff() {
+  if (!_takeoffAuto) return;
+  _takeoffUserMoved = false;
+  _renderTakeoffMarker(_takeoffAuto);
+}
+
+function _clearTakeoff() {
+  _takeoffAuto = null; _takeoffPt = null; _takeoffUserMoved = false;
+  _renderTakeoffMarker(null);
+  document.getElementById('takeoff-recalc-btn').disabled = true;
+}
+
+// Eye-toggle for takeoff marker (not in lrs, handled separately)
+document.getElementById('leg-takeoff').addEventListener('click', function() {
+  if (!_takeoffMarker) return;
+  if (this.classList.toggle('off')) map.removeLayer(_takeoffMarker);
+  else _takeoffMarker.addTo(map);
+});
 
 // ── Status panel ──────────────────────────────────────────────────────────────
 var _dash = '<span style="color:#cbd5e1">—</span>';
@@ -1404,6 +1464,7 @@ function buildFolderSection(group) {
   hdr.innerHTML = '<span class="jfolder-caret' + (isOpen ? ' open' : '') + '">&#9658;</span>'
     + '<span class="jfolder-name" title="' + escHtml(displayName) + '">' + escHtml(displayName) + '</span>'
     + '<span class="jfolder-count">' + group.jobs.length + '</span>'
+    + '<button class="jfolder-sel-all-btn" title="Select all in folder">&#10003;</button>'
     + '<button class="jfolder-map-btn" data-folder="' + dataFolder + '" title="Show jobs on map"'
     + ' onclick="showFolderOnMap(event,' + (isRoot ? 'null' : '\'' + escHtml(group.name) + '\'') + ')">Map</button>';
 
@@ -1412,8 +1473,18 @@ function buildFolderSection(group) {
   var jobs = document.createElement('div');
   jobs.className = 'jfolder-jobs' + (isOpen ? '' : ' hidden');
 
+  hdr.querySelector('.jfolder-sel-all-btn').addEventListener('click', function(e) {
+    e.stopPropagation();
+    var folderJobs = group.jobs || [];
+    var allSelected = folderJobs.length > 0 && folderJobs.every(function(j){ return _selectedJobs.has(j.path); });
+    folderJobs.forEach(function(j){ toggleJobSelection(j, !allSelected); });
+    var chks = jobs.querySelectorAll('.jcard-chk');
+    chks.forEach(function(chk){ chk.checked = !allSelected; });
+  });
+
   hdr.addEventListener('click', function(e) {
     if (e.target.closest('.jfolder-map-btn')) return;
+    if (e.target.closest('.jfolder-sel-all-btn')) return;
     isOpen = !isOpen;
     localStorage.setItem(storageKey, isOpen ? 'true' : 'false');
     jobs.classList.toggle('hidden', !isOpen);
@@ -1902,6 +1973,12 @@ async function _doOpenJob(path) {
     lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
     editLayers.clearLayers();
     editMode = false; _detachEditListeners();
+    _clearTakeoff();
+    if (p && p.takeoff_point_4326) {
+      _takeoffAuto = p.takeoff_point_4326;
+      _takeoffUserMoved = true;   // preserve saved position; ↺ resets to auto
+      _renderTakeoffMarker(p.takeoff_point_4326);
+    }
     // Restore form
     _restoreFormFromParams(p);
     document.getElementById('jname').value = name;
@@ -2265,6 +2342,103 @@ async function _bulkMoveToFolder(toFolder) {
   }
   clearSelection();
   await loadJobsList();
+}
+
+// ── Google Maps export ────────────────────────────────────────────────────────
+function _hexToKmlColor(hex, alpha) {
+  // CSS #RRGGBB → KML AABBGGRR
+  var h = (hex || '#3b82f6').replace('#', '');
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  return alpha + h.slice(4,6) + h.slice(2,4) + h.slice(0,2);
+}
+
+function _escapeXml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+
+async function exportGoogleMaps() {
+  // Works from both list-view (_selectedJobs) and map-view (_mvSelected)
+  var paths = _mvMode ? Array.from(_mvSelected) : Array.from(_selectedJobs);
+  if (!paths.length) return;
+
+  var jobs = [];
+  for (var i = 0; i < paths.length; i++) {
+    try {
+      var r = await fetch(jobApiUrl(paths[i]));
+      if (!r.ok) continue;
+      var data = await r.json();
+      jobs.push({path: paths[i], params: data.params});
+    } catch (e) { /* skip */ }
+  }
+  if (!jobs.length) return;
+
+  var kml = ['<?xml version="1.0" encoding="UTF-8"?>',
+    '<kml xmlns="http://www.opengis.net/kml/2.2">',
+    '<Document><name>DKK Jobs</name>'];
+
+  var navPoints = [];
+
+  jobs.forEach(function(job) {
+    var p = job.params;
+    var name = p.job_name || job.path;
+    var lineColor = _hexToKmlColor(p.color, 'ff');
+    var fillColor = _hexToKmlColor(p.color, '55');
+
+    kml.push('<Folder><name>' + _escapeXml(name) + '</name>');
+
+    // Polygon
+    var poly = p.custom_polygon_4326;
+    if (poly && poly.coordinates && poly.coordinates[0]) {
+      var ring = poly.coordinates[0];
+      var coords = ring.map(function(c){ return c[0]+','+c[1]+',0'; }).join(' ');
+      kml.push('<Placemark>');
+      kml.push('<name>' + _escapeXml(name) + '</name>');
+      kml.push('<Style>');
+      kml.push('<LineStyle><color>' + lineColor + '</color><width>2</width></LineStyle>');
+      kml.push('<PolyStyle><color>' + fillColor + '</color></PolyStyle>');
+      kml.push('</Style>');
+      kml.push('<Polygon><outerBoundaryIs><LinearRing>');
+      kml.push('<coordinates>' + coords + '</coordinates>');
+      kml.push('</LinearRing></outerBoundaryIs></Polygon>');
+      kml.push('</Placemark>');
+    }
+
+    // Takeoff marker
+    var tp = p.takeoff_point_4326;
+    if (tp) {
+      navPoints.push(tp[1] + ',' + tp[0]);
+      kml.push('<Placemark>');
+      kml.push('<name>' + _escapeXml(name) + '</name>');
+      kml.push('<Style><IconStyle><color>' + lineColor + '</color></IconStyle></Style>');
+      kml.push('<Point><coordinates>' + tp[0] + ',' + tp[1] + ',0</coordinates></Point>');
+      kml.push('</Placemark>');
+    }
+
+    kml.push('</Folder>');
+  });
+
+  kml.push('</Document></kml>');
+
+  // Derive filename from folder if all selected jobs share one subfolder
+  var folders = new Set(paths.map(function(p){ var s = p.indexOf('/'); return s >= 0 ? p.slice(0, s) : null; }));
+  var fileName = (folders.size === 1 && Array.from(folders)[0] !== null)
+    ? 'dkk-' + Array.from(folders)[0] + '.kml'
+    : 'dkk-jobs.kml';
+
+  // Download KML
+  var blob = new Blob([kml.join('\n')], {type: 'application/vnd.google-earth.kml+xml'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = fileName; a.click();
+  URL.revokeObjectURL(url);
+
+  // Open Google Maps with takeoff points as navigation waypoints (max 10)
+  if (navPoints.length === 1) {
+    window.open('https://www.google.com/maps/search/?api=1&query=' + navPoints[0], '_blank');
+  } else if (navPoints.length >= 2) {
+    var pts = navPoints.slice(0, 10);
+    window.open('https://www.google.com/maps/dir/' + pts.join('/'), '_blank');
+  }
 }
 
 // ── Bulk delete ───────────────────────────────────────────────────────────────

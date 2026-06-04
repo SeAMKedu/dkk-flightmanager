@@ -56,96 +56,11 @@ class DroneConfig(BaseModel):
 
 
 def _default_drones() -> list[DroneConfig]:
-    """Built-in drone profiles shipped with the tool."""
-    return [
-        # ── Mavic 3 Multispectral ─────────────────────────────────────────────
-        # drone_enum 77 / payload_enum 68 confirmed from DJI Pilot 2 KMZ fixture
-        # (FIXTURE_NOTES.md).  Payload sub_enum 3 = RGB + multispectral capture.
-        DroneConfig(
-            name="m3m", label="DJI Mavic 3 Multispectral — RGB channel",
-            drone_enum=77, drone_sub_enum=0,
-            payload_enum=68, payload_sub_enum=3, payload_position_index=0,
-            focal_length_mm=12.3, pixel_pitch_um=3.3,
-            image_width_px=5280, image_height_px=3956,
-            image_format="visable,narrow_band",
-            battery_minutes=28.0,
-        ),
-        # ── Mavic 3 Enterprise ────────────────────────────────────────────────
-        # Same airframe and RGB sensor as M3M; sub_enum 0 = RGB-only capture.
-        # drone_enum 77 confirmed; payload sub_enum 0 is inferred (no M3E fixture).
-        # Verify against a real M3E KMZ export before flying.
-        DroneConfig(
-            name="m3e", label="DJI Mavic 3 Enterprise — RGB camera",
-            drone_enum=77, drone_sub_enum=0,
-            payload_enum=68, payload_sub_enum=0, payload_position_index=0,
-            focal_length_mm=12.3, pixel_pitch_um=3.3,
-            image_width_px=5280, image_height_px=3956,
-            image_format="wide",
-            battery_minutes=28.0,
-        ),
-        # ── Matrice 300 RTK + Zenmuse P1 ─────────────────────────────────────
-        # drone_enum 60, payload_enum 50 confirmed from DJI Cloud-API-Doc.
-        # payload_sub_enum: 0=24 mm, 1=35 mm, 2=50 mm (interchangeable DL lenses).
-        # Pixel pitch 4.4 μm confirmed from DJI P1 spec sheet.
-        DroneConfig(
-            name="m300-p1-24", label="DJI Matrice 300 RTK + Zenmuse P1 (24 mm)",
-            drone_enum=60, drone_sub_enum=0,
-            payload_enum=50, payload_sub_enum=0, payload_position_index=0,
-            focal_length_mm=24.0, pixel_pitch_um=4.4,
-            image_width_px=8192, image_height_px=5460,
-            image_format="wide",
-            battery_minutes=35.0,
-        ),
-        DroneConfig(
-            name="m300-p1-35", label="DJI Matrice 300 RTK + Zenmuse P1 (35 mm)",
-            drone_enum=60, drone_sub_enum=0,
-            payload_enum=50, payload_sub_enum=1, payload_position_index=0,
-            focal_length_mm=35.0, pixel_pitch_um=4.4,
-            image_width_px=8192, image_height_px=5460,
-            image_format="wide",
-            battery_minutes=35.0,
-        ),
-        DroneConfig(
-            name="m300-p1-50", label="DJI Matrice 300 RTK + Zenmuse P1 (50 mm)",
-            drone_enum=60, drone_sub_enum=0,
-            payload_enum=50, payload_sub_enum=2, payload_position_index=0,
-            focal_length_mm=50.0, pixel_pitch_um=4.4,
-            image_width_px=8192, image_height_px=5460,
-            image_format="wide",
-            battery_minutes=35.0,
-        ),
-        # ── Matrice 350 RTK + Zenmuse P1 ─────────────────────────────────────
-        # drone_enum 89 is from community sources — NOT confirmed from official
-        # DJI WPML documentation.  Verify by exporting a test mission from
-        # DJI Pilot 2 on an M350 RTK and inspecting the wpml:droneEnumValue.
-        DroneConfig(
-            name="m350-p1-24", label="DJI Matrice 350 RTK + Zenmuse P1 (24 mm)",
-            drone_enum=89, drone_sub_enum=0,
-            payload_enum=50, payload_sub_enum=0, payload_position_index=0,
-            focal_length_mm=24.0, pixel_pitch_um=4.4,
-            image_width_px=8192, image_height_px=5460,
-            image_format="wide",
-            battery_minutes=40.0,
-        ),
-        DroneConfig(
-            name="m350-p1-35", label="DJI Matrice 350 RTK + Zenmuse P1 (35 mm)",
-            drone_enum=89, drone_sub_enum=0,
-            payload_enum=50, payload_sub_enum=1, payload_position_index=0,
-            focal_length_mm=35.0, pixel_pitch_um=4.4,
-            image_width_px=8192, image_height_px=5460,
-            image_format="wide",
-            battery_minutes=40.0,
-        ),
-        DroneConfig(
-            name="m350-p1-50", label="DJI Matrice 350 RTK + Zenmuse P1 (50 mm)",
-            drone_enum=89, drone_sub_enum=0,
-            payload_enum=50, payload_sub_enum=2, payload_position_index=0,
-            focal_length_mm=50.0, pixel_pitch_um=4.4,
-            image_width_px=8192, image_height_px=5460,
-            image_format="wide",
-            battery_minutes=40.0,
-        ),
-    ]
+    """Load built-in drone profiles from drones.toml (shipped alongside this file)."""
+    toml_path = Path(__file__).with_name("drones.toml")
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+    return [DroneConfig(**entry) for entry in data["drone"]]
 
 
 class FlightConfig(BaseModel):
@@ -308,7 +223,7 @@ class AppConfig(BaseModel):
     zones: ZonesConfig = Field(default_factory=ZonesConfig)
     # Drone / payload profiles.  The built-in list covers common DJI mapping drones.
     # Add [[drones]] entries in config.toml to extend or override.
-    default_drone: str = "m3m"
+    default_drone: str = "m3m-ms"
     drones: list[DroneConfig] = Field(default_factory=_default_drones)
 
     @model_validator(mode="after")
