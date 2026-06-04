@@ -279,6 +279,7 @@ function _clearEditedPoly() {
 // Auto-update on flight / polygon param changes (only when a preview exists)
 var _autoTimer = null;
 var _lastPreviewedIds = '';
+var _fitBoundsOnNextRender = false;
 
 function idsKey() {
   return document.getElementById('pids').value.trim() + '||' + document.getElementById('kids').value.trim();
@@ -304,6 +305,7 @@ function onIdBlur() {
     var key = idsKey();
     if (!key.replace('||','').trim()) return; // no IDs entered
     if (key === _lastPreviewedIds) return;     // unchanged since last fetch
+    _fitBoundsOnNextRender = true;
     scheduleAutoUpdate(true);
   }, 150);
 }
@@ -778,7 +780,7 @@ function renderMap(data) {
       l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!editMode && !_bridgeMode) toggleEdit(); });
     });
     console.log('[renderMap] survey bounds', lrs.survey.getBounds());
-    map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]});
+    if (_fitBoundsOnNextRender) { _fitBoundsOnNextRender = false; map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]}); }
   } else {
     console.warn('[renderMap] no survey polygons rendered, survey type:', data.survey && data.survey.type);
   }
@@ -1911,7 +1913,8 @@ async function _doOpenJob(path) {
     clearError();
     // Highlight card
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
-    // Restore map from stored preview (instant)
+    // Restore map from stored preview (instant); fit bounds once for this job load
+    _fitBoundsOnNextRender = true;
     if (p && p.last_preview_geojson) {
       previewData = p.last_preview_geojson;
       _lastPreviewedIds = ((p.inputs && p.inputs.parcel_ids)||[]).join(',')
