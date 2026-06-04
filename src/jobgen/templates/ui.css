@@ -194,6 +194,8 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .jfolder-count{font-size:9px;color:#475569;flex-shrink:0}
 .jfolder-map-btn{background:none;border:1px solid #334155;border-radius:3px;color:#64748b;font-size:9px;padding:1px 5px;cursor:pointer;flex-shrink:0;width:auto;font-weight:600;transition:color .12s,border-color .12s}
 .jfolder-map-btn:hover{color:#94a3b8;border-color:#475569}
+.jfolder-sel-all-btn{background:none;border:1px solid #334155;border-radius:3px;color:#64748b;font-size:9px;padding:1px 5px;cursor:pointer;flex-shrink:0;width:auto;font-weight:600;transition:color .12s,border-color .12s}
+.jfolder-sel-all-btn:hover{color:#94a3b8;border-color:#475569}
 .jfolder-jobs{padding-left:8px}
 .jfolder-jobs.hidden{display:none}
 /* Untouched badge */

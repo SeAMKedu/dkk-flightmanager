@@ -1464,6 +1464,7 @@ function buildFolderSection(group) {
   hdr.innerHTML = '<span class="jfolder-caret' + (isOpen ? ' open' : '') + '">&#9658;</span>'
     + '<span class="jfolder-name" title="' + escHtml(displayName) + '">' + escHtml(displayName) + '</span>'
     + '<span class="jfolder-count">' + group.jobs.length + '</span>'
+    + '<button class="jfolder-sel-all-btn" title="Select all in folder">&#10003;</button>'
     + '<button class="jfolder-map-btn" data-folder="' + dataFolder + '" title="Show jobs on map"'
     + ' onclick="showFolderOnMap(event,' + (isRoot ? 'null' : '\'' + escHtml(group.name) + '\'') + ')">Map</button>';
 
@@ -1472,8 +1473,18 @@ function buildFolderSection(group) {
   var jobs = document.createElement('div');
   jobs.className = 'jfolder-jobs' + (isOpen ? '' : ' hidden');
 
+  hdr.querySelector('.jfolder-sel-all-btn').addEventListener('click', function(e) {
+    e.stopPropagation();
+    var folderJobs = group.jobs || [];
+    var allSelected = folderJobs.length > 0 && folderJobs.every(function(j){ return _selectedJobs.has(j.path); });
+    folderJobs.forEach(function(j){ toggleJobSelection(j, !allSelected); });
+    var chks = jobs.querySelectorAll('.jcard-chk');
+    chks.forEach(function(chk){ chk.checked = !allSelected; });
+  });
+
   hdr.addEventListener('click', function(e) {
     if (e.target.closest('.jfolder-map-btn')) return;
+    if (e.target.closest('.jfolder-sel-all-btn')) return;
     isOpen = !isOpen;
     localStorage.setItem(storageKey, isOpen ? 'true' : 'false');
     jobs.classList.toggle('hidden', !isOpen);
