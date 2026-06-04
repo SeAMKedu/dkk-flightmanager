@@ -77,7 +77,11 @@ jobgen serve --port 8080 --no-open   # custom port, no auto-open
 
 The single-page Leaflet map interface lets you:
 
-- **Manage jobs** — the **Jobs panel** on the left lists all saved jobs with thumbnails, area, and status badges. Click any card to re-open a job (form and map restore instantly; a fresh preview runs automatically). Use the three-dot menu per card to **Clone**, **Rename**, or **Delete** a job. Click **＋ New Job** at the top of the panel to start a fresh job. The panel can be collapsed with the `◄` tab on its right edge.
+- **Manage jobs** — the **Jobs panel** on the left lists all saved jobs with thumbnails, area, and status badges. Click any card to re-open a job (form and map restore instantly; a fresh preview runs automatically). Jobs can be organised into **group folders** — each folder section is collapsible, and every job card has a three-dot menu with **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. Click **＋ New Job** to start a fresh job. The panel can be collapsed with the `◄` tab on its right edge.
+- **Batch-create skeleton jobs** — click **↓ Batch** to open the batch dialog. Paste a list of parcel or property IDs (one per line, `#` comments ignored), or load a `.txt`/`.csv` file. Assign a group folder and optional flight param overrides, then click **Create N jobs** — each ID becomes a skeleton job (polygon stored, no KMZ yet) ready to open and edit. The same operation is available from the CLI with `jobgen batch`.
+- **Multi-select and bulk operations** — hover over any job card to reveal a checkbox. Check two or more jobs to activate the selection toolbar: **Merge** (union their polygons into a new job), **Move** (send to a folder), or **Delete** all at once.
+- **Map view** — click the □ button in the panel header (or the **Map** button on any folder section header) to open a full-screen job map. All job polygons are shown with their assigned **map color**; **dash pattern** encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched batch job, dotted = unknown. Click a polygon for a popup with Open/Delete; Ctrl+click to select multiple polygons for bulk operations. A folder filter dropdown lets you focus on one group. Closing the overlay returns to the editor.
+- **Job map color** — a small color swatch next to the **Name** field assigns a per-job display color used in the map view. The change is saved immediately. The job editor map always stays blue regardless of this setting.
 - **Enter area IDs** — paste Ruokavirasto parcel IDs or MML kiinteistötunnus values; the map updates automatically when you leave the field.
 - **Draw a scratch polygon** — if you have no parcel or property IDs, right-click anywhere on the empty map to create a 300×300 m square centred on the cursor. The map enters vertex-drag edit mode immediately so you can reshape it freely. Parcel/property IDs are not required — the drawn polygon is the sole input for preview and save.
 - **Tune flight parameters** — subcategory (A2/A3 pills), drone, height (live GSD display), and warning radius (linked to 3× height by default; click the "3:1" label to restore the link after manual override).
@@ -247,6 +251,39 @@ the built-in list entirely, so copy across any profiles you still want to use.
 > Before flying a job generated for an M350 RTK, verify the value by exporting a
 > test mission from DJI Pilot 2 on the aircraft and checking `wpml:droneEnumValue`
 > in the KMZ.
+
+### Batch skeleton job creation (`jobgen batch`)
+
+Creates skeleton jobs for a list of parcel or property IDs — fetches geometry for each ID and writes `job_params.json` (no KMZ or DSM). Jobs appear in the browser UI ready to open, tune, and export.
+
+```bash
+# Inline parcel IDs
+jobgen batch --parcels 5241087453,5241087454 --folder my-group
+
+# Inline property IDs
+jobgen batch --properties 214-407-3-22,214-407-3-23 --folder my-group
+
+# IDs from a file (one per line; # comments and blank lines ignored)
+jobgen batch --file ids.txt --folder my-group
+
+# Mix inline IDs and file
+jobgen batch --parcels 5241087453 --file more.txt --folder my-group
+
+# Auto-detect ID type from format (all-digit → parcels; NNN-NNN-N-NN → properties)
+jobgen batch --file ids.txt --folder my-group
+```
+
+The `--parcels` / `--properties` flag determines ID type. If neither is given, type is auto-detected from the first ID in the file. Each ID becomes a job named after the ID itself. Existing jobs with the same name in the target folder are skipped (not overwritten). A per-ID pass/fail table is printed on completion.
+
+| Flag | Description |
+|---|---|
+| `--parcels TEXT` | Comma-separated parcel IDs (also sets ID type to parcels) |
+| `--properties TEXT` | Comma-separated property IDs (also sets ID type to properties) |
+| `--file PATH` | Text file of IDs (one per line) |
+| `--folder TEXT` | Output subfolder to group the batch under |
+| `--drone TEXT` | Drone profile override |
+| `--height FLOAT` | Flight height override (m AGL) |
+| `--subcategory TEXT` | `A2` or `A3` |
 
 ### Cache management
 
