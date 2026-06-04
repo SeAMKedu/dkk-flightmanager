@@ -108,9 +108,10 @@
     <!-- Map view: floating action bar (top-center, visible when jobs selected) -->
     <div id="mv-actions">
       <span id="mv-sel-count"></span>
+      <button class="sel-action" id="mv-open-btn" onclick="mvOpenJob(this.dataset.path)" style="display:none">Open</button>
       <button class="sel-action" id="mv-merge-btn" onclick="mvMerge()">Merge</button>
       <button class="sel-action" onclick="mvBulkMove()">Move</button>
-      <button class="sel-action danger" onclick="mvBulkDelete()">Delete</button>
+      <button class="sel-action danger" id="mv-delete-btn" onclick="mvBulkDelete()">Delete</button>
       <button class="sel-clear" onclick="mvClearSel()" title="Clear selection">&#10005;</button>
     </div>
     <!-- Map view: status legend (top-right, replaces editor legend) -->

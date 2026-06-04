@@ -920,7 +920,8 @@ document.addEventListener('keydown', function(e) {
 // Right-click on an empty map creates a 300×300 m square centred on the cursor.
 // Blocked when a polygon already exists or when edit/bridge mode is active.
 map.on('contextmenu', function(e) {
-  if (_mvMode || editMode || _bridgeMode || _currentSurveyGeom()) return;
+  if (_mvMode) { if (_mvSelected.size > 0) mvClearSel(); return; }
+  if (editMode || _bridgeMode || _currentSurveyGeom()) return;
   var lat = e.latlng.lat, lng = e.latlng.lng;
   var dLat = 150 / 111320;
   var dLng = 150 / (111320 * Math.cos(lat * Math.PI / 180));
@@ -1635,6 +1636,10 @@ function closeMapView() {
   _mvMode = false;
   _mvCurrentFolder = null;
   _mvClearLayers();
+  _mvSelected.forEach(function(path) {
+    var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
+    if (card) card.classList.remove('selected');
+  });
   _mvSelected.clear();
   _mvUpdateSelBar();
 
@@ -1707,13 +1712,21 @@ function _mvMakeLayer(feature) {
       dashArray: dashArray,
     });
 
+    var statusLabel = p.flight_ready === true ? '✓ Ready'
+      : p.needs_review === true ? '⚠ Review'
+      : p.untouched ? 'New' : '—';
+    var areaStr = p.area_ha != null ? ' · ' + p.area_ha.toFixed(1) + ' ha' : '';
+    var ttLabel = escHtml(p.name) + (p.folder ? ' (' + escHtml(p.folder) + ')' : '')
+      + '<br><span style="font-size:10px">' + statusLabel + areaStr + '</span>';
+    layer.bindTooltip(ttLabel, {direction: 'top', opacity: 0.92, sticky: false, className: 'mv-tooltip'});
+
     layer.on('click', function(e) {
       L.DomEvent.stopPropagation(e);
-      if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
-        _mvToggleSel(p.path);
-      } else {
-        _mvShowPopup(e.latlng, feature, layer);
-      }
+      _mvToggleSel(p.path);
+    });
+    layer.on('dblclick', function(e) {
+      L.DomEvent.stopPropagation(e);
+      mvOpenJob(p.path);
     });
     return layer;
   } catch(e) { return null; }
@@ -1772,13 +1785,16 @@ async function mvDeleteJob(path, name) {
 function _mvToggleSel(path) {
   var item = _mvLayers.find(function(i){ return i.path === path; });
   if (!item) return;
+  var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
   if (_mvSelected.has(path)) {
     _mvSelected.delete(path);
     var origColor = item.feature.properties.color || _DEFAULT_COLOR;
     item.layer.setStyle({weight: 2.5, opacity: 1, color: origColor, fillColor: origColor});
+    if (card) card.classList.remove('selected');
   } else {
     _mvSelected.add(path);
     item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
+    if (card) card.classList.add('selected');
   }
   _mvUpdateSelBar();
 }
@@ -1787,6 +1803,8 @@ function mvClearSel() {
   _mvSelected.forEach(function(path) {
     var item = _mvLayers.find(function(i){ return i.path === path; });
     if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
+    var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
+    if (card) card.classList.remove('selected');
   });
   _mvSelected.clear();
   _mvUpdateSelBar();
@@ -1797,6 +1815,11 @@ function _mvUpdateSelBar() {
   document.getElementById('mv-actions').classList.toggle('visible', n > 0);
   document.getElementById('mv-sel-count').textContent = n + ' selected';
   document.getElementById('mv-merge-btn').disabled = n < 2;
+  var openBtn = document.getElementById('mv-open-btn');
+  if (openBtn) {
+    openBtn.style.display = n === 1 ? '' : 'none';
+    if (n === 1) openBtn.dataset.path = Array.from(_mvSelected)[0];
+  }
 }
 
 function mvMerge() {

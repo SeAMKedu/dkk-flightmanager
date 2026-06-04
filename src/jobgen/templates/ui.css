@@ -218,6 +218,8 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .sel-action.danger:hover{color:#fca5a5;border-color:#dc2626}
 .sel-clear{background:none;border:none;color:#475569;font-size:13px;cursor:pointer;padding:0 2px;width:auto;line-height:1}
 .sel-clear:hover{color:#94a3b8}
+.mv-tooltip{background:#1e293b;border:1px solid #334155;color:#f1f5f9;font-size:12px;line-height:1.5;padding:5px 9px;border-radius:5px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.mv-tooltip::before{border-top-color:#334155}
 /* Merge modal */
 #merge-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center}
 #merge-modal.open{display:flex}
