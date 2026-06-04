@@ -156,7 +156,7 @@ dense polygons that are difficult to edit on the DJI RC touch screen.
 `--simplify` reduces vertex count before writing the KMZ.
 
 ```bash
-# Auto: find the largest simplification that keeps the polygon ≤ 50 vertices
+# Auto: find the knee of the simplification curve (recommended)
 jobgen run --name pelto-2024 --parcels 5241087453 --simplify auto
 
 # Fixed tolerance in metres (Douglas-Peucker)
@@ -171,8 +171,10 @@ The default tolerance and mode are set in `config.toml` under `[polygon]`:
 ```toml
 simplify_mode = "fixed"           # "fixed" or "auto"
 simplify_tolerance_m = 1.0        # metres; used when simplify_mode = "fixed"
-auto_simplify_max_vertices = 50   # vertex target for simplify_mode = "auto"
+auto_simplify_max_vertices = 15   # hard cap for simplify_mode = "auto"
 ```
+
+**Auto mode** samples vertex count at ten log-spaced tolerances (0.5 m → 500 m) and picks the tolerance at the **knee of the complexity curve** — the point where further simplification stops removing noise and starts distorting the actual field boundary. For Finnish cadastral data (survey noise ~2–5 m), the knee typically falls in the 5–20 m range, producing 8–20 vertices. `auto_simplify_max_vertices` acts as a hard upper bound; if the knee result exceeds it a binary search enforces the cap.
 
 The vertex count after simplification is printed in the job summary and recorded
 in `manifest.json` under `geometry.survey_vertex_count`.
@@ -192,6 +194,8 @@ jobgen run --name pelto-2024 --parcels 5241087453 --offset -5
 A negative offset can split the polygon or introduce holes at narrow corners — these are handled automatically by `hole_policy` / `multipart_policy` in the same way as keep-out subtraction results. If the contraction collapses the polygon entirely, the original geometry is preserved and a warning is logged.
 
 Set `survey_offset_m` in `config.toml` under `[polygon]` to apply a default offset to every job.
+
+**Offset and polygon editing (browser UI):** When you enter vertex-drag edit mode, the map shows the offset-applied polygon. Exiting edit mode bakes that shape in — the offset field resets to 0 and the edited geometry becomes the new base. This prevents double-application if you later adjust the offset again. If you want to re-apply an offset after editing, type a new value in the Offset field after exiting edit mode.
 
 ### Disabling keep-out subtraction (`--no-keepout`)
 
