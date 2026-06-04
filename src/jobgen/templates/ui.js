@@ -292,6 +292,7 @@ document.getElementById('kids').addEventListener('blur', onIdBlur);
 // New Job — reset editor to a blank slate
 function newJob() {
   if (isRunning) return;
+  if (_mvMode) closeMapView();
   confirmIfDirty(_doNewJob);
 }
 function _doNewJob() {
@@ -882,6 +883,7 @@ function saveEdit() {
 
 // Dblclick on map background (not on polygon) saves the edit
 map.on('dblclick', function(e) {
+  if (_mvMode) return;
   if (editMode) saveEdit();
 });
 
@@ -896,7 +898,7 @@ document.addEventListener('keydown', function(e) {
 // Right-click on an empty map creates a 300×300 m square centred on the cursor.
 // Blocked when a polygon already exists or when edit/bridge mode is active.
 map.on('contextmenu', function(e) {
-  if (editMode || _bridgeMode || _currentSurveyGeom()) return;
+  if (_mvMode || editMode || _bridgeMode || _currentSurveyGeom()) return;
   var lat = e.latlng.lat, lng = e.latlng.lng;
   var dLat = 150 / 111320;
   var dLng = 150 / (111320 * Math.cos(lat * Math.PI / 180));
@@ -1565,90 +1567,70 @@ async function promptNewFolderForJob(j) {
   } catch(e) { showError('Failed: ' + e.message); }
 }
 
-// ── Map view ──────────────────────────────────────────────────────────────────
-var _mvMap = null;           // Leaflet map instance for map view
-var _mvBaseOSM = null;
-var _mvBaseOrto = null;
+// ── Map view (in-place — reuses existing #map, hides #sb) ─────────────────────
+var _mvMode = false;
+var _mvJobGroup = null;      // L.LayerGroup on the main map
 var _mvLayers = [];          // [{path, layer, feature}]
-var _mvSelected = new Set(); // selected paths in map view
-var _mvAllFeatures = [];     // all loaded features (for client-side folder filter)
+var _mvSelected = new Set();
+var _mvAllFeatures = [];
+var _mvCurrentFolder = null;
 var _DEFAULT_COLOR = '#3b82f6';
-var _mmlApiKey = '';           // set from /api/config; used to add MML layer to map view
+var _mmlApiKey = '';           // set from /api/config
 
 function showFolderOnMap(e, folderName) {
   e.stopPropagation();
-  openMapView(folderName || null);
+  var f = folderName || null;
+  if (_mvMode && _mvCurrentFolder === f) { closeMapView(); return; }
+  openMapView(f);
 }
 
 function openMapView(folderFilter) {
-  var overlay = document.getElementById('mapview');
-  overlay.classList.add('open');
+  _mvMode = true;
+  _mvCurrentFolder = folderFilter || null;
+  if (editMode) saveEdit();
+
+  // Hide editor sidebar, swap legend
+  document.getElementById('sb').classList.add('mv-hidden');
+  document.getElementById('legend').classList.add('mv-hidden');
+  document.getElementById('sp').classList.add('mv-hidden');
+  document.getElementById('mv-status-legend').classList.add('visible');
+  document.getElementById('jp-mapview').classList.add('active');
+
+  _mvSelected.clear();
+  _mvUpdateSelBar();
+
+  if (!_mvJobGroup) { _mvJobGroup = L.layerGroup().addTo(map); }
+  _mvLoad(folderFilter);
+}
+
+function closeMapView() {
+  if (!_mvMode) return;
+  _mvMode = false;
+  _mvCurrentFolder = null;
   _mvClearLayers();
   _mvSelected.clear();
   _mvUpdateSelBar();
 
-  // Populate folder selector
-  var sel = document.getElementById('mv-folder-sel');
-  sel.innerHTML = '<option value="">All folders</option>';
-  document.querySelectorAll('.jfolder-name').forEach(function(el) {
-    var n = el.textContent.trim();
-    if (n) { var o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); }
-  });
-  sel.value = folderFilter || '';
-  document.getElementById('mv-title').textContent = folderFilter ? 'Map — ' + folderFilter : 'Job Map';
-
-  if (!_mvMap) {
-    // Initialise lazily — container must be visible first
-    requestAnimationFrame(function() {
-      _mvInitMap();
-      _mvLoad(folderFilter);
-    });
-  } else {
-    _mvLoad(folderFilter);
-  }
-}
-
-function closeMapView() {
-  document.getElementById('mapview').classList.remove('open');
-}
-
-function _mvInitMap() {
-  _mvMap = L.map('mv-map', {preferCanvas: true}).setView([64.5, 26.0], 6);
-  _mvBaseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    {attribution: '&copy; OpenStreetMap', maxZoom: 19}).addTo(_mvMap);
-  if (_mmlApiKey) {
-    var mvOrtoUrl = 'https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts'
-      + '?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0'
-      + '&LAYER=ortokuva&STYLE=default&TILEMATRIXSET=WGS84_Pseudo-Mercator'
-      + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fjpeg'
-      + '&api-key=' + encodeURIComponent(_mmlApiKey);
-    _mvBaseOrto = L.tileLayer(mvOrtoUrl, {attribution: '&copy; MML', maxZoom: 21});
-    L.control.layers({'OSM': _mvBaseOSM, 'MML Ortokuva': _mvBaseOrto}).addTo(_mvMap);
-  }
-  document.getElementById('mv-folder-sel').addEventListener('change', function() {
-    var f = this.value || null;
-    document.getElementById('mv-title').textContent = f ? 'Map — ' + f : 'Job Map';
-    _mvApplyFilter(f);
-  });
+  document.getElementById('sb').classList.remove('mv-hidden');
+  document.getElementById('legend').classList.remove('mv-hidden');
+  document.getElementById('sp').classList.remove('mv-hidden');
+  document.getElementById('mv-status-legend').classList.remove('visible');
+  document.getElementById('jp-mapview').classList.remove('active');
+  map.closePopup();
 }
 
 async function _mvLoad(folderFilter) {
   try {
-    var url = '/api/jobs/geojson';
-    if (folderFilter) url += '?folder=' + encodeURIComponent(folderFilter);
-    // Load all, filter client-side for fast folder switching
     var r = await fetch('/api/jobs/geojson');
     if (!r.ok) return;
     var fc = await r.json();
     _mvAllFeatures = fc.features || [];
     _mvApplyFilter(folderFilter);
-  } catch(e) { console.error('[mapview load]', e); }
+  } catch(e) { console.error('[mapview]', e); }
 }
 
 function _mvApplyFilter(folderFilter) {
   _mvClearLayers();
-  _mvSelected.clear();
-  _mvUpdateSelBar();
   var bounds = [];
   var features = folderFilter
     ? _mvAllFeatures.filter(function(f){ return f.properties.folder === folderFilter; })
@@ -1657,7 +1639,7 @@ function _mvApplyFilter(folderFilter) {
     if (!f.geometry) return;
     var layer = _mvMakeLayer(f);
     if (layer) {
-      layer.addTo(_mvMap);
+      _mvJobGroup.addLayer(layer);
       _mvLayers.push({path: f.properties.path, layer: layer, feature: f});
       try { bounds.push(layer.getBounds()); } catch(e) {}
     }
@@ -1665,12 +1647,12 @@ function _mvApplyFilter(folderFilter) {
   if (bounds.length) {
     var combined = bounds[0];
     bounds.forEach(function(b){ combined = combined.extend(b); });
-    _mvMap.fitBounds(combined, {padding: [30, 30]});
+    map.fitBounds(combined, {padding: [40, 40]});
   }
 }
 
 function _mvClearLayers() {
-  _mvLayers.forEach(function(item){ if (_mvMap) _mvMap.removeLayer(item.layer); });
+  _mvLayers.forEach(function(item){ if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); });
   _mvLayers = [];
 }
 
@@ -1699,6 +1681,7 @@ function _mvMakeLayer(feature) {
     });
 
     layer.on('click', function(e) {
+      L.DomEvent.stopPropagation(e);
       if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
         _mvToggleSel(p.path);
       } else {
@@ -1733,14 +1716,12 @@ function _mvShowPopup(latlng, feature, layer) {
     + '<button onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')" style="flex:1;padding:4px;font-size:11px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer">Delete</button>'
     + '</div></div>';
 
-  if (_mvMap) {
-    L.popup({closeButton: true, minWidth: 170}).setLatLng(latlng).setContent(html).openOn(_mvMap);
-  }
+  L.popup({closeButton: true, minWidth: 170}).setLatLng(latlng).setContent(html).openOn(map);
 }
 
 function mvOpenJob(path) {
+  map.closePopup();
   closeMapView();
-  if (_mvMap) { _mvMap.closePopup(); }
   openJob(path);
 }
 
@@ -1749,14 +1730,13 @@ async function mvDeleteJob(path, name) {
   try {
     var r = await fetch(jobApiUrl(path), {method: 'DELETE'});
     if (!r.ok) { showError('Delete failed'); return; }
-    if (_mvMap) _mvMap.closePopup();
-    // Remove layer
+    map.closePopup();
     _mvLayers = _mvLayers.filter(function(item) {
-      if (item.path === path) { _mvMap.removeLayer(item.layer); return false; }
+      if (item.path === path) { _mvJobGroup.removeLayer(item.layer); return false; }
       return true;
     });
     _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== path; });
-    if (_activeJob === path) { _activeJob = null; _activeJobFolder = null; _doNewJob(); }
+    if (_activeJob === path) { _activeJob = null; _activeJobFolder = null; }
     loadJobsList();
   } catch(e) { showError('Delete failed: ' + e.message); }
 }
@@ -1767,10 +1747,11 @@ function _mvToggleSel(path) {
   if (!item) return;
   if (_mvSelected.has(path)) {
     _mvSelected.delete(path);
-    item.layer.setStyle({weight: 2.5, opacity: 1});
+    var origColor = item.feature.properties.color || _DEFAULT_COLOR;
+    item.layer.setStyle({weight: 2.5, opacity: 1, color: origColor, fillColor: origColor});
   } else {
     _mvSelected.add(path);
-    item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b'});
+    item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
   }
   _mvUpdateSelBar();
 }
@@ -1778,7 +1759,7 @@ function _mvToggleSel(path) {
 function mvClearSel() {
   _mvSelected.forEach(function(path) {
     var item = _mvLayers.find(function(i){ return i.path === path; });
-    if (item) item.layer.setStyle({weight: 2.5, opacity: 1, color: item.feature.properties.color || _DEFAULT_COLOR});
+    if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
   });
   _mvSelected.clear();
   _mvUpdateSelBar();
@@ -1786,8 +1767,7 @@ function mvClearSel() {
 
 function _mvUpdateSelBar() {
   var n = _mvSelected.size;
-  var bar = document.getElementById('mv-sel-bar');
-  bar.style.display = n > 0 ? 'flex' : 'none';
+  document.getElementById('mv-actions').classList.toggle('visible', n > 0);
   document.getElementById('mv-sel-count').textContent = n + ' selected';
   document.getElementById('mv-merge-btn').disabled = n < 2;
 }
@@ -1843,7 +1823,7 @@ async function mvBulkDelete() {
       await fetch(jobApiUrl(paths[i]), {method: 'DELETE'});
       _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== paths[i]; });
       _mvLayers = _mvLayers.filter(function(item) {
-        if (item.path === paths[i]) { if (_mvMap) _mvMap.removeLayer(item.layer); return false; }
+        if (item.path === paths[i]) { if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); return false; }
         return true;
       });
     } catch(e) { showError('Delete failed: ' + e.message); }
@@ -1861,6 +1841,7 @@ function jobApiUrl(path, suffix) {
 // ── Open job ──────────────────────────────────────────────────────────────────
 function openJob(path) {
   if (isRunning) return;
+  if (_mvMode) closeMapView();
   confirmIfDirty(function() { _doOpenJob(path); });
 }
 async function _doOpenJob(path) {
