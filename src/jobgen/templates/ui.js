@@ -1608,6 +1608,11 @@ function openMapView(folderFilter) {
   _mvCurrentFolder = folderFilter || null;
   if (editMode) saveEdit();
 
+  // Remove any live preview layers (zones, keepout circles, etc.) left on the map
+  Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+  editLayers.clearLayers();
+
   // Hide editor sidebar, swap legend
   document.getElementById('sb').classList.add('mv-hidden');
   document.getElementById('legend').classList.add('mv-hidden');
