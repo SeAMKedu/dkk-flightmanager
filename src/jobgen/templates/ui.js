@@ -2210,9 +2210,21 @@ function toggleJobSelection(j, selected) {
     _selectedJobs.delete(j.path);
     _selectedMeta.delete(j.path);
   }
-  // Update card class without re-rendering
   var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (card) card.classList.toggle('selected', selected);
+  // Sync to map view when active
+  if (_mvMode) {
+    if (selected) {
+      _mvSelected.add(j.path);
+      var item = _mvLayers.find(function(i){ return i.path === j.path; });
+      if (item) item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
+    } else {
+      _mvSelected.delete(j.path);
+      var item = _mvLayers.find(function(i){ return i.path === j.path; });
+      if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
+    }
+    _mvUpdateSelBar();
+  }
   _updateSelBar();
 }
 
@@ -2224,6 +2236,14 @@ function clearSelection() {
     var chk = c.querySelector('.jcard-chk');
     if (chk) chk.checked = false;
   });
+  if (_mvMode) {
+    _mvSelected.forEach(function(path) {
+      var item = _mvLayers.find(function(i){ return i.path === path; });
+      if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
+    });
+    _mvSelected.clear();
+    _mvUpdateSelBar();
+  }
   _updateSelBar();
 }
 
@@ -2365,11 +2385,9 @@ function _escapeXml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
 }
 
-async function exportGoogleMaps() {
-  // Works from both list-view (_selectedJobs) and map-view (_mvSelected)
+async function _loadSelectedJobs() {
   var paths = _mvMode ? Array.from(_mvSelected) : Array.from(_selectedJobs);
-  if (!paths.length) return;
-
+  if (!paths.length) return null;
   var jobs = [];
   for (var i = 0; i < paths.length; i++) {
     try {
@@ -2379,13 +2397,17 @@ async function exportGoogleMaps() {
       jobs.push({path: paths[i], params: data.params});
     } catch (e) { /* skip */ }
   }
-  if (!jobs.length) return;
+  return jobs.length ? {paths, jobs} : null;
+}
+
+async function exportKml() {
+  var result = await _loadSelectedJobs();
+  if (!result) return;
+  var {paths, jobs} = result;
 
   var kml = ['<?xml version="1.0" encoding="UTF-8"?>',
     '<kml xmlns="http://www.opengis.net/kml/2.2">',
     '<Document><name>DKK Jobs</name>'];
-
-  var navPoints = [];
 
   jobs.forEach(function(job) {
     var p = job.params;
@@ -2395,7 +2417,6 @@ async function exportGoogleMaps() {
 
     kml.push('<Folder><name>' + _escapeXml(name) + '</name>');
 
-    // Polygon
     var poly = p.custom_polygon_4326;
     if (poly && poly.coordinates && poly.coordinates[0]) {
       var ring = poly.coordinates[0];
@@ -2412,10 +2433,8 @@ async function exportGoogleMaps() {
       kml.push('</Placemark>');
     }
 
-    // Takeoff marker
     var tp = p.takeoff_point_4326;
     if (tp) {
-      navPoints.push(tp[1] + ',' + tp[0]);
       kml.push('<Placemark>');
       kml.push('<name>' + _escapeXml(name) + '</name>');
       kml.push('<Style><IconStyle><color>' + lineColor + '</color></IconStyle></Style>');
@@ -2428,20 +2447,29 @@ async function exportGoogleMaps() {
 
   kml.push('</Document></kml>');
 
-  // Derive filename from folder if all selected jobs share one subfolder
   var folders = new Set(paths.map(function(p){ var s = p.indexOf('/'); return s >= 0 ? p.slice(0, s) : null; }));
   var fileName = (folders.size === 1 && Array.from(folders)[0] !== null)
     ? 'dkk-' + Array.from(folders)[0] + '.kml'
     : 'dkk-jobs.kml';
 
-  // Download KML
   var blob = new Blob([kml.join('\n')], {type: 'application/vnd.google-earth.kml+xml'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url; a.download = fileName; a.click();
   URL.revokeObjectURL(url);
+}
 
-  // Open Google Maps with takeoff points as navigation waypoints (max 10)
+async function openGoogleMaps() {
+  var result = await _loadSelectedJobs();
+  if (!result) return;
+  var {jobs} = result;
+
+  var navPoints = [];
+  jobs.forEach(function(job) {
+    var tp = job.params.takeoff_point_4326;
+    if (tp) navPoints.push(tp[1] + ',' + tp[0]);
+  });
+
   if (navPoints.length === 1) {
     window.open('https://www.google.com/maps/search/?api=1&query=' + navPoints[0], '_blank');
   } else if (navPoints.length >= 2) {
