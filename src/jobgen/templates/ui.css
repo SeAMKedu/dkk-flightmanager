@@ -247,6 +247,10 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .leaflet-control-layers-expanded{padding:6px 8px!important;background:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);font-size:12px;min-width:80px}
 .leaflet-control-layers-expanded label{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;color:#1e293b;margin:3px 0;cursor:pointer}
 .leaflet-control-layers-expanded input{width:auto;margin:0;cursor:pointer}
+/* Measurement clear control — Leaflet topleft, matches zoom-bar style */
+.meas-clear-ctrl{width:30px!important;height:30px!important;background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;padding:0;font-size:18px;font-weight:700;line-height:30px;text-align:center;color:#444;cursor:pointer;display:block}
+.meas-clear-ctrl:hover{background:#f4f4f4;color:#111}
+.leaflet-control-layers-toggle{width:30px!important;height:30px!important;background-size:18px 18px!important}
 /* Takeoff / Landing marker */
 .takeoff-icon{cursor:grab;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
 .takeoff-tooltip{background:#1e293b;border:1px solid #334155;color:#f1f5f9;font-size:11px;padding:3px 8px;border-radius:4px;white-space:nowrap}
