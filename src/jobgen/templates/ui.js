@@ -1643,6 +1643,37 @@ async function doMoveJob(j, toFolder) {
   } catch(e) { showError('Move failed: ' + e.message); }
 }
 
+function createFolder() {
+  document.getElementById('folder-name-input').value = '';
+  document.getElementById('folder-modal').classList.add('open');
+  setTimeout(function(){ document.getElementById('folder-name-input').focus(); }, 50);
+}
+
+function closeFolderDialog() {
+  document.getElementById('folder-modal').classList.remove('open');
+}
+
+async function submitFolder() {
+  var name = document.getElementById('folder-name-input').value.trim();
+  if (!name) return;
+  var btn = document.getElementById('folder-submit');
+  btn.disabled = true;
+  try {
+    var r = await fetch('/api/folders', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(err.detail || 'Could not create folder');
+      return;
+    }
+    closeFolderDialog();
+    await loadJobsList();
+  } catch(e) { showError('Failed: ' + e.message); }
+  finally { btn.disabled = false; }
+}
+
 async function promptNewFolderForJob(j) {
   var name = window.prompt('New folder name:');
   if (!name || !name.trim()) return;
@@ -2679,6 +2710,15 @@ function _batchError(msg) {
 // Close on backdrop click
 document.getElementById('batch-modal').addEventListener('click', function(e) {
   if (e.target === this) closeBatchDialog();
+});
+
+document.getElementById('folder-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeFolderDialog();
+});
+
+document.getElementById('folder-name-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') submitFolder();
+  if (e.key === 'Escape') closeFolderDialog();
 });
 
 function escHtml(s) {

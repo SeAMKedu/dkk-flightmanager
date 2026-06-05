@@ -142,6 +142,18 @@ button:disabled{opacity:.4;cursor:not-allowed}
 /* Batch button in jobs panel header */
 #jp-batch{flex:1;margin:0;padding:6px 0;background:#1e293b;border:1px dashed #334155;border-radius:4px;color:#94a3b8;font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:background .12s,color .12s}
 #jp-batch:hover{background:#334155;color:#f8fafc}
+#jp-newfolder{flex:1;margin:0;padding:6px 0;background:#1e293b;border:1px solid #334155;border-radius:4px;color:#94a3b8;font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:background .12s,color .12s}
+#jp-newfolder:hover{background:#334155;color:#f8fafc}
+/* Folder dialog */
+#folder-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center}
+#folder-modal.open{display:flex}
+#folder-card{background:#1e293b;border:1px solid #334155;border-radius:8px;width:320px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+#folder-form{padding:12px 14px 14px;display:flex;flex-direction:column;gap:6px}
+#folder-form label{font-size:11px;font-weight:500;color:#94a3b8;margin-bottom:1px}
+#folder-form input{background:#0f172a;border:1px solid #334155;color:#f8fafc;font-size:12px}
+#folder-form input:focus{border-color:#3b82f6}
+#folder-submit{margin-top:4px;background:#16a34a;color:#fff;font-size:12px;font-weight:700}
+#folder-submit:hover{background:#15803d}
 /* Batch dialog */
 #batch-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center}
 #batch-modal.open{display:flex}

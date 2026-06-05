@@ -18,6 +18,7 @@
       <div id="jp-hdr">
         <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
         <button id="jp-batch" onclick="openBatchDialog()">&#8659; Batch</button>
+        <button id="jp-newfolder" onclick="createFolder()" title="Create new folder">&#43; Folder</button>
       </div>
       <div id="jp-filter-row">
         <input type="text" id="jp-filter" placeholder="Filter&#8230;">
@@ -249,6 +250,20 @@
         <div id="bpgmsg"></div>
       </div>
       <div id="batch-results"></div>
+    </div>
+  </div>
+</div>
+
+<div id="folder-modal">
+  <div id="folder-card">
+    <div class="batch-hdr">
+      <span>New Folder</span>
+      <button class="batch-close" onclick="closeFolderDialog()">&#10005;</button>
+    </div>
+    <div id="folder-form">
+      <label>Folder name</label>
+      <input type="text" id="folder-name-input" placeholder="e.g. spring-2026" autocomplete="off">
+      <button id="folder-submit" onclick="submitFolder()">Create folder</button>
     </div>
   </div>
 </div>
