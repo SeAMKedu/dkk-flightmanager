@@ -711,6 +711,30 @@ def batch_cmd(
         raise typer.Exit(1)
 
 
+@app.command("mcp")
+def mcp_cmd(
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """Start the MCP server in standalone stdio mode (no web UI required).
+
+    The primary way to use MCP is via jobgen serve — the MCP server is
+    mounted at /mcp/sse on the running web UI server:
+
+      jobgen serve
+      # Claude Desktop: {"url": "http://localhost:8765/mcp/sse"}
+      # Claude Code:    claude mcp add jobmaker --url http://localhost:8765/mcp/sse
+
+    Use this command only when you need MCP without the web UI running:
+
+      jobgen mcp
+      # Claude Desktop: {"command": "jobgen", "args": ["mcp"], "env": {"MML_API_KEY": "..."}}
+      # Claude Code:    claude mcp add jobmaker -- jobgen mcp
+    """
+    from jobgen.mcp_server import mcp, set_config_path
+    set_config_path(config_path)
+    mcp.run(transport="stdio")
+
+
 @app.command("serve")
 def serve_cmd(
     port: int = typer.Option(8765, "--port", help="Port to listen on."),

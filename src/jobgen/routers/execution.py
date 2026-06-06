@@ -85,6 +85,9 @@ async def start_preview(req: PreviewRequest):
             print(f"[preview] callback error: {e}")
 
     def run() -> None:
+        lock = _acquire_pipeline_lock(job_id, loop, queue, "preview")
+        if lock is None:
+            return
         try:
             from shapely.geometry import shape as _shape
             from jobgen.pipeline import run_preview
@@ -112,6 +115,7 @@ async def start_preview(req: PreviewRequest):
                 {"stage": "error", "pct": 0, "msg": str(exc)},
             )
         finally:
+            lock.release()
             with _st.job_lock:
                 _st.active_job_id = None
 
@@ -154,6 +158,9 @@ async def start_export(req: ExportRequest):
     output_dir = str(Path(_st.config.output.output_dir).resolve())
 
     def run() -> None:
+        lock = _acquire_pipeline_lock(job_id, loop, queue, "export")
+        if lock is None:
+            return
         # Snapshot the preview result before run_job so a concurrent preview
         # can't overwrite the global between job completion and the file write.
         preview_snapshot = _st.last_preview_result
@@ -228,6 +235,7 @@ async def start_export(req: ExportRequest):
                 {"stage": "error", "pct": 0, "msg": str(exc)},
             )
         finally:
+            lock.release()
             with _st.job_lock:
                 _st.active_job_id = None
 
@@ -317,6 +325,31 @@ async def start_batch(req: BatchRequest):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _acquire_pipeline_lock(job_id: str, loop, queue, label: str):
+    """Try to acquire the cross-process file lock for a pipeline run.
+
+    Returns the FileLock on success so the caller can release it in a finally
+    block. On Timeout (standalone MCP server holds the lock), broadcasts an
+    SSE error event, clears active_job_id, and returns None — the caller
+    should return immediately.
+    """
+    from jobgen._pipeline_lock import pipeline_lock
+    from filelock import Timeout
+    lock = pipeline_lock(Path(_st.config.cache.cache_dir))
+    try:
+        lock.acquire(timeout=0)
+        return lock
+    except Timeout:
+        print(f"[{label}] job {job_id[:8]} blocked — pipeline lock held by another process")
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            {"stage": "error", "pct": 0, "msg": "Pipeline busy — MCP server is running a job. Try again shortly."},
+        )
+        with _st.job_lock:
+            _st.active_job_id = None
+        return None
 
 
 def _prepare_config(req: PreviewRequest):

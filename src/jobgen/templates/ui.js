@@ -151,6 +151,7 @@ async function init() {
   // Jobs panel
   setJpOpen(_jpOpen);
   loadJobsList();
+  _initEventStream();
 }
 
 function defaultJobName() {
@@ -360,6 +361,7 @@ function _doNewJob() {
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
   clearPolyEdit();
   clearError();
+  hideExtModifiedNotice();
   // Reset polygon controls to a clean neutral state
   document.getElementById('offset').value = 0;
   setSimpAuto(true);  // silent — no scheduleAutoUpdate, no clearPolyEdit
@@ -2067,6 +2069,7 @@ async function _doOpenJob(path) {
     _setColorPicker(p && p.color);
     _dirty = false;
     clearError();
+    hideExtModifiedNotice();
     // Highlight card
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
     // Restore map from stored preview (instant); fit bounds once for this job load
@@ -3317,4 +3320,50 @@ async function openAbout() {
 
 function closeAbout() {
   document.getElementById('about-modal').style.display = 'none';
+}
+
+// ── External-change event stream ──────────────────────────────────────────────
+
+function _initEventStream() {
+  var es = new EventSource('/api/events');
+  var _debounceTimer = null;
+
+  es.onmessage = function(e) {
+    var evt;
+    try { evt = JSON.parse(e.data); } catch(ex) { return; }
+    if (evt.type !== 'jobs_changed') return;
+
+    // Debounce rapid bursts (batch runs write many files quickly)
+    if (_debounceTimer) clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(function() {
+      loadJobsList();
+      // Show notice only when the open job was touched externally (not by our own running pipeline)
+      if (_activeJob && !isRunning && evt.paths && evt.paths.indexOf(_activeJob) !== -1) {
+        showExtModifiedNotice();
+      }
+    }, 800);
+  };
+
+  es.onerror = function() {
+    // EventSource reconnects automatically — no action needed
+  };
+}
+
+function showExtModifiedNotice() {
+  var el = document.getElementById('ext-modified-notice');
+  el.innerHTML = 'Job modified externally. '
+    + '<button onclick="reloadCurrentJob()" style="margin-left:6px">Reload</button>'
+    + '<button onclick="hideExtModifiedNotice()" style="margin-left:4px">Dismiss</button>';
+  el.style.display = 'block';
+}
+
+function hideExtModifiedNotice() {
+  var el = document.getElementById('ext-modified-notice');
+  el.style.display = 'none';
+  el.innerHTML = '';
+}
+
+function reloadCurrentJob() {
+  hideExtModifiedNotice();
+  if (_activeJob) openJob(_activeJob);
 }

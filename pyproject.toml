@@ -20,6 +20,8 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "jinja2>=3.0",
     "tomli-w>=1.0",
+    "mcp>=1.0",
+    "filelock>=3.12",
 ]
 
 [project.optional-dependencies]

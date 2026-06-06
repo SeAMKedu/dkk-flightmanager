@@ -25,20 +25,27 @@ Output files written per job:
 
 A virtual environment keeps the tool and its dependencies isolated from your system Python. You only do this once.
 
+**macOS / Linux:**
 ```bash
 python3 -m venv .venv        # create the virtual environment in .venv/
 source .venv/bin/activate    # activate it (your prompt will change to show (.venv))
 ```
 
+**Windows (Command Prompt):**
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+```
+
 > **Every time you open a new terminal** you need to activate again before using `jobgen`:
-> ```bash
-> source .venv/bin/activate
-> ```
 >
-> Alternatively, you can call the script directly without activating — useful in shell scripts or if you prefer not to activate:
-> ```bash
-> .venv/bin/jobgen run --name my-job --parcels 5241087453
-> ```
+> macOS / Linux: `source .venv/bin/activate`
+> Windows: `.venv\Scripts\activate`
+>
+> Alternatively, call the script directly without activating:
+>
+> macOS / Linux: `.venv/bin/jobgen run --name my-job --parcels 5241087453`
+> Windows: `.venv\Scripts\jobgen run --name my-job --parcels 5241087453`
 
 ### 2 — Install the tool
 
@@ -83,6 +90,7 @@ jobgen serve --port 8080 --no-open   # custom port, no auto-open
 The single-page Leaflet map interface lets you:
 
 - **Manage jobs** — the **Jobs panel** on the left lists all saved jobs. The panel header has **＋ New Job**, **↓ Batch**, and **＋ Folder** buttons; a filter input sits below. Jobs are grouped into folder sections — the root output folder and any named subfolders each show a collapsible header with job count and a **Map** button. Click any card to re-open a job (form and map restore instantly; a fresh preview runs automatically). The three-dot menu per card offers **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. The panel can be collapsed with the `◄` tab on its right edge. Click **＋ Folder** to create an empty named folder immediately (useful for pre-organising before a batch run or manually grouping jobs by site).
+- **Real-time job list** — the jobs panel updates automatically when any other process (CLI, MCP server, or another browser tab) writes or modifies a job. If the currently open job is modified externally while you have it open, a blue notice appears at the top of the sidebar with **Reload** and **Dismiss** buttons.
 - **Batch-create skeleton jobs** — click **↓ Batch** to open the batch dialog. Paste a list of parcel or property IDs (one per line, `#` comments ignored), or load a `.txt`/`.csv` file. Assign a group folder and optional flight param overrides, then click **Create N jobs** — each ID becomes a skeleton job (polygon stored, no KMZ yet) ready to open and edit. The same operation is available from the CLI with `jobgen batch`.
 - **Multi-select and bulk operations** — hover over any job card to reveal a checkbox. Check two or more jobs to activate the selection toolbar: **Merge** (union their polygons into a new job), **Google Maps** (see below), **Move** (send to a folder), or **Delete** all at once.
 - **Export to Google Maps** — with one or more jobs selected, click **Google Maps** to download a `.kml` file (survey polygons + takeoff markers, coloured to match each job's map color) and simultaneously open a Google Maps tab with the takeoff points loaded as navigation waypoints. The KML filename is `dkk-<foldername>.kml` when all selected jobs share the same subfolder, otherwise `dkk-jobs.kml`. To get the polygon overlay in Google Maps, create a new map at [maps.google.com/maps/d](https://www.google.com/maps/d) and import the downloaded KML.
@@ -109,6 +117,120 @@ Parcel and property geometries are cached locally (400-day TTL) so repeat previe
 
 ---
 
+## AI assistant integration (MCP)
+
+`dkk-jobmaker` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so AI assistants — Claude Desktop, Claude Code, or any MCP-compatible client — can query job data and trigger pipeline operations directly.
+
+### Primary path — integrated with the web UI
+
+When `jobgen serve` is running, the MCP server is mounted at `/mcp/sse` in the same process. No separate command, no extra process, no coordination overhead.
+
+**Claude Code:**
+```bash
+claude mcp add jobmaker --url http://localhost:8765/mcp/sse
+```
+
+**Claude Desktop** — add to the config file for your platform:
+
+| Platform | Config file location |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+```json
+{
+  "mcpServers": {
+    "jobmaker": {
+      "url": "http://localhost:8765/mcp/sse"
+    }
+  }
+}
+```
+
+If you use a non-default port, replace `8765` accordingly.
+
+### Fallback path — standalone (no web UI)
+
+For headless use or automation scripts that don't need the browser UI:
+
+```bash
+jobgen mcp                              # stdio transport, reads config.toml from cwd
+jobgen mcp --config /path/to/config.toml
+```
+
+**Claude Code:**
+```bash
+claude mcp add jobmaker -- jobgen mcp
+```
+
+**Claude Desktop** — use the config file path from the table above, with the platform-appropriate binary path:
+
+macOS / Linux:
+```json
+{
+  "mcpServers": {
+    "jobmaker": {
+      "command": "/path/to/project/.venv/bin/jobgen",
+      "args": ["mcp"],
+      "env": { "MML_API_KEY": "your-key-here" }
+    }
+  }
+}
+```
+
+Windows:
+```json
+{
+  "mcpServers": {
+    "jobmaker": {
+      "command": "C:\\path\\to\\project\\.venv\\Scripts\\jobgen.exe",
+      "args": ["mcp"],
+      "env": { "MML_API_KEY": "your-key-here" }
+    }
+  }
+}
+```
+
+Use the full absolute path to the `.venv` binary so Claude Desktop finds the right environment. `MML_API_KEY` must be passed explicitly here — Claude Desktop launches subprocesses from its own working directory, not the project directory, so the project `.env` file is not picked up automatically. On macOS/Linux you can alternatively export the key in `~/.zshenv` or `~/.profile` so it is inherited by all GUI-launched processes.
+
+### What the AI can do
+
+**Read (always safe):**
+
+| Tool / Resource | Description |
+|---|---|
+| `list_jobs` | List jobs with filters: folder, needs\_review, flight\_ready, untouched |
+| `get_job` | Full details for one job — inputs, flight params, zone hits, flight status |
+| `job_stats` | Aggregate stats across all jobs or a folder (total area, review counts) |
+| `jobs://list` | All jobs as a resource (same as list\_jobs with no filters) |
+| `jobs://{path}` | Raw params + manifest for one job |
+| `config://current` | Active drone, GSD, flight and safety settings |
+| `drones://list` | All drone profiles with GSD at 50/80/100 m |
+
+**Write (pipeline operations):**
+
+| Tool | Description |
+|---|---|
+| `create_folder` | Create a named job group folder |
+| `create_preview` | Run geometry + UAS zone check without writing files (~10–30 s) |
+| `create_batch` | Create skeleton jobs from parcel/property IDs (no KMZ) |
+| `run_export` | Full pipeline — KMZ, DSM, homes KML, manifest written to disk (~30–120 s) |
+
+Pipeline tools are serialised against the web UI: if a browser job is already running, the MCP tool returns an error immediately rather than colliding on the shared tile cache.
+
+### Example queries
+
+```
+Which of my jobs have UAS zone conflicts?
+What's the total survey area in the Vaasa-2026 folder?
+Create batch jobs for parcel IDs 5241087453, 5241087454, 5241087455 in folder Seinäjoki
+What drone should I use for a 12 ha field at 3 cm GSD?
+Run a preview for parcel 5241087453 and tell me if there are any zone issues
+```
+
+---
+
 ## CLI usage
 
 ### Specifying the survey area
@@ -116,9 +238,6 @@ Parcel and property geometries are cached locally (400-day TTL) so repeat previe
 ```bash
 # Ruokavirasto peruslohkotunnus (comma-separated, or mixed with --properties)
 jobgen run --name pelto-2024 --parcels 5241087453,5241087454
-
-# From a file of parcel IDs (one per line)
-jobgen run --name pelto-2024 --parcels-file ids.txt
 
 # Finnish kiinteistötunnus — dash form or 14-digit numeric
 jobgen run --name pelto-2024 --properties 214-407-3-22
@@ -137,7 +256,6 @@ jobgen run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 |---|---|---|
 | `--name`, `-n` | *(required)* | Job name; used as output subdirectory |
 | `--parcels`, `-p` | — | Comma-separated peruslohkotunnus IDs |
-| `--parcels-file` | — | File with one parcel ID per line |
 | `--properties`, `-k` | — | Comma-separated kiinteistötunnus values (dash or 14-digit form) |
 | `--bbox` | — | Bounding box `xmin,ymin,xmax,ymax` in EPSG:3067 metres |
 | `--drone` | from config | Drone + payload profile name (e.g. `m3m`, `m300-p1-24`) — see below |
@@ -232,8 +350,9 @@ jobgen drones
 ```
 
 ```
-Name               GSD@50m  GSD@100m  Label
-m3m *                1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB channel
+Name               GSD@50m   GSD@100m  Label
+m3m                  1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB channel
+m3m-ms               2.14 cm    4.28 cm  DJI Mavic 3 Multispectral — MS-limited GSD
 m3e                  1.34 cm    2.68 cm  DJI Mavic 3 Enterprise — RGB camera
 m300-p1-24           0.92 cm    1.83 cm  DJI Matrice 300 RTK + Zenmuse P1 (24 mm)
 m300-p1-35           0.63 cm    1.26 cm  DJI Matrice 300 RTK + Zenmuse P1 (35 mm)
@@ -297,6 +416,15 @@ The `--parcels` / `--properties` flag determines ID type. If neither is given, t
 | `--drone TEXT` | Drone profile override |
 | `--height FLOAT` | Flight height override (m AGL) |
 | `--subcategory TEXT` | `A2` or `A3` |
+
+### MCP server (standalone)
+
+See the [AI assistant integration](#ai-assistant-integration-mcp) section above for the primary (integrated) approach. The `mcp` command is for headless use without `jobgen serve`:
+
+```bash
+jobgen mcp                               # stdio transport, config.toml in cwd
+jobgen mcp --config /path/to/config.toml
+```
 
 ### Cache management
 

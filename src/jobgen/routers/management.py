@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import jobgen._server_state as _st
@@ -27,6 +28,45 @@ from jobgen.job_store import (
 )
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# SSE event stream
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/events")
+async def job_events():
+    """SSE stream for job store changes.
+
+    Clients receive ``{"type":"jobs_changed","paths":[...]}`` when the watcher
+    detects writes to job_params.json, manifest.json or .dkk-folder. A keepalive
+    comment is sent every 30 s so proxies don't close the connection.
+    """
+    import asyncio
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=20)
+    _st.event_queues.add(queue)
+
+    async def generate():
+        try:
+            yield 'data: {"type":"connected"}\n\n'
+            while True:
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            _st.event_queues.discard(queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------
