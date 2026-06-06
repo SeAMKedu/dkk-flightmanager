@@ -1,0 +1,544 @@
+"""Job management routes: list, get, rename, clone, move, delete, reveal,
+merge, polygon_op, and folder create/delete.
+
+Note: /api/jobs/geojson must be registered BEFORE /api/jobs/{path:path} so
+FastAPI matches the literal path first.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+import jobgen._server_state as _st
+from jobgen.job_store import (
+    best_polygon,
+    check_cache_staleness,
+    is_folder_dir,
+    params_from_manifest,
+    read_job_card,
+    resolve_job_dir,
+    scan_jobs,
+)
+
+router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+
+class PolygonOpRequest(BaseModel):
+    operation: str  # "bridge" | "subtract"
+    polygon: dict   # GeoJSON Polygon or MultiPolygon (current survey)
+    points: list    # 3 or 4 [lng, lat] coordinates
+
+
+class MergeRequest(BaseModel):
+    job_paths: list[str]
+    new_name: str
+    folder: str | None = None
+    delete_sources: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Jobs list / geojson
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/jobs")
+async def list_jobs():
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    return {"groups": scan_jobs(output_dir)}
+
+
+@router.get("/api/jobs/geojson")
+async def jobs_geojson(folder: str | None = None):
+    """Return all jobs as a GeoJSON FeatureCollection for the map view."""
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    groups = scan_jobs(output_dir)
+    features = []
+    for group in groups:
+        if folder is not None and group["name"] != folder:
+            continue
+        for card in group["jobs"]:
+            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
+            geom = best_polygon(job_dir)
+            features.append({
+                "type": "Feature",
+                "geometry": geom,
+                "properties": {
+                    "path":         card["path"],
+                    "name":         card["name"],
+                    "folder":       card["folder"],
+                    "color":        card["color"],
+                    "untouched":    card["untouched"],
+                    "flight_ready": card.get("flight_ready"),
+                    "needs_review": card.get("needs_review"),
+                    "area_ha":      card.get("area_ha"),
+                    "status":       card.get("status", "ok"),
+                },
+            })
+    return {"type": "FeatureCollection", "features": features}
+
+
+# ---------------------------------------------------------------------------
+# Single-job CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/jobs/{path:path}")
+async def get_job(path: str):
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+    params_path = job_dir / "job_params.json"
+    manifest_path = job_dir / "manifest.json"
+    manifest: dict = {}
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if params_path.exists():
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+    elif manifest:
+        params = params_from_manifest(name, manifest)
+    else:
+        raise HTTPException(404, detail=f"Job '{path}' has no readable data")
+    stale: list[str] = []
+    if manifest:
+        stale = check_cache_staleness(manifest, _st.config.cache)
+    return {"params": params, "cache_stale": stale, "folder": folder}
+
+
+@router.patch("/api/jobs/{path:path}")
+async def update_job(path: str, body: dict):
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+
+    # Color update (no rename)
+    if "color" in body and "new_name" not in body:
+        color = body.get("color")
+        params_path = job_dir / "job_params.json"
+        if params_path.exists():
+            try:
+                data = json.loads(params_path.read_text(encoding="utf-8"))
+                data["color"] = color
+                params_path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception as exc:
+                raise HTTPException(500, detail=f"Could not update color: {exc}")
+        return {"path": path, "color": color}
+
+    # Rename
+    new_name: str = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(400, detail="new_name is required")
+    if new_name == name:
+        return {"path": path, "name": name, "folder": folder}
+
+    new_dir = job_dir.parent / new_name
+    if new_dir.exists():
+        raise HTTPException(409, detail=f"Job '{new_name}' already exists in this location")
+
+    renames: list[tuple[Path, Path]] = []
+    for f in job_dir.iterdir():
+        if f.name.startswith(f"{name}.") or f.name.startswith(f"{name}_"):
+            suffix = f.name[len(name):]
+            renames.append((f, job_dir / f"{new_name}{suffix}"))
+
+    done: list[tuple[Path, Path]] = []
+    try:
+        for src, dst in renames:
+            src.rename(dst)
+            done.append((src, dst))
+    except OSError as exc:
+        for src, dst in reversed(done):
+            try:
+                dst.rename(src)
+            except OSError:
+                pass
+        raise HTTPException(500, detail=f"Rename failed mid-way, rolled back: {exc}")
+
+    for json_file in (job_dir / "manifest.json", job_dir / "job_params.json"):
+        if json_file.exists():
+            try:
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+                if "job_name" in data:
+                    data["job_name"] = new_name
+                json_file.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
+
+    try:
+        job_dir.rename(new_dir)
+    except OSError as exc:
+        for src, dst in reversed(done):
+            try:
+                dst.rename(src)
+            except OSError:
+                pass
+        raise HTTPException(500, detail=f"Directory rename failed, rolled back: {exc}")
+
+    new_path = f"{folder}/{new_name}" if folder else new_name
+    return {"path": new_path, "name": new_name, "folder": folder}
+
+
+@router.post("/api/jobs/{path:path}/clone")
+async def clone_job(path: str):
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, src_dir = resolve_job_dir(output_dir, path)
+    if not src_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+    params_path = src_dir / "job_params.json"
+    manifest_path = src_dir / "manifest.json"
+    if not params_path.exists() and not manifest_path.exists():
+        raise HTTPException(404, detail=f"Job '{path}' has no data to clone")
+
+    parent_dir = src_dir.parent
+    base = f"{name}-copy"
+    clone_name = base
+    counter = 2
+    while (parent_dir / clone_name).exists():
+        clone_name = f"{base}{counter}"
+        counter += 1
+    clone_dir = parent_dir / clone_name
+    clone_dir.mkdir(parents=True, exist_ok=True)
+
+    if params_path.exists():
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(500, detail=str(exc))
+    else:
+        try:
+            src_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            params = params_from_manifest(name, src_manifest)
+        except Exception as exc:
+            raise HTTPException(500, detail=str(exc))
+
+    params["job_name"] = clone_name
+    params["saved_at"] = datetime.now(timezone.utc).isoformat()
+    (clone_dir / "job_params.json").write_text(
+        json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    thumb_src = src_dir / "thumbnail.svg"
+    if thumb_src.exists():
+        shutil.copy2(thumb_src, clone_dir / "thumbnail.svg")
+
+    clone_path = f"{folder}/{clone_name}" if folder else clone_name
+    return {"path": clone_path, "name": clone_name, "folder": folder}
+
+
+@router.post("/api/jobs/{path:path}/move")
+async def move_job(path: str, body: dict):
+    """Move a job to a different folder (or root if folder is null)."""
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, src_dir = resolve_job_dir(output_dir, path)
+    if not src_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+    to_folder: str | None = body.get("folder") or None
+    if to_folder == folder:
+        return {"path": path, "folder": folder}
+    if to_folder:
+        dest_parent = output_dir / to_folder
+        dest_parent.mkdir(parents=True, exist_ok=True)
+        marker = dest_parent / ".dkk-folder"
+        if not marker.exists():
+            marker.write_text("", encoding="utf-8")
+    else:
+        dest_parent = output_dir
+    dest_dir = dest_parent / name
+    if dest_dir.exists():
+        raise HTTPException(
+            409, detail=f"A job named '{name}' already exists in the target location"
+        )
+    src_dir.rename(dest_dir)
+    if folder:
+        src_parent = output_dir / folder
+        remaining = [d for d in src_parent.iterdir() if not d.name.startswith(".")]
+        if not remaining:
+            shutil.rmtree(src_parent)
+    new_path = f"{to_folder}/{name}" if to_folder else name
+    return {"path": new_path, "folder": to_folder}
+
+
+@router.delete("/api/jobs/{path:path}")
+async def delete_job(path: str):
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+    shutil.rmtree(job_dir)
+    if folder:
+        parent = output_dir / folder
+        if parent.is_dir():
+            remaining = [d for d in parent.iterdir() if not d.name.startswith(".")]
+            if not remaining:
+                shutil.rmtree(parent)
+    return {"deleted": path}
+
+
+@router.post("/api/jobs/{path:path}/reveal")
+async def reveal_job(path: str):
+    """Open the job folder in the system file manager."""
+    import subprocess
+    import sys
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+    job_path = str(job_dir)
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", job_path])
+    elif sys.platform == "win32":
+        subprocess.Popen(["explorer", job_path])
+    else:
+        subprocess.Popen(["xdg-open", job_path])
+    return {"revealed": job_path}
+
+
+# ---------------------------------------------------------------------------
+# Polygon operation
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/polygon_op")
+async def polygon_op(req: PolygonOpRequest):
+    from shapely.geometry import Polygon as ShapelyPolygon, mapping, shape
+    from shapely.ops import unary_union
+    from shapely.validation import make_valid
+
+    try:
+        survey = shape(req.polygon)
+        pts = [(c[0], c[1]) for c in req.points]  # lng, lat
+
+        if len(pts) == 3:
+            quad = ShapelyPolygon(pts)
+            if not quad.is_valid:
+                quad = make_valid(quad)
+        elif len(pts) == 4:
+            quad = None
+            for order in [
+                [pts[0], pts[1], pts[2], pts[3]],
+                [pts[0], pts[1], pts[3], pts[2]],
+            ]:
+                candidate = ShapelyPolygon(order)
+                if not candidate.is_valid:
+                    candidate = make_valid(candidate)
+                if candidate.is_valid and not candidate.is_empty and candidate.area > 0:
+                    quad = candidate
+                    break
+            if quad is None:
+                raise HTTPException(
+                    400, detail="Selected points do not form a valid quadrilateral"
+                )
+        else:
+            raise HTTPException(400, detail=f"Expected 3 or 4 points, got {len(pts)}")
+
+        if not quad.is_valid or quad.is_empty:
+            raise HTTPException(400, detail="Selected points do not form a valid shape")
+
+        result = unary_union([survey, quad]) if req.operation == "bridge" else survey.difference(quad)
+
+        if result is None or result.is_empty:
+            raise HTTPException(400, detail="Operation produced empty geometry")
+
+        return {"geometry": mapping(result)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Merge
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/merge")
+async def merge_jobs(req: MergeRequest):
+    if len(req.job_paths) < 2:
+        raise HTTPException(400, detail="At least two jobs are required to merge")
+    new_name = req.new_name.strip()
+    if not new_name:
+        raise HTTPException(400, detail="new_name is required")
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+
+    all_params: list[tuple[Path, dict]] = []
+    for path in req.job_paths:
+        _, _, job_dir = resolve_job_dir(output_dir, path)
+        params_path = job_dir / "job_params.json"
+        if not params_path.exists():
+            raise HTTPException(404, detail=f"job_params.json not found for '{path}'")
+        try:
+            p = json.loads(params_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(500, detail=f"Could not read params for '{path}': {exc}")
+        all_params.append((job_dir, p))
+
+    def _is_id_job(job_dir: Path, p: dict) -> bool:
+        inputs = p.get("inputs", {})
+        has_ids = bool(inputs.get("parcel_ids") or inputs.get("property_ids"))
+        return has_ids and p.get("batch_created", False) and not any(job_dir.glob("*.kmz"))
+
+    use_id_strategy = all(_is_id_job(d, p) for d, p in all_params)
+
+    if use_id_strategy:
+        parcel_ids: list[str] = []
+        property_ids: list[str] = []
+        for _, p in all_params:
+            inputs = p.get("inputs", {})
+            parcel_ids.extend(inputs.get("parcel_ids") or [])
+            property_ids.extend(inputs.get("property_ids") or [])
+        seen: set[str] = set()
+        parcel_ids   = [x for x in parcel_ids   if not (x in seen or seen.add(x))]  # type: ignore[func-returns-value]
+        seen.clear()
+        property_ids = [x for x in property_ids if not (x in seen or seen.add(x))]  # type: ignore[func-returns-value]
+
+        first = all_params[0][1]
+        merged_params = {
+            "job_name": new_name,
+            "saved_at": None,
+            "inputs":   {"parcel_ids": parcel_ids, "property_ids": property_ids},
+            "flight":   first.get("flight", {}),
+            "polygon":  first.get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
+            "safety":   first.get("safety",  {"preview_radius_m": None}),
+            "custom_polygon_4326": None,
+            "batch_created": False,
+            "color": None,
+            "last_preview_geojson": None,
+            "merge_strategy": "ids",
+        }
+    else:
+        from shapely.geometry import mapping, shape
+        from shapely.ops import unary_union
+        from shapely.validation import make_valid
+
+        polys = []
+        for job_dir, p in all_params:
+            geojson = p.get("custom_polygon_4326") or (
+                (p.get("last_preview_geojson") or {}).get("survey")
+            )
+            if not geojson:
+                raise HTTPException(
+                    400,
+                    detail=f"Job '{job_dir.name}' has no polygon — run a preview first",
+                )
+            try:
+                geom = shape(geojson)
+                if not geom.is_valid:
+                    geom = make_valid(geom)
+                polys.append(geom)
+            except Exception as exc:
+                raise HTTPException(400, detail=f"Invalid geometry for '{job_dir.name}': {exc}")
+
+        merged = unary_union(polys)
+        if not merged.is_valid:
+            merged = make_valid(merged)
+        if merged.is_empty:
+            raise HTTPException(400, detail="Union produced empty geometry")
+
+        merged_params = {
+            "job_name": new_name,
+            "saved_at": None,
+            "inputs":  {"parcel_ids": [], "property_ids": []},
+            "flight":  all_params[0][1].get("flight", {}),
+            "polygon": all_params[0][1].get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
+            "safety":  all_params[0][1].get("safety",  {"preview_radius_m": None}),
+            "custom_polygon_4326": dict(mapping(merged)),
+            "batch_created": False,
+            "color": None,
+            "last_preview_geojson": None,
+            "merge_strategy": "polygon_union",
+        }
+
+    dest_parent = (output_dir / req.folder) if req.folder else output_dir
+    dest_parent.mkdir(parents=True, exist_ok=True)
+    if req.folder:
+        marker = dest_parent / ".dkk-folder"
+        if not marker.exists():
+            marker.write_text("", encoding="utf-8")
+
+    dest_dir = dest_parent / new_name
+    if dest_dir.exists():
+        raise HTTPException(
+            409, detail=f"A job named '{new_name}' already exists in that location"
+        )
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / "job_params.json").write_text(
+        json.dumps(merged_params, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    if req.delete_sources:
+        for path in req.job_paths:
+            _, _, job_dir = resolve_job_dir(output_dir, path)
+            if job_dir.is_dir():
+                shutil.rmtree(job_dir)
+        for path in req.job_paths:
+            parts = path.strip("/").split("/", 1)
+            if len(parts) == 2:
+                parent = output_dir / parts[0]
+                if parent.is_dir():
+                    remaining = [d for d in parent.iterdir() if not d.name.startswith(".")]
+                    if not remaining:
+                        shutil.rmtree(parent)
+
+    card = read_job_card(dest_dir, folder=req.folder)
+    card["merge_strategy"] = merged_params["merge_strategy"]
+    return card
+
+
+# ---------------------------------------------------------------------------
+# Folder management
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/folders")
+async def create_folder(body: dict):
+    folder_name: str = body.get("name", "").strip()
+    if not folder_name or "/" in folder_name or folder_name.startswith("."):
+        raise HTTPException(400, detail="Invalid folder name")
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder_dir = output_dir / folder_name
+    if folder_dir.exists():
+        raise HTTPException(409, detail=f"Folder '{folder_name}' already exists")
+    folder_dir.mkdir(parents=True, exist_ok=True)
+    (folder_dir / ".dkk-folder").write_text("", encoding="utf-8")
+    return {"name": folder_name}
+
+
+@router.delete("/api/folders/{folder_name}")
+async def delete_folder(folder_name: str, force: bool = False):
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder_dir = output_dir / folder_name
+    if not folder_dir.is_dir():
+        raise HTTPException(404, detail=f"Folder '{folder_name}' not found")
+    if not is_folder_dir(folder_dir):
+        raise HTTPException(400, detail=f"'{folder_name}' is not a group folder")
+    jobs = [d for d in folder_dir.iterdir() if d.is_dir()]
+    if jobs and not force:
+        raise HTTPException(
+            409,
+            detail=f"Folder '{folder_name}' contains jobs; use force=true to delete all",
+        )
+    shutil.rmtree(folder_dir)
+    return {"deleted": folder_name}
