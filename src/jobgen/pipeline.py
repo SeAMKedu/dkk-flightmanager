@@ -165,15 +165,14 @@ def run_job(
     from shapely.ops import unary_union
     from shapely import make_valid
 
+    # Determine prelim bounds for the building-fetch bbox.
+    # custom_polygon_4326 takes precedence when provided; the offset is applied
+    # later inside _synth_survey_geom, so raw bounds are fine here.
     if custom_polygon_4326 is not None:
-        # User-edited polygon bypasses process_survey(); we still need buildings for
-        # homes KML. Use the custom polygon's bounds to determine tile bbox.
-        survey_3067 = reproject_to_3067(custom_polygon_4326)
-        prelim_bounds = survey_3067.bounds
+        prelim_bounds = reproject_to_3067(custom_polygon_4326).bounds
     else:
         log.info("Processing survey geometry …")
-        prelim = make_valid(unary_union([p.geometry for p in input_geoms]))
-        prelim_bounds = prelim.bounds
+        prelim_bounds = make_valid(unary_union([p.geometry for p in input_geoms])).bounds
 
     buf = config.home_safety.home_buffer_m
     include_buf = config.home_safety.resolved_include_buffer_m
@@ -186,41 +185,10 @@ def run_job(
     )
 
     _cb(progress_cb, "buildings", "Fetching building tiles…", 25)
-    log.info("Fetching building tiles …")
-    b_fetcher = buildings_fetcher(api_key)
-    b_records = get_tiles(
-        "buildings", buildings_bbox, b_fetcher, config.cache, refresh=refresh
-    )
+    buildings, b_records = _load_buildings(buildings_bbox, api_key, config.cache, refresh)
 
-    raw_buildings: list[Building] = []
-    for rec in b_records:
-        raw_buildings.extend(load_tile(rec.path))
-    buildings = dedup_buildings(raw_buildings)
-    log.info("%d building(s) loaded after dedup", len(buildings))
-
-    pieces_count = 1
     if custom_polygon_4326 is not None:
-        # Synthesise a SurveyGeometry from the user-supplied polygon.
-        _offset = config.polygon.survey_offset_m
-        survey_3067_off = apply_survey_offset(survey_3067, _offset)
-        survey_4326_off = reproject_to_4326(survey_3067_off)
-        _area_ha = survey_3067_off.area / 10_000
-        _vc = vertex_count(survey_4326_off)
-        survey_geom = SurveyGeometry(
-            survey_3067=survey_3067_off,
-            survey_4326=survey_4326_off,
-            pieces_3067=[survey_3067_off],
-            pieces_4326=[survey_4326_off],
-            bbox_3067=survey_3067_off.bounds,
-            original_area_ha=_area_ha,
-            final_area_ha=_area_ha,
-            area_lost_pct=0.0,
-            min_dist_to_home_m=None,
-            offset_applied=_offset != 0.0,
-            survey_vertex_count=_vc,
-            needs_review=True,
-            review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
-        )
+        survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
     else:
         _cb(progress_cb, "geometry", "Computing survey polygon…", 40)
         survey_geom = process_survey(
@@ -341,142 +309,33 @@ def run_job(
     dem_prov  = tile_provenance(d_records)
     bldg_prov = tile_provenance(b_records)
 
-    manifest = {
-        "tool_version":  tool_version(),
-        "job_name":      job_name,
-        "run_timestamp": run_ts,
-        "dry_run":       dry_run,
-
-        **(
-            {
-                "parcels": {
-                    "parcel_ids":  parcel_ids_used,
-                    "lpis_year":   config.parcels.lpis_year,
-                    "fetched_at":  parcel_fetch_ts,
-                    "attribution": _CC_BY["parcels"].format(date=parcel_fetch_ts[:10]),
-                }
-            }
-            if parcel_ids_used else {}
-        ),
-        **(
-            {
-                "properties": {
-                    "property_ids":         property_ids_used,
-                    "property_display_ids": property_display_ids_used,
-                    "fetched_at":           property_fetch_ts,
-                    "attribution":          _CC_BY["properties"].format(
-                        date=(property_fetch_ts or "")[:10]
-                    ),
-                }
-            }
-            if property_ids_used else {}
-        ),
-
-        "geometry": {
-            "original_area_ha": round(survey_geom.original_area_ha, 4),
-            "final_area_ha":    round(survey_geom.final_area_ha, 4),
-            "area_lost_pct":    round(survey_geom.area_lost_pct, 2),
-            "bbox_3067": {
-                "xmin": survey_geom.bbox_3067[0],
-                "ymin": survey_geom.bbox_3067[1],
-                "xmax": survey_geom.bbox_3067[2],
-                "ymax": survey_geom.bbox_3067[3],
-            },
-            "pieces_count":         pieces_count,
-            "survey_vertex_count":  survey_geom.survey_vertex_count,
-        },
-
-        "flight": {
-            "target_gsd_cm":       config.flight.target_gsd_cm,
-            "derived_height_m":    round(flight_height_m, 2),
-            "overlap_front_pct":   config.flight.overlap_front_pct,
-            "overlap_side_pct":    config.flight.overlap_side_pct,
-            "terrain_follow":      True,
-            "drone":               drone_cfg.name,
-            "drone_label":         drone_cfg.label,
-        },
-
-        "battery": (
-            (
-                {
-                    "estimated_photo_count":     kmz_results[0].estimated_photo_count,
-                    "estimated_flight_time_min": round(kmz_results[0].estimated_flight_time_min, 1),
-                    "over_one_battery":          kmz_results[0].over_one_battery,
-                }
-                if len(kmz_results) == 1
-                else {
-                    "pieces": [
-                        {
-                            "piece":                     i + 1,
-                            "estimated_photo_count":     r.estimated_photo_count,
-                            "estimated_flight_time_min": round(r.estimated_flight_time_min, 1),
-                            "over_one_battery":          r.over_one_battery,
-                        }
-                        for i, r in enumerate(kmz_results)
-                    ],
-                    "over_any_battery": any(r.over_one_battery for r in kmz_results),
-                }
-            )
-            if kmz_results else {"note": "dry_run — not computed"}
-        ),
-
-        "dsm": (
-            {
-                "elevation_min_m":  round(dsm_stats["elevation_min_m"], 1),
-                "elevation_max_m":  round(dsm_stats["elevation_max_m"], 1),
-                "valid_pixel_count": dsm_stats["valid_pixel_count"],
-                "attribution":      _CC_BY["elevation"].format(
-                    date=dem_prov.get("fetch_date_min", "")[:10]
-                ),
-            }
-            if dsm_stats else {"note": "dry_run — not built"}
-        ),
-
-        "home_safety": {
-            "operating_subcategory":  config.home_safety.operating_subcategory,
-            "home_buffer_m":          config.home_safety.home_buffer_m,
-            "home_include_buffer_m":  round(include_buf, 1),
-            "preview_radius_m":       round(preview_radius_m, 1),
-            "offset_applied":         survey_geom.offset_applied,
-            "min_dist_to_home_m":     (
-                round(survey_geom.min_dist_to_home_m, 1)
-                if survey_geom.min_dist_to_home_m is not None else None
-            ),
-            "buildings_fetched":      len(buildings),
-            "buildings_in_homes_kml": len(nearby),
-            "buildings_attribution":  _CC_BY["buildings"].format(
-                date=bldg_prov.get("fetch_date_min", "")[:10]
-            ),
-        },
-
-        "zones": {
-            "checked":           zone_result.checked,
-            "flight_ready":      zone_result.flight_ready,
-            "attribution":       zone_result.attribution,
-            "intersecting_zones": [
-                {
-                    "identifier":  h.identifier,
-                    "name":        h.name,
-                    "restriction": h.restriction,
-                    "reason":      h.reason,
-                    "upper_limit": h.altitude.upper_limit,
-                    "upper_uom":   h.altitude.upper_uom,
-                    "upper_ref":   h.altitude.upper_ref,
-                    "ceiling_note": h.altitude.ceiling_note(flight_height_m),
-                }
-                for h in zone_result.intersecting_zones
-            ],
-        },
-
-        "cache_provenance": {
-            "dem":       dem_prov,
-            "buildings": bldg_prov,
-        },
-
-        "needs_review":  needs_review,
-        "flight_ready":  flight_ready,
-        "review_reasons": all_review_reasons,
-    }
+    manifest = _build_manifest(
+        job_name=job_name,
+        run_ts=run_ts,
+        dry_run=dry_run,
+        config=config,
+        parcel_ids_used=parcel_ids_used,
+        parcel_fetch_ts=parcel_fetch_ts,
+        property_ids_used=property_ids_used,
+        property_display_ids_used=property_display_ids_used,
+        property_fetch_ts=property_fetch_ts,
+        survey_geom=survey_geom,
+        pieces_count=pieces_count,
+        drone_cfg=drone_cfg,
+        flight_height_m=flight_height_m,
+        kmz_results=kmz_results,
+        dsm_stats=dsm_stats,
+        dem_prov=dem_prov,
+        buildings=buildings,
+        nearby=nearby,
+        include_buf=include_buf,
+        preview_radius_m=preview_radius_m,
+        bldg_prov=bldg_prov,
+        zone_result=zone_result,
+        needs_review=needs_review,
+        flight_ready=flight_ready,
+        all_review_reasons=all_review_reasons,
+    )
 
     if not dry_run:
         parcels_4326 = [reproject_to_4326(p.geometry) for p in input_geoms]
@@ -585,42 +444,14 @@ def run_preview(
         prelim_bounds[3] + include_buf,
     )
     _cb(progress_cb, "buildings", "Fetching building tiles…", 35)
-    log.info("Preview: fetching building tiles …")
-    b_fetcher = buildings_fetcher(api_key)
-    b_records = get_tiles(
-        "buildings", buildings_bbox, b_fetcher, config.cache, refresh=refresh
-    )
-    raw_buildings: list[Building] = []
-    for rec in b_records:
-        raw_buildings.extend(load_tile(rec.path))
-    buildings = dedup_buildings(raw_buildings)
+    buildings, b_records = _load_buildings(buildings_bbox, api_key, config.cache, refresh)
     log.info("Preview: %d building(s)", len(buildings))
 
     # 3. Survey polygon
     _cb(progress_cb, "geometry", "Computing survey polygon…", 55)
     if custom_polygon_4326 is not None:
         log.info("Preview: using custom polygon (bridge/cut applied)")
-        _survey_3067 = reproject_to_3067(custom_polygon_4326)
-        _offset = config.polygon.survey_offset_m
-        _survey_3067_off = apply_survey_offset(_survey_3067, _offset)
-        _survey_4326_off = reproject_to_4326(_survey_3067_off)
-        _area_ha = _survey_3067_off.area / 10_000
-        _vc = vertex_count(_survey_4326_off)
-        survey_geom = SurveyGeometry(
-            survey_3067=_survey_3067_off,
-            survey_4326=_survey_4326_off,
-            pieces_3067=[_survey_3067_off],
-            pieces_4326=[_survey_4326_off],
-            bbox_3067=_survey_3067_off.bounds,
-            original_area_ha=_area_ha,
-            final_area_ha=_area_ha,
-            area_lost_pct=0.0,
-            min_dist_to_home_m=None,
-            offset_applied=_offset != 0.0,
-            survey_vertex_count=_vc,
-            needs_review=True,
-            review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
-        )
+        survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
     else:
         log.info("Preview: computing survey geometry …")
         survey_geom = process_survey(input_geoms, buildings, config.home_safety, config.polygon)
@@ -872,6 +703,225 @@ def create_skeleton_jobs(
 
     _cb(progress_cb, "batch", f"Done — {sum(r['status']=='ok' for r in results)}/{total} created", 95)
     return results
+
+
+def _synth_survey_geom(poly_4326: Any, offset_m: float) -> SurveyGeometry:
+    """Build a synthetic SurveyGeometry from a user-supplied polygon.
+
+    Used when the user has drawn or edited the polygon directly, bypassing
+    ``process_survey()``.  The offset is applied immediately; the result is
+    flagged ``needs_review=True`` so the pilot must verify boundaries.
+    """
+    survey_3067 = reproject_to_3067(poly_4326)
+    survey_3067_off = apply_survey_offset(survey_3067, offset_m)
+    survey_4326_off = reproject_to_4326(survey_3067_off)
+    area_ha = survey_3067_off.area / 10_000
+    vc = vertex_count(survey_4326_off)
+    return SurveyGeometry(
+        survey_3067=survey_3067_off,
+        survey_4326=survey_4326_off,
+        pieces_3067=[survey_3067_off],
+        pieces_4326=[survey_4326_off],
+        bbox_3067=survey_3067_off.bounds,
+        original_area_ha=area_ha,
+        final_area_ha=area_ha,
+        area_lost_pct=0.0,
+        min_dist_to_home_m=None,
+        offset_applied=offset_m != 0.0,
+        survey_vertex_count=vc,
+        needs_review=True,
+        review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
+    )
+
+
+def _load_buildings(
+    buildings_bbox: tuple,
+    api_key: str,
+    cache_config,
+    refresh: bool,
+) -> tuple[list[Building], list[TileRecord]]:
+    """Fetch building tiles from cache and return ``(buildings, tile_records)``."""
+    b_fetcher = buildings_fetcher(api_key)
+    b_records = get_tiles("buildings", buildings_bbox, b_fetcher, cache_config, refresh=refresh)
+    raw: list[Building] = []
+    for rec in b_records:
+        raw.extend(load_tile(rec.path))
+    buildings = dedup_buildings(raw)
+    log.info("%d building(s) loaded after dedup", len(buildings))
+    return buildings, b_records
+
+
+def _build_manifest(
+    *,
+    job_name: str,
+    run_ts: str,
+    dry_run: bool,
+    config: AppConfig,
+    # inputs
+    parcel_ids_used: list[str],
+    parcel_fetch_ts: str,
+    property_ids_used: list[str],
+    property_display_ids_used: list[str],
+    property_fetch_ts: str | None,
+    # geometry / flight
+    survey_geom: SurveyGeometry,
+    pieces_count: int,
+    drone_cfg: Any,
+    flight_height_m: float,
+    # pipeline outputs
+    kmz_results: list,
+    dsm_stats: dict,
+    # buildings / safety
+    buildings: list,
+    nearby: list,
+    include_buf: float,
+    preview_radius_m: float,
+    # provenance
+    dem_prov: dict,
+    bldg_prov: dict,
+    # zones + review flags
+    zone_result: Any,
+    needs_review: bool,
+    flight_ready: bool,
+    all_review_reasons: list[str],
+) -> dict:
+    """Assemble and return the full provenance manifest dict for a completed job."""
+    return {
+        "tool_version":  tool_version(),
+        "job_name":      job_name,
+        "run_timestamp": run_ts,
+        "dry_run":       dry_run,
+
+        **(
+            {
+                "parcels": {
+                    "parcel_ids":  parcel_ids_used,
+                    "lpis_year":   config.parcels.lpis_year,
+                    "fetched_at":  parcel_fetch_ts,
+                    "attribution": _CC_BY["parcels"].format(date=parcel_fetch_ts[:10]),
+                }
+            }
+            if parcel_ids_used else {}
+        ),
+        **(
+            {
+                "properties": {
+                    "property_ids":         property_ids_used,
+                    "property_display_ids": property_display_ids_used,
+                    "fetched_at":           property_fetch_ts,
+                    "attribution":          _CC_BY["properties"].format(
+                        date=(property_fetch_ts or "")[:10]
+                    ),
+                }
+            }
+            if property_ids_used else {}
+        ),
+
+        "geometry": {
+            "original_area_ha": round(survey_geom.original_area_ha, 4),
+            "final_area_ha":    round(survey_geom.final_area_ha, 4),
+            "area_lost_pct":    round(survey_geom.area_lost_pct, 2),
+            "bbox_3067": {
+                "xmin": survey_geom.bbox_3067[0],
+                "ymin": survey_geom.bbox_3067[1],
+                "xmax": survey_geom.bbox_3067[2],
+                "ymax": survey_geom.bbox_3067[3],
+            },
+            "pieces_count":        pieces_count,
+            "survey_vertex_count": survey_geom.survey_vertex_count,
+        },
+
+        "flight": {
+            "target_gsd_cm":     config.flight.target_gsd_cm,
+            "derived_height_m":  round(flight_height_m, 2),
+            "overlap_front_pct": config.flight.overlap_front_pct,
+            "overlap_side_pct":  config.flight.overlap_side_pct,
+            "terrain_follow":    True,
+            "drone":             drone_cfg.name,
+            "drone_label":       drone_cfg.label,
+        },
+
+        "battery": (
+            (
+                {
+                    "estimated_photo_count":     kmz_results[0].estimated_photo_count,
+                    "estimated_flight_time_min": round(kmz_results[0].estimated_flight_time_min, 1),
+                    "over_one_battery":          kmz_results[0].over_one_battery,
+                }
+                if len(kmz_results) == 1
+                else {
+                    "pieces": [
+                        {
+                            "piece":                     i + 1,
+                            "estimated_photo_count":     r.estimated_photo_count,
+                            "estimated_flight_time_min": round(r.estimated_flight_time_min, 1),
+                            "over_one_battery":          r.over_one_battery,
+                        }
+                        for i, r in enumerate(kmz_results)
+                    ],
+                    "over_any_battery": any(r.over_one_battery for r in kmz_results),
+                }
+            )
+            if kmz_results else {"note": "dry_run — not computed"}
+        ),
+
+        "dsm": (
+            {
+                "elevation_min_m":   round(dsm_stats["elevation_min_m"], 1),
+                "elevation_max_m":   round(dsm_stats["elevation_max_m"], 1),
+                "valid_pixel_count": dsm_stats["valid_pixel_count"],
+                "attribution":       _CC_BY["elevation"].format(
+                    date=dem_prov.get("fetch_date_min", "")[:10]
+                ),
+            }
+            if dsm_stats else {"note": "dry_run — not built"}
+        ),
+
+        "home_safety": {
+            "operating_subcategory":  config.home_safety.operating_subcategory,
+            "home_buffer_m":          config.home_safety.home_buffer_m,
+            "home_include_buffer_m":  round(include_buf, 1),
+            "preview_radius_m":       round(preview_radius_m, 1),
+            "offset_applied":         survey_geom.offset_applied,
+            "min_dist_to_home_m":     (
+                round(survey_geom.min_dist_to_home_m, 1)
+                if survey_geom.min_dist_to_home_m is not None else None
+            ),
+            "buildings_fetched":      len(buildings),
+            "buildings_in_homes_kml": len(nearby),
+            "buildings_attribution":  _CC_BY["buildings"].format(
+                date=bldg_prov.get("fetch_date_min", "")[:10]
+            ),
+        },
+
+        "zones": {
+            "checked":            zone_result.checked,
+            "flight_ready":       zone_result.flight_ready,
+            "attribution":        zone_result.attribution,
+            "intersecting_zones": [
+                {
+                    "identifier":   h.identifier,
+                    "name":         h.name,
+                    "restriction":  h.restriction,
+                    "reason":       h.reason,
+                    "upper_limit":  h.altitude.upper_limit,
+                    "upper_uom":    h.altitude.upper_uom,
+                    "upper_ref":    h.altitude.upper_ref,
+                    "ceiling_note": h.altitude.ceiling_note(flight_height_m),
+                }
+                for h in zone_result.intersecting_zones
+            ],
+        },
+
+        "cache_provenance": {
+            "dem":       dem_prov,
+            "buildings": bldg_prov,
+        },
+
+        "needs_review":   needs_review,
+        "flight_ready":   flight_ready,
+        "review_reasons": all_review_reasons,
+    }
 
 
 def _require_api_key() -> str:
