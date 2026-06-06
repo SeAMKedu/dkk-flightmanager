@@ -115,6 +115,9 @@ class HomeSafetyConfig(BaseModel):
     # (the "3:1 horizontal rule" often used for risk assessment).
     # CLI: --preview-radius <metres>
     preview_radius_m: float | None = Field(default=None, ge=0)
+    # Radius (m) of the VLOS circle shown around the takeoff/landing marker in
+    # the browser UI.  Displayed as two concentric dashed rings (full + half).
+    vlos_range_m: float = Field(default=300.0, gt=0)
     offset_enabled: bool = True
     max_area_loss_pct: float = Field(default=30.0, ge=0, le=100)
 

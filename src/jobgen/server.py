@@ -74,6 +74,7 @@ def create_app(config: AppConfig) -> FastAPI:
                 else str(_st.config.polygon.simplify_tolerance_m)
             ),
             "keepout":     _st.config.home_safety.offset_enabled,
+            "vlos_range_m": _st.config.home_safety.vlos_range_m,
             "mml_api_key": os.environ.get("MML_API_KEY", ""),
         }
 
