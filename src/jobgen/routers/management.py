@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from jobgen._server_state import SSEResponse
 from pydantic import BaseModel
 
 import jobgen._server_state as _st
@@ -54,6 +54,8 @@ async def job_events():
             while True:
                 try:
                     data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    if data is None:  # shutdown sentinel — exit cleanly
+                        return
                     yield f"data: {data}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
@@ -62,7 +64,7 @@ async def job_events():
         finally:
             _st.event_queues.discard(queue)
 
-    return StreamingResponse(
+    return SSEResponse(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

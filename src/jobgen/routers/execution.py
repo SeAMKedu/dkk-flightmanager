@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from jobgen._server_state import SSEResponse
 from pydantic import BaseModel
 
 import jobgen._server_state as _st
@@ -252,17 +252,20 @@ async def progress_stream(job_id: str):
         raise HTTPException(404, detail="Job not found")
 
     async def generate():
-        while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=25.0)
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event.get("stage") in ("done", "error"):
-                    _st.job_queues.pop(job_id, None)
-                    break
-            except asyncio.TimeoutError:
-                yield 'data: {"stage":"keepalive"}\n\n'
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    if event.get("stage") in ("done", "error"):
+                        _st.job_queues.pop(job_id, None)
+                        break
+                except asyncio.TimeoutError:
+                    yield 'data: {"stage":"keepalive"}\n\n'
+        except asyncio.CancelledError:
+            pass
 
-    return StreamingResponse(
+    return SSEResponse(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

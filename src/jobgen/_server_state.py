@@ -9,10 +9,27 @@ from __future__ import annotations
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from fastapi.responses import StreamingResponse
 
 if TYPE_CHECKING:
     from jobgen.config import AppConfig
+
+class SSEResponse(StreamingResponse):
+    """StreamingResponse that suppresses CancelledError on shutdown.
+
+    Starlette's listen_for_disconnect task raises CancelledError when uvicorn
+    force-cancels open connections at graceful-shutdown timeout. Catching it
+    here prevents uvicorn from logging it as ERROR: Exception in ASGI application.
+    """
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        except asyncio.CancelledError:
+            pass
+
 
 executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
 job_lock: threading.Lock = threading.Lock()

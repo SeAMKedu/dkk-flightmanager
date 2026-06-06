@@ -88,6 +88,16 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
         output_dir = Path(_st.config.output.output_dir).resolve()
         task = asyncio.create_task(_watch_output_dir(output_dir))
         yield
+        # Send shutdown sentinel to all /api/events clients so their generators
+        # exit cleanly before uvicorn tears down the connections. Without this,
+        # Starlette's listen_for_disconnect gets a CancelledError mid-wait and
+        # uvicorn logs it as ERROR.
+        for q in list(_st.event_queues):
+            try:
+                q.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+        await asyncio.sleep(0)  # one tick — let generators process the sentinel
         task.cancel()
         try:
             await task

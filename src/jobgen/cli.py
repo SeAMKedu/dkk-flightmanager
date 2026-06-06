@@ -756,7 +756,30 @@ def serve_cmd(
     if not no_open:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
-    uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")
+    # Suppress CancelledError noise from SSE connections cancelled at shutdown.
+    # Starlette's listen_for_disconnect raises CancelledError when uvicorn
+    # force-cancels open connections after the graceful-shutdown timeout;
+    # this is expected behaviour, not a real error.
+    import asyncio as _asyncio
+    import logging as _logging
+
+    class _DropCancelledError(_logging.Filter):
+        def filter(self, record: _logging.LogRecord) -> bool:
+            if record.exc_info and record.exc_info[0] is not None:
+                if issubclass(record.exc_info[0], _asyncio.CancelledError):
+                    return False
+            return True
+
+    _logging.getLogger("uvicorn.error").addFilter(_DropCancelledError())
+
+    uvicorn.run(
+        web_app,
+        host="127.0.0.1",
+        port=port,
+        log_level="info",
+        access_log=False,
+        timeout_graceful_shutdown=3,
+    )
 
 
 if __name__ == "__main__":

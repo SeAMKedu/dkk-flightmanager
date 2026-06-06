@@ -7,6 +7,7 @@ var polyModified = false;
 var _polySetWithIds = false; // was the polygon established while ID fields were populated?
 var isRunning = false;
 var _pendingPreview = false;  // startPreview() deferred because isRunning was true
+var _ownSavedJob = null;      // path of job we just saved ourselves (suppress ext-modified notice)
 var currentSSE = null;
 var editMode = false;
 var _bridgeMode = false;
@@ -1384,6 +1385,7 @@ function onSaveDone(payload) {
   document.getElementById('xb').disabled = false;
   _activeJob = payload.job_name ? (payload.folder ? payload.folder + '/' + payload.job_name : payload.job_name) : null;
   _activeJobFolder = payload.folder || null;
+  _ownSavedJob = _activeJob;
   _dirty = false;
   if (payload.stats) renderStatus(payload.stats);
   // Open the panel (first save reveals it) then refresh the job cards
@@ -3337,9 +3339,13 @@ function _initEventStream() {
     if (_debounceTimer) clearTimeout(_debounceTimer);
     _debounceTimer = setTimeout(function() {
       loadJobsList();
-      // Show notice only when the open job was touched externally (not by our own running pipeline)
+      // Show notice only when the open job was touched externally (not by our own save/pipeline)
       if (_activeJob && !isRunning && evt.paths && evt.paths.indexOf(_activeJob) !== -1) {
-        showExtModifiedNotice();
+        if (_activeJob === _ownSavedJob) {
+          _ownSavedJob = null; // consume: this change came from our own save
+        } else {
+          showExtModifiedNotice();
+        }
       }
     }, 800);
   };
