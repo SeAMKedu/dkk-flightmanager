@@ -94,7 +94,7 @@ def _fetch_by_ids_cached(
     cache_config: CacheConfig | None,
 ) -> list[Parcel]:
     """Serve ID-based parcel fetch from cache where possible; network for the rest."""
-    from jobgen.cache import get_parcel_cache, put_parcel_cache
+    from jobgen.geo_cache import get_parcel_cache, put_parcel_cache
 
     if cache_config is None:
         log.info("Fetching parcels from %s layer=%s mode=ids (no cache)", _WFS_URL, layer)
