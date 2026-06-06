@@ -60,6 +60,11 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             for d in _st.config.drones
         ]
 
+    @app.get("/api/version")
+    async def get_version():
+        from jobgen import __version__
+        return {"name": "dkk-jobmaker", "version": __version__}
+
     @app.get("/api/config")
     async def get_config():
         import os

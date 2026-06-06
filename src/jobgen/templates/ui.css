@@ -271,6 +271,14 @@ button:disabled{opacity:.4;cursor:not-allowed}
 /* ── Settings / Config overlay ──────────────────────────────────────────────── */
 #cfg-open-btn{background:none;border:none;color:#94a3b8;font-size:16px;cursor:pointer;padding:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:4px;margin-left:auto;transition:color .12s;flex-shrink:0}
 #cfg-open-btn:hover{color:#f8fafc;background:#334155}
+#about-btn{background:none;border:none;color:#94a3b8;font-size:14px;cursor:pointer;padding:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:4px;transition:color .12s;flex-shrink:0}
+#about-btn:hover{color:#f8fafc;background:#334155}
+#about-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center}
+#about-card{background:#fff;border-radius:8px;padding:24px 28px;max-width:280px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.2);text-align:center}
+#about-name{font-size:15px;font-weight:700;color:#1e293b;margin-bottom:6px}
+#about-version{font-size:13px;color:#64748b;margin-bottom:18px}
+#about-card button{font-size:12px;padding:5px 14px;background:#1e293b;color:#f8fafc;border:none;border-radius:4px;cursor:pointer}
+#about-card button:hover{background:#334155}
 #cfg-overlay{display:none;position:fixed;inset:0;z-index:850;flex-direction:column;background:#f1f5f9}
 #cfg-overlay-hdr{background:#1e293b;color:#f8fafc;padding:8px 12px;display:flex;align-items:center;gap:10px;flex-shrink:0;border-bottom:1px solid #0f172a}
 #cfg-overlay-title{font-size:13px;font-weight:700;letter-spacing:-.01em;flex-shrink:0}

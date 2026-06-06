@@ -12,6 +12,7 @@
 <div id="hdr">
   <h1>dkk-jobmaker</h1>
   <button id="cfg-open-btn" onclick="openSettings()" title="Settings">&#9881;</button>
+  <button id="about-btn" onclick="openAbout()" title="About">&#9432;</button>
 </div>
 <div id="main">
   <div id="jp">
@@ -296,6 +297,14 @@
       <button id="confirm-discard">Discard changes</button>
       <button id="confirm-cancel" onclick="hideConfirmModal()">Cancel</button>
     </div>
+  </div>
+</div>
+
+<div id="about-modal">
+  <div id="about-card">
+    <div id="about-name">dkk-jobmaker</div>
+    <div id="about-version">v—</div>
+    <button onclick="closeAbout()">Close</button>
   </div>
 </div>
 

@@ -3304,3 +3304,17 @@ function _cfgStatus(msg, kind) {
   el.className = kind || '';
   if (msg) setTimeout(function() { if (el.textContent === msg) el.textContent = ''; }, 5000);
 }
+
+async function openAbout() {
+  var modal = document.getElementById('about-modal');
+  modal.style.display = 'flex';
+  try {
+    var r = await fetch('/api/version');
+    var d = await r.json();
+    document.getElementById('about-version').textContent = 'v' + d.version;
+  } catch(e) {}
+}
+
+function closeAbout() {
+  document.getElementById('about-modal').style.display = 'none';
+}
