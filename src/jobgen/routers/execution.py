@@ -286,7 +286,7 @@ async def start_batch(req: BatchRequest):
             pass
 
     def run() -> None:
-        from jobgen.pipeline import create_skeleton_jobs
+        from jobgen.batch import create_skeleton_jobs
         try:
             results = create_skeleton_jobs(
                 req.ids, req.id_type, Path(output_dir),

@@ -616,7 +616,7 @@ def batch_cmd(
     --properties is given, the type is auto-detected from the ID format
     (all-digits → parcels; NNN-NNN-N-NN → properties).
     """
-    from jobgen.pipeline import create_skeleton_jobs
+    from jobgen.batch import create_skeleton_jobs
 
     _require_key()
     cfg = _load_cfg(config_path)
