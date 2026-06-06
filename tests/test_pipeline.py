@@ -230,7 +230,8 @@ class TestRunJob:
 
     def test_flight_height_matches_gsd(self, config, dem_tile, bldg_tile):
         manifest = self._run(config, dem_tile, bldg_tile)
-        expected = config.flight.derived_flight_height_m
+        drone = config.active_drone()
+        expected = drone.height_from_gsd(config.flight.target_gsd_cm)
         assert abs(manifest["flight"]["derived_height_m"] - expected) < 0.01
 
 

@@ -11,6 +11,8 @@
 <body>
 <div id="hdr">
   <h1>dkk-jobmaker</h1>
+  <button id="cfg-open-btn" onclick="openSettings()" title="Settings">&#9881;</button>
+  <button id="about-btn" onclick="openAbout()" title="About">&#9432;</button>
 </div>
 <div id="main">
   <div id="jp">
@@ -18,6 +20,7 @@
       <div id="jp-hdr">
         <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
         <button id="jp-batch" onclick="openBatchDialog()">&#8659; Batch</button>
+        <button id="jp-newfolder" onclick="createFolder()" title="Create new folder">&#43; Folder</button>
       </div>
       <div id="jp-filter-row">
         <input type="text" id="jp-filter" placeholder="Filter&#8230;">
@@ -25,7 +28,8 @@
       <div id="jp-sel-bar">
         <span id="jp-sel-count">0 selected</span>
         <button class="sel-action" id="sel-merge-btn" onclick="openMergeModal()">Merge</button>
-        <button class="sel-action" onclick="exportGoogleMaps()">Google Maps</button>
+        <button class="sel-action" onclick="exportKml()">Export KML</button>
+        <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
         <button class="sel-action" onclick="bulkMove()">Move</button>
         <button class="sel-action danger" onclick="bulkDelete()">Delete</button>
         <button class="sel-clear" onclick="clearSelection()" title="Clear selection">&#10005;</button>
@@ -37,6 +41,7 @@
 
   <div id="sb">
     <div id="stale-notice"></div>
+    <div id="ext-modified-notice" style="display:none"></div>
 
     <div class="sec">
       <h3>Job</h3>
@@ -111,7 +116,8 @@
       <span id="mv-sel-count"></span>
       <button class="sel-action" id="mv-open-btn" onclick="mvOpenJob(this.dataset.path)" style="display:none">Open</button>
       <button class="sel-action" id="mv-merge-btn" onclick="mvMerge()">Merge</button>
-      <button class="sel-action" onclick="exportGoogleMaps()">Google Maps</button>
+      <button class="sel-action" onclick="exportKml()">Export KML</button>
+      <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
       <button class="sel-action" onclick="mvBulkMove()">Move</button>
       <button class="sel-action danger" id="mv-delete-btn" onclick="mvBulkDelete()">Delete</button>
       <button class="sel-clear" onclick="mvClearSel()" title="Clear selection">&#10005;</button>
@@ -251,6 +257,40 @@
   </div>
 </div>
 
+<div id="folder-modal">
+  <div id="folder-card">
+    <div class="batch-hdr">
+      <span>New Folder</span>
+      <button class="batch-close" onclick="closeFolderDialog()">&#10005;</button>
+    </div>
+    <div id="folder-form">
+      <label>Folder name</label>
+      <input type="text" id="folder-name-input" placeholder="e.g. spring-2026" autocomplete="off">
+      <button id="folder-submit" onclick="submitFolder()">Create folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="cfg-overlay">
+  <div id="cfg-overlay-hdr">
+    <span id="cfg-overlay-title">Settings</span>
+    <input type="text" id="cfg-search" placeholder="Search settings&#8230;" oninput="cfgSearch(this.value)">
+    <button id="cfg-close-btn" onclick="closeSettings()" title="Close">&#10005;</button>
+  </div>
+  <div id="cfg-body-wrap">
+    <nav id="cfg-nav"></nav>
+    <div id="cfg-main">
+      <div id="cfg-section-title"></div>
+      <div id="cfg-fields"></div>
+    </div>
+  </div>
+  <div id="cfg-footer">
+    <span id="cfg-status-msg"></span>
+    <button id="cfg-discard-btn" onclick="discardSettings()">Discard</button>
+    <button id="cfg-save-btn" onclick="saveSettings()">Save</button>
+  </div>
+</div>
+
 <div id="confirm-modal">
   <div id="confirm-card">
     <div id="confirm-msg"></div>
@@ -258,6 +298,14 @@
       <button id="confirm-discard">Discard changes</button>
       <button id="confirm-cancel" onclick="hideConfirmModal()">Cancel</button>
     </div>
+  </div>
+</div>
+
+<div id="about-modal">
+  <div id="about-card">
+    <div id="about-name">dkk-jobmaker</div>
+    <div id="about-version">v—</div>
+    <button onclick="closeAbout()">Close</button>
   </div>
 </div>
 

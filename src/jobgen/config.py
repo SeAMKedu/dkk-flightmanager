@@ -115,6 +115,9 @@ class HomeSafetyConfig(BaseModel):
     # (the "3:1 horizontal rule" often used for risk assessment).
     # CLI: --preview-radius <metres>
     preview_radius_m: float | None = Field(default=None, ge=0)
+    # Radius (m) of the VLOS circle shown around the takeoff/landing marker in
+    # the browser UI.  Displayed as two concentric dashed rings (full + half).
+    vlos_range_m: float = Field(default=300.0, gt=0)
     offset_enabled: bool = True
     max_area_loss_pct: float = Field(default=30.0, ge=0, le=100)
 
@@ -253,3 +256,49 @@ def load_config(path: Path | str = "config.toml") -> AppConfig:
     with open(p, "rb") as f:
         raw = tomllib.load(f)
     return AppConfig.model_validate(raw)
+
+
+# Fields not written back by save_config() — either internal/structural or managed
+# via config.toml directly (drone profiles, MML API URL, cache grid geometry).
+_SAVE_SKIP: dict[str, set[str]] = {
+    "home_safety": {"residential_kohdeluokka", "a3_additional_kohdeluokka"},
+    "zones":       {"api_url"},
+    "cache":       {"tile_size_m", "cache_dir"},
+}
+
+_SAVE_SECTIONS = [
+    "flight", "home_safety", "polygon", "zones", "cache", "output", "parcels", "properties",
+]
+
+
+def save_config(config: AppConfig, path: Path) -> None:
+    """Write editable settings back to *path* (config.toml) using tomli-w.
+
+    Reads the current file first so that un-managed keys (drone profiles, TOML
+    comments structure) are preserved in the raw dict, then overwrites only the
+    sections the Settings UI controls.  None values are removed from the dict
+    (TOML has no null type; omitting the key lets Pydantic use the field default
+    on next load, which is also None for Optional fields).
+    """
+    import tomli_w as _tomli_w
+
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+
+    raw["default_drone"] = config.default_drone
+
+    for section_id in _SAVE_SECTIONS:
+        section_obj = getattr(config, section_id)
+        skip = _SAVE_SKIP.get(section_id, set())
+        if section_id not in raw:
+            raw[section_id] = {}
+        for key, value in section_obj.model_dump(mode="python").items():
+            if key in skip:
+                continue
+            if value is None:
+                raw[section_id].pop(key, None)
+            else:
+                raw[section_id][key] = value
+
+    with open(path, "wb") as f:
+        _tomli_w.dump(raw, f)

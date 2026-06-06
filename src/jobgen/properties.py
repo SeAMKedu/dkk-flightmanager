@@ -74,7 +74,7 @@ def fetch_properties(
 
     Raises PropertyNotFoundError if any ID returns no features.
     """
-    from jobgen.cache import get_property_cache, put_property_cache
+    from jobgen.geo_cache import get_property_cache, put_property_cache
 
     sess = session or requests.Session()
     normalised = {_normalise(pid): pid for pid in property_ids}

@@ -12,13 +12,16 @@ from jobgen.geometry import (
     SurveyGeometry,
     _apply_edge_buffer,
     _apply_keepout,
-    _build_keepout,
+    build_keepout,
     _close_gaps,
     _enforce_hole_policy,
     _enforce_policy,
     _fix_winding,
     _merge_parcels,
-    _reproject,
+    reproject_to_4326,
+    reproject_to_3067,
+    apply_survey_offset,
+    suggest_takeoff_point,
     process_survey,
 )
 from jobgen.parcels import Parcel
@@ -159,41 +162,41 @@ class TestEdgeBuffer:
 
 
 # ---------------------------------------------------------------------------
-# _build_keepout
+# build_keepout
 # ---------------------------------------------------------------------------
 
 
 class TestBuildKeeput:
     def test_no_buildings_returns_none(self):
-        assert _build_keepout([], _DEFAULT_HOME_SAFETY) is None
+        assert build_keepout([], _DEFAULT_HOME_SAFETY) is None
 
     def test_residential_building_in_a3_keepout(self):
         b = make_building(kohdeluokka=42211)
-        keepout = _build_keepout([b], _DEFAULT_HOME_SAFETY)
+        keepout = build_keepout([b], _DEFAULT_HOME_SAFETY)
         assert keepout is not None
         assert keepout.area > b.geometry.area  # buffer makes it larger
 
     def test_agricultural_building_excluded(self):
         b = make_building(kohdeluokka=42261)  # agricultural
-        keepout = _build_keepout([b], _DEFAULT_HOME_SAFETY)
+        keepout = build_keepout([b], _DEFAULT_HOME_SAFETY)
         assert keepout is None  # excluded for all subcategories
 
     def test_a2_excludes_commercial(self):
         cfg = HomeSafetyConfig(operating_subcategory="A2", home_buffer_m=150)
         b = make_building(kohdeluokka=42221)  # commercial — only A3
-        keepout = _build_keepout([b], cfg)
+        keepout = build_keepout([b], cfg)
         assert keepout is None
 
     def test_a3_includes_commercial(self):
         cfg = HomeSafetyConfig(operating_subcategory="A3", home_buffer_m=150)
         b = make_building(kohdeluokka=42221)  # commercial — A3 rule
-        keepout = _build_keepout([b], cfg)
+        keepout = build_keepout([b], cfg)
         assert keepout is not None
 
     def test_keepout_covers_buffer_distance(self):
         b = make_building(x=302_000, y=6_900_250)  # 2000 m from parcel
         cfg = HomeSafetyConfig(home_buffer_m=150)
-        keepout = _build_keepout([b], cfg)
+        keepout = build_keepout([b], cfg)
         # A point 100 m from building should be inside the 150 m buffer
         assert keepout.contains(Point(302_100, 6_900_260))
         # A point 200 m away should not
@@ -211,7 +214,7 @@ class TestApplyKeeput:
         # Building right at the edge of the survey
         b = make_building(x=300_480, y=6_900_250, kohdeluokka=42211)
         cfg = HomeSafetyConfig(home_buffer_m=50, offset_enabled=True)
-        keepout = _build_keepout([b], cfg)
+        keepout = build_keepout([b], cfg)
         result, area_lost, dist, applied = _apply_keepout(
             survey, keepout, cfg, survey.area / 10_000
         )
@@ -223,7 +226,7 @@ class TestApplyKeeput:
         survey = make_parcel(w=500, h=500).geometry
         b = make_building(x=301_000, y=6_900_250, kohdeluokka=42211)
         cfg = HomeSafetyConfig(home_buffer_m=150, offset_enabled=False)
-        keepout = _build_keepout([b], cfg)
+        keepout = build_keepout([b], cfg)
         result, area_lost, dist, applied = _apply_keepout(
             survey, keepout, cfg, survey.area / 10_000
         )
@@ -247,7 +250,7 @@ class TestApplyKeeput:
         # Building just inside the parcel
         b = make_building(x=300_100, y=6_900_100, w=30, h=30, kohdeluokka=42211)
         cfg = HomeSafetyConfig(home_buffer_m=150, offset_enabled=True)
-        keepout = _build_keepout([b], cfg)
+        keepout = build_keepout([b], cfg)
         result, _, _, _ = _apply_keepout(parcel.geometry, keepout, cfg, parcel.area_ha)
         if not result.is_empty:
             # Buffer is approximated with line segments so the measured distance is
@@ -365,14 +368,14 @@ class TestFixWinding:
 
 
 # ---------------------------------------------------------------------------
-# _reproject
+# reproject_to_4326
 # ---------------------------------------------------------------------------
 
 
 class TestReproject:
     def test_output_in_4326_range(self):
         poly = make_parcel().geometry
-        result = _reproject(poly)
+        result = reproject_to_4326(poly)
         bounds = result.bounds
         # Should be somewhere in Finland (lon: 18-32, lat: 59-71)
         assert 18 < bounds[0] < 32, f"Expected Finnish longitude, got {bounds[0]}"
@@ -382,7 +385,7 @@ class TestReproject:
         # A point at known 3067 location near Seinäjoki
         from shapely.geometry import Point
         pt_3067 = Point(300_000, 6_900_000)
-        pt_4326 = _reproject(pt_3067)
+        pt_4326 = reproject_to_4326(pt_3067)
         lon, lat = pt_4326.x, pt_4326.y
         # Longitude should be ~22-24°E, latitude ~62°N for this area
         assert 20 < lon < 28, f"Expected longitude ~22°E, got {lon}"
@@ -469,3 +472,94 @@ class TestProcessSurvey:
         # Total area should be approximately sum of both (they share one edge)
         total = p1.area_ha + p2.area_ha
         assert abs(result.original_area_ha - total) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# reproject_to_3067
+# ---------------------------------------------------------------------------
+
+
+class TestReprojectTo3067:
+    def test_output_in_finnish_metre_range(self):
+        # A point in WGS84 near Seinäjoki → should land in Finnish 3067 range
+        pt_4326 = Point(22.8, 62.8)
+        pt_3067 = reproject_to_3067(pt_4326)
+        # Finnish 3067 x: ~200 000–800 000; y: ~6 600 000–7 800 000
+        assert 200_000 < pt_3067.x < 800_000
+        assert 6_600_000 < pt_3067.y < 7_800_000
+
+    def test_roundtrip_preserves_position(self):
+        poly = make_parcel().geometry  # already in 3067
+        poly_4326 = reproject_to_4326(poly)
+        poly_back = reproject_to_3067(poly_4326)
+        # Centroid should return to within a decimetre
+        cx_orig, cy_orig = poly.centroid.x, poly.centroid.y
+        assert abs(poly_back.centroid.x - cx_orig) < 0.1
+        assert abs(poly_back.centroid.y - cy_orig) < 0.1
+
+
+# ---------------------------------------------------------------------------
+# apply_survey_offset
+# ---------------------------------------------------------------------------
+
+
+class TestApplySurveyOffset:
+    def test_zero_offset_returns_identical(self):
+        poly = make_parcel().geometry
+        result = apply_survey_offset(poly, 0)
+        assert result.equals(poly)
+
+    def test_positive_offset_increases_area(self):
+        poly = make_parcel().geometry
+        result = apply_survey_offset(poly, 10)
+        assert result.area > poly.area
+
+    def test_negative_offset_decreases_area(self):
+        poly = make_parcel(w=1000, h=1000).geometry
+        result = apply_survey_offset(poly, -50)
+        assert result.area < poly.area
+
+    def test_collapse_offset_returns_original(self):
+        # A tiny polygon with a huge inward offset collapses to empty → original returned
+        tiny = make_parcel(w=5, h=5).geometry
+        result = apply_survey_offset(tiny, -100)
+        assert result.equals(tiny)
+
+    def test_result_is_valid(self):
+        poly = make_parcel().geometry
+        result = apply_survey_offset(poly, 25)
+        assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# suggest_takeoff_point
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestTakeoffPoint:
+    def test_returns_two_floats(self):
+        poly = make_parcel().geometry
+        pt = suggest_takeoff_point(poly)
+        assert len(pt) == 2
+        assert all(isinstance(v, float) for v in pt)
+
+    def test_point_on_boundary(self):
+        poly = make_parcel(x=300_000, y=6_900_000, w=500, h=500).geometry
+        x, y = suggest_takeoff_point(poly)
+        pt = Point(x, y)
+        # Should lie on (or very close to) the boundary
+        assert poly.boundary.distance(pt) < 1.0
+
+    def test_multipolygon_handled(self):
+        p1 = make_parcel(x=300_000, w=500).geometry
+        p2 = make_parcel(x=302_000, w=500, parcel_id="P2").geometry
+        mp = MultiPolygon([p1, p2])
+        pt = suggest_takeoff_point(mp)
+        assert len(pt) == 2
+
+    def test_within_bounding_box(self):
+        poly = make_parcel(x=300_000, y=6_900_000, w=500, h=500).geometry
+        x, y = suggest_takeoff_point(poly)
+        xmin, ymin, xmax, ymax = poly.bounds
+        assert xmin <= x <= xmax
+        assert ymin <= y <= ymax

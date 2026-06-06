@@ -25,20 +25,27 @@ Output files written per job:
 
 A virtual environment keeps the tool and its dependencies isolated from your system Python. You only do this once.
 
+**macOS / Linux:**
 ```bash
 python3 -m venv .venv        # create the virtual environment in .venv/
 source .venv/bin/activate    # activate it (your prompt will change to show (.venv))
 ```
 
+**Windows (Command Prompt):**
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+```
+
 > **Every time you open a new terminal** you need to activate again before using `jobgen`:
-> ```bash
-> source .venv/bin/activate
-> ```
 >
-> Alternatively, you can call the script directly without activating — useful in shell scripts or if you prefer not to activate:
-> ```bash
-> .venv/bin/jobgen run --name my-job --parcels 5241087453
-> ```
+> macOS / Linux: `source .venv/bin/activate`
+> Windows: `.venv\Scripts\activate`
+>
+> Alternatively, call the script directly without activating:
+>
+> macOS / Linux: `.venv/bin/jobgen run --name my-job --parcels 5241087453`
+> Windows: `.venv\Scripts\jobgen run --name my-job --parcels 5241087453`
 
 ### 2 — Install the tool
 
@@ -56,6 +63,8 @@ This registers the `jobgen` command so you can run it by name from anywhere insi
 cp config.example.toml config.toml   # edit flight params and buffer distances
 cp .env.example .env                  # add your MML API key (see below)
 ```
+
+Most flight and polygon settings can also be changed via the **⚙ Settings** panel in the browser UI (see below). Those changes are written directly back to `config.toml` — no manual file editing required.
 
 ### 4 — Add your MML API key
 
@@ -78,30 +87,182 @@ jobgen serve                         # opens http://localhost:8765 automatically
 jobgen serve --port 8080 --no-open   # custom port, no auto-open
 ```
 
-The single-page Leaflet map interface lets you:
+The single-page Leaflet map interface is organised around four areas: the **Jobs panel** on the left, the **editor form** in the centre, the **map** on the right, and the **⚙ Settings** gear in the header.
 
-- **Manage jobs** — the **Jobs panel** on the left lists all saved jobs. The panel header has **＋ New Job** and **↓ Batch** buttons; a filter input sits below. Jobs are grouped into folder sections — the root output folder and any named subfolders each show a collapsible header with job count and a **Map** button. Click any card to re-open a job (form and map restore instantly; a fresh preview runs automatically). The three-dot menu per card offers **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. The panel can be collapsed with the `◄` tab on its right edge.
-- **Batch-create skeleton jobs** — click **↓ Batch** to open the batch dialog. Paste a list of parcel or property IDs (one per line, `#` comments ignored), or load a `.txt`/`.csv` file. Assign a group folder and optional flight param overrides, then click **Create N jobs** — each ID becomes a skeleton job (polygon stored, no KMZ yet) ready to open and edit. The same operation is available from the CLI with `jobgen batch`.
-- **Multi-select and bulk operations** — hover over any job card to reveal a checkbox. Check two or more jobs to activate the selection toolbar: **Merge** (union their polygons into a new job), **Google Maps** (see below), **Move** (send to a folder), or **Delete** all at once.
-- **Export to Google Maps** — with one or more jobs selected, click **Google Maps** to download a `.kml` file (survey polygons + takeoff markers, coloured to match each job's map color) and simultaneously open a Google Maps tab with the takeoff points loaded as navigation waypoints. The KML filename is `dkk-<foldername>.kml` when all selected jobs share the same subfolder, otherwise `dkk-jobs.kml`. To get the polygon overlay in Google Maps, create a new map at [maps.google.com/maps/d](https://www.google.com/maps/d) and import the downloaded KML.
-- **Map view** — click the **Map** button on any folder section header to switch into job-map mode: the editor panel slides away and all job polygons for that folder appear on the existing map. Polygon **color** = job color; **dash pattern** = status (solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown). Click a polygon for a popup with Open/Delete; Ctrl+click to multi-select for bulk Merge/Move/Delete. Clicking **Map** again, opening a job, or clicking **＋ New Job** exits map mode and restores the editor.
-- **Job map color** — a small color swatch next to the **Name** field assigns a per-job display color used in the map view. The change is saved immediately. The job editor map always stays blue regardless of this setting.
-- **Enter area IDs** — paste Ruokavirasto parcel IDs or MML kiinteistötunnus values; the map updates automatically when you leave the field.
-- **Draw a scratch polygon** — if you have no parcel or property IDs, right-click anywhere on the empty map to create a 300×300 m square centred on the cursor. The map enters vertex-drag edit mode immediately so you can reshape it freely. Parcel/property IDs are not required — the drawn polygon is the sole input for preview and save.
-- **Tune flight parameters** — subcategory (A2/A3 pills), drone, height (live GSD display), and warning radius (linked to 3× height by default; click the "3:1" label to restore the link after manual override).
-- **Tune polygon** — offset (expand/contract), simplify (Auto pill + −/+ step buttons), keep-out toggle.
-- **Preview the survey** — click **↻ Update** or edit any parameter to see the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all toggleable from the legend. UAS zone polygons are sorted so inner zones render on top and are clickable even when nested inside a larger zone. Click any zone to see all overlapping zones at that point, including altitude floor/ceiling ranges and nesting relationships. Inner concentric zones of an airfield that don't directly intersect the survey buffer are shown with a dashed border for context. The UAS zones legend layer automatically turns on when zones first appear.
-- **Edit the polygon** — double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to exit and save. Exiting edit mode automatically refreshes buildings and UAS zones for the new polygon shape. In edit mode, vertex handles are white squares and midpoint handles are smaller white diamonds — drag a midpoint to create a new vertex. Click a vertex to delete it. Clicking **Save** while still in edit mode auto-commits the edit before saving. Click **↻ Reset polygon** to revert all manual edits.
-- **Bridge / Cut** — in edit mode, right-click any vertex to enter Bridge/Cut mode (the vertex turns orange). Newly created vertices (promoted midpoints) are immediately available for selection. Left-click up to three more vertices to define the operation:
-  - **3 vertices on the same polygon** → triangle cut (subtracts the triangle from the polygon)
-  - **2 vertices on each of two separate polygons** → bridge (connects them into a single continuous polygon with a quadrilateral corridor)
-  - Selected vertices highlight orange as you pick them; a dashed preview line shows the shape. Right-click anywhere or press **Esc** to cancel.
-- **Zone altitude cap** — when a preview returns zone hits that carry an altitude floor (Finnish vyöhyke B/C/D), flight height is automatically set to 75 % of the lowest floor and the warning radius re-syncs. Raising height above the floor triggers an orange warning in the status panel. The cap is advisory; you can override freely.
-- **Takeoff / Landing position** — every preview computes a suggested takeoff and landing point on the polygon boundary using a minimax algorithm: the boundary point that minimises the maximum distance to any polygon vertex, giving the shortest worst-case VLOS distance to the drone throughout the mission. The suggestion appears as a white ✕ marker on the map (toggleable in the legend). You can drag it anywhere to pick a more convenient spot — e.g. one closer to a road. Click **↺ Reset takeoff position** in the Polygon section to revert to the auto-suggested point. The position is saved with the job and restored when you reopen it.
-- **Map base layer** — a layer switcher in the top-left corner (next to the zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires a valid `MML_API_KEY` in `.env` and is served directly from MML's WMTS; browser HTTP cache handles tile caching automatically.
-- **Save** — click **Save** to write the full job (KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, thumbnail) to disk. Unsaved changes are tracked; you will be prompted before opening a different job or starting a new one.
+### Jobs panel
 
-Parcel and property geometries are cached locally (400-day TTL) so repeat previews of the same area do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL).
+The panel lists all saved jobs grouped into folders. Use the header buttons to create a new job (**＋ New Job**), batch-import IDs (**↓ Batch**), or add a folder (**＋ Folder**). A filter input sits below. Click any card to re-open a job — the form and map restore instantly and a fresh preview runs automatically. The three-dot card menu offers **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. Collapse the panel with the `◄` tab.
+
+The panel updates live — changes made by the CLI, MCP server, or another tab appear immediately. If the currently open job is modified externally, a blue notice offers **Reload** or **Dismiss**.
+
+**Batch import:** click **↓ Batch**, paste parcel/property IDs (one per line, `#` comments ignored) or load a `.txt`/`.csv` file, pick a folder and optional param overrides, then click **Create N jobs**. Each ID becomes a skeleton job (polygon stored, no KMZ yet). Equivalent CLI command: `jobgen batch`.
+
+**Multi-select:** hover a card to reveal its checkbox. Select two or more to activate the toolbar: **Merge** (union polygons into a new job), **Google Maps** (export KML + open navigation waypoints), **Move**, or **Delete**.
+
+**Map view:** click **Map** on any folder header to see all its job polygons on the map. Dash pattern encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown. Click a polygon for a popup; Ctrl+click to multi-select. Click **Map** again, open a job, or click **＋ New Job** to return to the editor.
+
+### Defining the survey area
+
+- **Parcel / property IDs** — paste Ruokavirasto parcel IDs or MML kiinteistötunnus values; the map updates on blur.
+- **Scratch polygon** — right-click on the empty map to place a 300×300 m square centred on the cursor, then drag vertices to reshape. No IDs required.
+
+### Flight and polygon parameters
+
+| Parameter | Controls |
+|---|---|
+| Subcategory | A2 / A3 pills |
+| Drone & height | dropdown + number field (live GSD shown) |
+| Warning radius | linked to 3× height by default; click "3:1" to restore the link |
+| Offset | expand (+) or contract (−) the survey polygon in metres |
+| Simplify | Auto pill + −/+ step buttons |
+| Keep-out | toggle to disable building buffer subtraction |
+
+### Preview
+
+Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all layers are toggleable from the legend.
+
+- **UAS zones** are clickable: see altitude floor/ceiling and all overlapping zones at a point. Inner concentric zones of an airfield are shown with a dashed border for context. The zones legend layer auto-enables when zones first appear.
+- **Zone altitude cap** — when a zone hit carries an altitude floor, flight height is automatically set to 75 % of that floor and the warning radius re-syncs. An orange warning appears if you raise height above the floor. The cap is advisory; override freely.
+- **Takeoff marker** — a white ✕ on the polygon boundary marks the auto-suggested takeoff/landing point (the boundary point that minimises worst-case VLOS distance). Drag it to a more convenient spot. Click **↺ Reset takeoff position** to revert. Saved with the job.
+
+### Polygon editing
+
+Double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to exit and save. On exit, buildings and UAS zones refresh automatically for the new shape.
+
+In edit mode:
+- White squares = vertices; smaller white diamonds = midpoints. Drag a midpoint to add a vertex. Click a vertex to delete it.
+- **Bridge / Cut** — right-click any vertex to start (turns orange), then left-click more vertices:
+  - 3 vertices on the same polygon → **triangle cut** (subtracts from the polygon)
+  - 2 vertices on each of two polygons → **bridge** (joins them with a quadrilateral corridor)
+  - Press **Esc** or right-click to cancel.
+- Click **↻ Reset polygon** to revert all edits.
+
+### Map tools
+
+- **Base layer** — the layer switcher (top-left, next to zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires `MML_API_KEY` in `.env`.
+- **Measure** — hold **Ctrl** and right-click-drag to draw a dimensioning line with a distance label. Hold **Ctrl+Shift** to draw a radius circle instead. Click **✕** in the map controls to clear all measurements.
+- **Job color** — the color swatch next to the **Name** field sets the per-job display color used in map view. Saved immediately.
+
+### Save and settings
+
+- **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs.
+- **⚙ Settings** — opens the in-browser config editor (all sections: Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties). Changed fields highlight in amber; a search box filters across all sections. Saving hot-reloads the server and writes directly to `config.toml`. Drone profiles must be edited in `config.toml` directly; `config.example.toml` is the reference for all options.
+
+Parcel and property geometries are cached locally (400-day TTL) so repeat previews do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL).
+
+---
+
+## AI assistant integration (MCP)
+
+`dkk-jobmaker` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so AI assistants — Claude Desktop, Claude Code, or any MCP-compatible client — can query job data and trigger pipeline operations directly.
+
+### Primary path — integrated with the web UI
+
+When `jobgen serve` is running, the MCP server is mounted at `/mcp/sse` in the same process. No separate command, no extra process, no coordination overhead.
+
+**Claude Code:**
+```bash
+claude mcp add jobmaker --url http://localhost:8765/mcp/sse
+```
+
+**Claude Desktop** — add to the config file for your platform:
+
+| Platform | Config file location |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+```json
+{
+  "mcpServers": {
+    "jobmaker": {
+      "url": "http://localhost:8765/mcp/sse"
+    }
+  }
+}
+```
+
+If you use a non-default port, replace `8765` accordingly.
+
+### Fallback path — standalone (no web UI)
+
+For headless use or automation scripts that don't need the browser UI:
+
+```bash
+jobgen mcp                              # stdio transport, reads config.toml from cwd
+jobgen mcp --config /path/to/config.toml
+```
+
+**Claude Code:**
+```bash
+claude mcp add jobmaker -- jobgen mcp
+```
+
+**Claude Desktop** — use the config file path from the table above, with the platform-appropriate binary path:
+
+macOS / Linux:
+```json
+{
+  "mcpServers": {
+    "jobmaker": {
+      "command": "/path/to/project/.venv/bin/jobgen",
+      "args": ["mcp"],
+      "env": { "MML_API_KEY": "your-key-here" }
+    }
+  }
+}
+```
+
+Windows:
+```json
+{
+  "mcpServers": {
+    "jobmaker": {
+      "command": "C:\\path\\to\\project\\.venv\\Scripts\\jobgen.exe",
+      "args": ["mcp"],
+      "env": { "MML_API_KEY": "your-key-here" }
+    }
+  }
+}
+```
+
+Use the full absolute path to the `.venv` binary so Claude Desktop finds the right environment. `MML_API_KEY` must be passed explicitly here — Claude Desktop launches subprocesses from its own working directory, not the project directory, so the project `.env` file is not picked up automatically. On macOS/Linux you can alternatively export the key in `~/.zshenv` or `~/.profile` so it is inherited by all GUI-launched processes.
+
+### What the AI can do
+
+**Read (always safe):**
+
+| Tool / Resource | Description |
+|---|---|
+| `list_jobs` | List jobs with filters: folder, needs\_review, flight\_ready, untouched |
+| `get_job` | Full details for one job — inputs, flight params, zone hits, flight status |
+| `job_stats` | Aggregate stats across all jobs or a folder (total area, review counts) |
+| `jobs://list` | All jobs as a resource (same as list\_jobs with no filters) |
+| `jobs://{path}` | Raw params + manifest for one job |
+| `config://current` | Active drone, GSD, flight and safety settings |
+| `drones://list` | All drone profiles with GSD at 50/80/100 m |
+
+**Write (pipeline operations):**
+
+| Tool | Description |
+|---|---|
+| `create_folder` | Create a named job group folder |
+| `create_preview` | Run geometry + UAS zone check without writing files (~10–30 s) |
+| `create_batch` | Create skeleton jobs from parcel/property IDs (no KMZ) |
+| `run_export` | Full pipeline — KMZ, DSM, homes KML, manifest written to disk (~30–120 s) |
+
+Pipeline tools are serialised against the web UI: if a browser job is already running, the MCP tool returns an error immediately rather than colliding on the shared tile cache.
+
+### Example queries
+
+```
+Which of my jobs have UAS zone conflicts?
+What's the total survey area in the Vaasa-2026 folder?
+Create batch jobs for parcel IDs 5241087453, 5241087454, 5241087455 in folder Seinäjoki
+What drone should I use for a 12 ha field at 3 cm GSD?
+Run a preview for parcel 5241087453 and tell me if there are any zone issues
+```
 
 ---
 
@@ -112,9 +273,6 @@ Parcel and property geometries are cached locally (400-day TTL) so repeat previe
 ```bash
 # Ruokavirasto peruslohkotunnus (comma-separated, or mixed with --properties)
 jobgen run --name pelto-2024 --parcels 5241087453,5241087454
-
-# From a file of parcel IDs (one per line)
-jobgen run --name pelto-2024 --parcels-file ids.txt
 
 # Finnish kiinteistötunnus — dash form or 14-digit numeric
 jobgen run --name pelto-2024 --properties 214-407-3-22
@@ -133,7 +291,6 @@ jobgen run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 |---|---|---|
 | `--name`, `-n` | *(required)* | Job name; used as output subdirectory |
 | `--parcels`, `-p` | — | Comma-separated peruslohkotunnus IDs |
-| `--parcels-file` | — | File with one parcel ID per line |
 | `--properties`, `-k` | — | Comma-separated kiinteistötunnus values (dash or 14-digit form) |
 | `--bbox` | — | Bounding box `xmin,ymin,xmax,ymax` in EPSG:3067 metres |
 | `--drone` | from config | Drone + payload profile name (e.g. `m3m`, `m300-p1-24`) — see below |
@@ -168,7 +325,7 @@ jobgen run --name pelto-2024 --parcels 5241087453 --simplify 5
 jobgen run --name pelto-2024 --parcels 5241087453 --simplify 0
 ```
 
-The default tolerance and mode are set in `config.toml` under `[polygon]`:
+The defaults are set under `[polygon]` in `config.toml` (or via **⚙ Settings → Polygon** in the browser UI):
 
 ```toml
 simplify_mode = "fixed"           # "fixed" or "auto"
@@ -195,9 +352,9 @@ jobgen run --name pelto-2024 --parcels 5241087453 --offset -5
 
 A negative offset can split the polygon or introduce holes at narrow corners — these are handled automatically by `hole_policy` / `multipart_policy` in the same way as keep-out subtraction results. If the contraction collapses the polygon entirely, the original geometry is preserved and a warning is logged.
 
-Set `survey_offset_m` in `config.toml` under `[polygon]` to apply a default offset to every job.
+Set `survey_offset_m` under `[polygon]` in `config.toml` (or via **⚙ Settings → Polygon**) to apply a default offset to every job.
 
-**Offset and polygon editing (browser UI):** When you enter vertex-drag edit mode, the map shows the offset-applied polygon. Exiting edit mode bakes that shape in — the offset field resets to 0 and the edited geometry becomes the new base. This prevents double-application if you later adjust the offset again. If you want to re-apply an offset after editing, type a new value in the Offset field after exiting edit mode.
+**Offset and polygon editing:** Edit mode shows the offset-applied polygon. Exiting bakes that shape in and resets offset to 0, preventing double-application. To re-apply an offset after editing, type a new value in the Offset field after exiting edit mode.
 
 ### Disabling keep-out subtraction (`--no-keepout`)
 
@@ -213,13 +370,9 @@ When `--no-keepout` is used:
 - Buildings and their distance circles are still shown on the HTML preview map.
 - A prominent red warning is added to the preview panel reminding the operator to verify distances to all buildings manually.
 
-Use this only when you have the landowner's permission to fly close to buildings and have verified the required separation under your operating subcategory. Set `offset_enabled = false` in `config.toml` under `[home_safety]` to make it the default.
+Use this only when you have the landowner's permission to fly close to buildings and have verified the required separation under your operating subcategory. Set `offset_enabled = false` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to make it the default.
 
 ### Drone profiles (`--drone`)
-
-The tool ships with built-in profiles for common DJI mapping drones. Each profile
-carries the WPML drone/payload enum values and camera constants needed to generate
-a correct KMZ and calculate GSD.
 
 List available profiles and their GSD at typical altitudes:
 
@@ -228,8 +381,9 @@ jobgen drones
 ```
 
 ```
-Name               GSD@50m  GSD@100m  Label
-m3m *                1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB channel
+Name               GSD@50m   GSD@100m  Label
+m3m                  1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB channel
+m3m-ms               2.14 cm    4.28 cm  DJI Mavic 3 Multispectral — MS-limited GSD
 m3e                  1.34 cm    2.68 cm  DJI Mavic 3 Enterprise — RGB camera
 m300-p1-24           0.92 cm    1.83 cm  DJI Matrice 300 RTK + Zenmuse P1 (24 mm)
 m300-p1-35           0.63 cm    1.26 cm  DJI Matrice 300 RTK + Zenmuse P1 (35 mm)
@@ -245,7 +399,7 @@ Select a drone for a job:
 jobgen run --name pelto-2024 --parcels 5241087453 --drone m300-p1-24
 ```
 
-Set the default in `config.toml`:
+Set the default in `config.toml` (or via **⚙ Settings → Drone** in the browser UI):
 
 ```toml
 default_drone = "m3m"
@@ -294,6 +448,15 @@ The `--parcels` / `--properties` flag determines ID type. If neither is given, t
 | `--height FLOAT` | Flight height override (m AGL) |
 | `--subcategory TEXT` | `A2` or `A3` |
 
+### MCP server (standalone)
+
+See the [AI assistant integration](#ai-assistant-integration-mcp) section above for the primary (integrated) approach. The `mcp` command is for headless use without `jobgen serve`:
+
+```bash
+jobgen mcp                               # stdio transport, config.toml in cwd
+jobgen mcp --config /path/to/config.toml
+```
+
 ### Cache management
 
 Pre-fetch tiles before a field day (no network needed on-site with --offline):
@@ -322,7 +485,7 @@ jobgen cache refresh --older-than 30
 5. Edit the polygon if needed (double-click to enter, double-click background to save). Buildings and zones refresh automatically on exit.
 6. Check the white ✕ takeoff/landing marker — the tool suggests a boundary point that minimises your worst-case VLOS distance to the drone. Drag it to a more accessible location if needed (e.g. closer to a road or gate). Use **↺ Reset takeoff position** to go back to the auto suggestion.
 7. Click **Save** when satisfied.
-7. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
+8. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
 
 ### On the RC
 
@@ -341,7 +504,7 @@ jobgen cache refresh --older-than 30
 | **A2** (C2-labelled drone + A2 certificate) | ≥ flight height from people | Derived from `--height` or config |
 | **A3** (no C-label / C3 / C4) | ≥ 150 m from residential/commercial/industrial/recreational areas | 150 m fixed |
 
-The `operating_subcategory` in `config.toml` sets the default; override per-job with `--subcategory`.
+The `operating_subcategory` in `config.toml` (or **⚙ Settings → Safety**) sets the default; override per-job with `--subcategory`.
 
 ### Homes KML inclusion distance (`--homes-distance`)
 
@@ -352,7 +515,7 @@ Buildings are included in `<name>_homes.kml` if their nearest point is within th
 jobgen run --name pelto-2024 --parcels 5241087453 --subcategory A3 --homes-distance 400
 ```
 
-Set `home_include_buffer_m` in `config.toml` under `[home_safety]` to change the default permanently.
+Set `home_include_buffer_m` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to change the default permanently.
 
 ### Map preview yellow circle (`--preview-radius`)
 
@@ -368,14 +531,12 @@ jobgen run --name pelto-2024 --parcels 5241087453 --preview-radius 200
 jobgen run --name pelto-2024 --parcels 5241087453 --height 80 --subcategory A2 --preview-radius 80
 ```
 
-Set `preview_radius_m` in `config.toml` under `[home_safety]` to change the default permanently.
+Set `preview_radius_m` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to change the default permanently.
 
 ## Safety notes
 
 - **120 m AGL limit** — enforced by the tool; `max_height_agl_m` in config.
-- **UAS zones** — checked automatically against Traficom's published permanent zone data. The survey area is expanded by 500 m before the check so zones near the boundary are also flagged. Finnish UAS vyöhykkeet (A–D) are concentric altitude bands; the browser UI reads the zone *floor* (`lower_limit`) as the binding altitude cap — flying below it exits that zone without authorisation. The zone dump is re-fetched daily. **Temporary restrictions (NOTAMs) are NOT included** — check NOTAMs manually on the day.
-- **Inner zones shown for context** — when the survey intersects the outer zone of an airfield, all inner concentric zones (tighter vyöhykkeet with lower altitude limits) are also displayed with a dashed border so you can judge how close you are to the more restrictive inner areas.
-- **Altitude auto-cap** — when zone hits carry an altitude floor, the browser UI automatically sets flight height to 75 % of that floor and warns if you raise it above the limit. The cap is advisory only; override requires no confirmation, but the warning persists.
+- **UAS zones** — checked automatically against Traficom's published permanent zone data. The survey area is expanded by 500 m before the check so boundary-adjacent zones are also flagged. Finnish UAS vyöhykkeet (A–D) are concentric altitude bands; the browser UI treats the zone floor (`lower_limit`) as the binding altitude cap and auto-sets height to 75 % of that floor when a zone is hit. Zone data is re-fetched daily. When the survey intersects an airfield's outer zone, inner concentric zones are shown with a dashed border for context. **Temporary restrictions (NOTAMs) are NOT included** — check NOTAMs manually on the day.
 - The generated job is a planning aid. The remote pilot remains responsible for compliance, airspace checks, and uninvolved-person separation on the day.
 
 ## Disclaimer

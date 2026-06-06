@@ -25,11 +25,24 @@ var _editCHandler = null;  // container-level contextmenu capture (edit mode)
 var _editKHandler = null;  // container-level click capture (bridge picking)
 var _editVHandler = null;  // draw:editvertex → re-patch midpoint icons
 
+// ── Measurement tool state ────────────────────────────────────────────────────
+var _measItems   = [];      // [{startLL, endLL, shift}] committed measurements
+var _measTemp    = null;    // {startLL, endLL, shift} during current drag
+var _measSvg     = null;    // <svg> overlay element inside #map
+var _measActive  = false;   // right-drag in progress
+var _measShift   = false;   // shift key held at drag start
+var _measStartPx = null;    // {x,y} client coords at right mousedown
+var _measDragged = false;   // crossed 5 px threshold → treat as measurement drag
+
 // ── Takeoff position ──────────────────────────────────────────────────────────
 var _takeoffAuto = null;        // [lng, lat] suggested by server
 var _takeoffPt   = null;        // [lng, lat] current (auto or user-dragged)
 var _takeoffUserMoved = false;  // true once user drags the marker
 var _takeoffMarker = null;      // Leaflet draggable marker
+var _vlosRange   = 300;         // metres, set from /api/config
+var _vlosOuter   = null;        // L.circle — full VLOS range ring
+var _vlosInner   = null;        // L.circle — half VLOS range ring
+var _vlosVisible = false;       // toggled by click on marker
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 var map = L.map('map', {preferCanvas:true}).setView([64.5, 26.0], 5);
@@ -125,6 +138,7 @@ async function init() {
       setSimpManual(parseFloat(cfg.simplify) || 0, true);
     }
     document.getElementById('kochk').checked = cfg.keepout !== false;
+    if (cfg.vlos_range_m) _vlosRange = cfg.vlos_range_m;
     updateGsd();
     _mmlApiKey = cfg.mml_api_key || '';
     if (_mmlApiKey) _initBaseLayers(_mmlApiKey);
@@ -137,6 +151,7 @@ async function init() {
   // Jobs panel
   setJpOpen(_jpOpen);
   loadJobsList();
+  _initEventStream();
 }
 
 function defaultJobName() {
@@ -346,6 +361,7 @@ function _doNewJob() {
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
   clearPolyEdit();
   clearError();
+  hideExtModifiedNotice();
   // Reset polygon controls to a clean neutral state
   document.getElementById('offset').value = 0;
   setSimpAuto(true);  // silent — no scheduleAutoUpdate, no clearPolyEdit
@@ -823,8 +839,32 @@ function centroid(geom) {
   return null;
 }
 
+function _vlosCircleOpts(full) {
+  return full
+    ? {radius: _vlosRange,       color:'#ffffff', weight:2,   dashArray:'8 6', fillOpacity:0.08, fillColor:'#ffffff', interactive:false}
+    : {radius: _vlosRange / 2,   color:'#ffffff', weight:1.5, dashArray:'4 5', fillOpacity:0.05, fillColor:'#ffffff', interactive:false};
+}
+
+function _showVlos(ll) {
+  _hideVlos();
+  _vlosOuter = L.circle(ll, _vlosCircleOpts(true)).addTo(map);
+  _vlosInner = L.circle(ll, _vlosCircleOpts(false)).addTo(map);
+}
+
+function _hideVlos() {
+  if (_vlosOuter) { map.removeLayer(_vlosOuter); _vlosOuter = null; }
+  if (_vlosInner) { map.removeLayer(_vlosInner); _vlosInner = null; }
+  _vlosVisible = false;
+}
+
+function _moveVlos(ll) {
+  if (_vlosOuter) _vlosOuter.setLatLng(ll);
+  if (_vlosInner) _vlosInner.setLatLng(ll);
+}
+
 function _renderTakeoffMarker(lngLat) {
   if (_takeoffMarker) { map.removeLayer(_takeoffMarker); _takeoffMarker = null; }
+  _hideVlos();
   var row = document.getElementById('leg-takeoff-row');
   if (!lngLat) { if (row) row.style.display = 'none'; return; }
   _takeoffPt = lngLat;
@@ -840,10 +880,18 @@ function _renderTakeoffMarker(lngLat) {
     zIndexOffset: 1000,
   }).addTo(map);
   _takeoffMarker.bindTooltip('Takeoff / Landing', {permanent:false, direction:'top', className:'takeoff-tooltip'});
-  _takeoffMarker.on('dragstart', function() { _takeoffUserMoved = true; });
+  _takeoffMarker.on('click', function() {
+    if (_vlosVisible) { _hideVlos(); } else { _showVlos(this.getLatLng()); _vlosVisible = true; }
+  });
+  _takeoffMarker.on('dragstart', function() {
+    _takeoffUserMoved = true;
+    _showVlos(this.getLatLng()); _vlosVisible = true;
+  });
+  _takeoffMarker.on('drag', function() { _moveVlos(this.getLatLng()); });
   _takeoffMarker.on('dragend', function() {
     var ll = _takeoffMarker.getLatLng();
     _takeoffPt = [ll.lng, ll.lat];
+    _hideVlos();
   });
   if (row) row.style.display = '';
   document.getElementById('takeoff-recalc-btn').disabled = false;
@@ -866,7 +914,7 @@ function _clearTakeoff() {
 // Eye-toggle for takeoff marker (not in lrs, handled separately)
 document.getElementById('leg-takeoff').addEventListener('click', function() {
   if (!_takeoffMarker) return;
-  if (this.classList.toggle('off')) map.removeLayer(_takeoffMarker);
+  if (this.classList.toggle('off')) { map.removeLayer(_takeoffMarker); _hideVlos(); }
   else _takeoffMarker.addTo(map);
 });
 
@@ -1634,6 +1682,37 @@ async function doMoveJob(j, toFolder) {
   } catch(e) { showError('Move failed: ' + e.message); }
 }
 
+function createFolder() {
+  document.getElementById('folder-name-input').value = '';
+  document.getElementById('folder-modal').classList.add('open');
+  setTimeout(function(){ document.getElementById('folder-name-input').focus(); }, 50);
+}
+
+function closeFolderDialog() {
+  document.getElementById('folder-modal').classList.remove('open');
+}
+
+async function submitFolder() {
+  var name = document.getElementById('folder-name-input').value.trim();
+  if (!name) return;
+  var btn = document.getElementById('folder-submit');
+  btn.disabled = true;
+  try {
+    var r = await fetch('/api/folders', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+      showError(err.detail || 'Could not create folder');
+      return;
+    }
+    closeFolderDialog();
+    await loadJobsList();
+  } catch(e) { showError('Failed: ' + e.message); }
+  finally { btn.disabled = false; }
+}
+
 async function promptNewFolderForJob(j) {
   var name = window.prompt('New folder name:');
   if (!name || !name.trim()) return;
@@ -1678,6 +1757,8 @@ function openMapView(folderFilter) {
   Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
   lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
   editLayers.clearLayers();
+  if (_takeoffMarker) map.removeLayer(_takeoffMarker);
+  _hideVlos();
 
   // Hide editor sidebar, swap legend
   document.getElementById('sb').classList.add('mv-hidden');
@@ -1988,6 +2069,7 @@ async function _doOpenJob(path) {
     _setColorPicker(p && p.color);
     _dirty = false;
     clearError();
+    hideExtModifiedNotice();
     // Highlight card
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
     // Restore map from stored preview (instant); fit bounds once for this job load
@@ -2201,9 +2283,21 @@ function toggleJobSelection(j, selected) {
     _selectedJobs.delete(j.path);
     _selectedMeta.delete(j.path);
   }
-  // Update card class without re-rendering
   var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (card) card.classList.toggle('selected', selected);
+  // Sync to map view when active
+  if (_mvMode) {
+    if (selected) {
+      _mvSelected.add(j.path);
+      var item = _mvLayers.find(function(i){ return i.path === j.path; });
+      if (item) item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
+    } else {
+      _mvSelected.delete(j.path);
+      var item = _mvLayers.find(function(i){ return i.path === j.path; });
+      if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
+    }
+    _mvUpdateSelBar();
+  }
   _updateSelBar();
 }
 
@@ -2215,6 +2309,14 @@ function clearSelection() {
     var chk = c.querySelector('.jcard-chk');
     if (chk) chk.checked = false;
   });
+  if (_mvMode) {
+    _mvSelected.forEach(function(path) {
+      var item = _mvLayers.find(function(i){ return i.path === path; });
+      if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
+    });
+    _mvSelected.clear();
+    _mvUpdateSelBar();
+  }
   _updateSelBar();
 }
 
@@ -2356,11 +2458,9 @@ function _escapeXml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
 }
 
-async function exportGoogleMaps() {
-  // Works from both list-view (_selectedJobs) and map-view (_mvSelected)
+async function _loadSelectedJobs() {
   var paths = _mvMode ? Array.from(_mvSelected) : Array.from(_selectedJobs);
-  if (!paths.length) return;
-
+  if (!paths.length) return null;
   var jobs = [];
   for (var i = 0; i < paths.length; i++) {
     try {
@@ -2370,13 +2470,17 @@ async function exportGoogleMaps() {
       jobs.push({path: paths[i], params: data.params});
     } catch (e) { /* skip */ }
   }
-  if (!jobs.length) return;
+  return jobs.length ? {paths, jobs} : null;
+}
+
+async function exportKml() {
+  var result = await _loadSelectedJobs();
+  if (!result) return;
+  var {paths, jobs} = result;
 
   var kml = ['<?xml version="1.0" encoding="UTF-8"?>',
     '<kml xmlns="http://www.opengis.net/kml/2.2">',
     '<Document><name>DKK Jobs</name>'];
-
-  var navPoints = [];
 
   jobs.forEach(function(job) {
     var p = job.params;
@@ -2386,7 +2490,6 @@ async function exportGoogleMaps() {
 
     kml.push('<Folder><name>' + _escapeXml(name) + '</name>');
 
-    // Polygon
     var poly = p.custom_polygon_4326;
     if (poly && poly.coordinates && poly.coordinates[0]) {
       var ring = poly.coordinates[0];
@@ -2403,10 +2506,8 @@ async function exportGoogleMaps() {
       kml.push('</Placemark>');
     }
 
-    // Takeoff marker
     var tp = p.takeoff_point_4326;
     if (tp) {
-      navPoints.push(tp[1] + ',' + tp[0]);
       kml.push('<Placemark>');
       kml.push('<name>' + _escapeXml(name) + '</name>');
       kml.push('<Style><IconStyle><color>' + lineColor + '</color></IconStyle></Style>');
@@ -2419,20 +2520,29 @@ async function exportGoogleMaps() {
 
   kml.push('</Document></kml>');
 
-  // Derive filename from folder if all selected jobs share one subfolder
   var folders = new Set(paths.map(function(p){ var s = p.indexOf('/'); return s >= 0 ? p.slice(0, s) : null; }));
   var fileName = (folders.size === 1 && Array.from(folders)[0] !== null)
     ? 'dkk-' + Array.from(folders)[0] + '.kml'
     : 'dkk-jobs.kml';
 
-  // Download KML
   var blob = new Blob([kml.join('\n')], {type: 'application/vnd.google-earth.kml+xml'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url; a.download = fileName; a.click();
   URL.revokeObjectURL(url);
+}
 
-  // Open Google Maps with takeoff points as navigation waypoints (max 10)
+async function openGoogleMaps() {
+  var result = await _loadSelectedJobs();
+  if (!result) return;
+  var {jobs} = result;
+
+  var navPoints = [];
+  jobs.forEach(function(job) {
+    var tp = job.params.takeoff_point_4326;
+    if (tp) navPoints.push(tp[1] + ',' + tp[0]);
+  });
+
   if (navPoints.length === 1) {
     window.open('https://www.google.com/maps/search/?api=1&query=' + navPoints[0], '_blank');
   } else if (navPoints.length >= 2) {
@@ -2644,8 +2754,616 @@ document.getElementById('batch-modal').addEventListener('click', function(e) {
   if (e.target === this) closeBatchDialog();
 });
 
+document.getElementById('folder-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeFolderDialog();
+});
+
+document.getElementById('folder-name-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') submitFolder();
+  if (e.key === 'Escape') closeFolderDialog();
+});
+
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Measurement tool ──────────────────────────────────────────────────────────
+// Right-click + drag: draw a dimensioning line (perpendicular end caps, aligned label).
+// Right-click + drag with Shift: draw a radius line + circle, label on the line.
+// Measurements persist until cleared. Does not activate in edit / bridge mode.
+
+function _initMeasSvg() {
+  var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.id = 'meas-svg';
+  svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:650;overflow:visible';
+  document.getElementById('map').appendChild(svg);
+  _measSvg = svg;
+  map.on('move zoom viewreset resize', _redrawMeas);
+
+  // Floating "Clear measurements" Leaflet control — visible in both editor and map-view
+  var MeasClearControl = L.Control.extend({
+    options: {position: 'topleft'},
+    onAdd: function() {
+      var btn = L.DomUtil.create('button', 'meas-clear-ctrl');
+      btn.id = 'meas-clear-btn';
+      btn.innerHTML = '&#10005;';
+      btn.title = 'Clear measurements (Ctrl + right-click drag to measure)';
+      L.DomEvent.on(btn, 'click', L.DomEvent.stopPropagation);
+      L.DomEvent.on(btn, 'click', clearMeasurements);
+      return btn;
+    }
+  });
+  new MeasClearControl().addTo(map);
+}
+
+function _initMeasEvents() {
+  var container = map.getContainer();
+
+  container.addEventListener('mousedown', function(e) {
+    if (e.button !== 2 || !e.ctrlKey) return;
+    if (editMode || _bridgeMode) return;
+    _measStartPx = {x: e.clientX, y: e.clientY};
+    _measShift   = e.shiftKey;
+    _measDragged = false;
+    _measActive  = false;
+  }, false);
+
+  document.addEventListener('mousemove', function(e) {
+    if (!_measStartPx) return;
+    if (editMode || _bridgeMode) { _measStartPx = null; return; }
+    var dx = e.clientX - _measStartPx.x;
+    var dy = e.clientY - _measStartPx.y;
+    if (!_measDragged && Math.sqrt(dx*dx + dy*dy) > 5) {
+      _measDragged = true;
+      _measActive  = true;
+      var rect = container.getBoundingClientRect();
+      var cp = L.point(_measStartPx.x - rect.left, _measStartPx.y - rect.top);
+      _measTemp = {
+        startLL: map.containerPointToLatLng(cp),
+        endLL:   map.containerPointToLatLng(cp),
+        shift:   _measShift
+      };
+    }
+    if (_measActive && _measTemp) {
+      var rect = container.getBoundingClientRect();
+      var cp = L.point(e.clientX - rect.left, e.clientY - rect.top);
+      _measTemp.endLL = map.containerPointToLatLng(cp);
+      _redrawMeas();
+    }
+  }, false);
+
+  document.addEventListener('mouseup', function(e) {
+    if (e.button !== 2) return;
+    var wasDragging = _measActive;
+    if (_measActive && _measTemp) {
+      var rect = container.getBoundingClientRect();
+      var cp = L.point(e.clientX - rect.left, e.clientY - rect.top);
+      _measTemp.endLL = map.containerPointToLatLng(cp);
+      if (_measTemp.startLL.distanceTo(_measTemp.endLL) > 0.5) {
+        _measItems.push(_measTemp);
+      }
+      _measTemp  = null;
+      _measActive = false;
+      _redrawMeas();
+    }
+    _measStartPx = null;
+    if (!wasDragging) _measDragged = false;
+    // when wasDragging, _measDragged stays true until contextmenu suppresses it
+  }, false);
+
+  // Capture-phase contextmenu: suppress the event when we just completed a drag
+  // measurement so neither Leaflet's handler nor _editCHandler see it.
+  container.addEventListener('contextmenu', function(e) {
+    if (_measDragged) {
+      e.stopPropagation();
+      e.preventDefault();
+      _measDragged = false;
+    }
+  }, true);
+}
+
+function clearMeasurements() {
+  _measItems  = [];
+  _measTemp   = null;
+  _measActive = false;
+  _redrawMeas();
+}
+
+function _redrawMeas() {
+  if (!_measSvg) return;
+  while (_measSvg.firstChild) _measSvg.removeChild(_measSvg.firstChild);
+  var items = _measItems.slice();
+  if (_measTemp) items.push(_measTemp);
+  items.forEach(_drawMeasItem);
+}
+
+function _drawMeasItem(item) {
+  var p1 = map.latLngToContainerPoint(item.startLL);
+  var p2 = map.latLngToContainerPoint(item.endLL);
+  var dist = item.startLL.distanceTo(item.endLL);
+  if (dist < 0.5) return;
+
+  var distLabel = dist < 1000
+    ? Math.round(dist) + ' m'
+    : (dist / 1000).toFixed(2) + ' km';
+
+  var dx = p2.x - p1.x, dy = p2.y - p1.y;
+  var len = Math.sqrt(dx*dx + dy*dy);
+  if (len < 3) return;
+
+  var ux = dx/len, uy = dy/len;  // unit along line
+  var perpX = -uy, perpY = ux;   // unit perpendicular (left-hand side)
+
+  var mx = (p1.x + p2.x) / 2;
+  var my = (p1.y + p2.y) / 2;
+  var angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+  if (angleDeg >  90) angleDeg -= 180;  // keep text readable (never upside-down)
+  if (angleDeg < -90) angleDeg += 180;
+
+  var g = _measSvgEl('g', {});
+
+  if (item.shift) {
+    // Circle mode: radius line + circle; no end caps
+    g.appendChild(_measSvgEl('line', {
+      x1:p1.x, y1:p1.y, x2:p2.x, y2:p2.y,
+      stroke:'#111', 'stroke-width':1.5, 'stroke-linecap':'butt'
+    }));
+    g.appendChild(_measSvgEl('circle', {
+      cx:p1.x, cy:p1.y, r:len,
+      stroke:'#111', 'stroke-width':1.5, fill:'none'
+    }));
+    _measSvgLabel(g, mx, my, distLabel, angleDeg);
+  } else {
+    // Dimensioning mode: line + perpendicular end caps
+    var CAP = 7; // half-length of each end cap in pixels
+    g.appendChild(_measSvgEl('line', {
+      x1:p1.x, y1:p1.y, x2:p2.x, y2:p2.y,
+      stroke:'#111', 'stroke-width':1.5, 'stroke-linecap':'butt'
+    }));
+    g.appendChild(_measSvgEl('line', {
+      x1:p1.x + perpX*CAP, y1:p1.y + perpY*CAP,
+      x2:p1.x - perpX*CAP, y2:p1.y - perpY*CAP,
+      stroke:'#111', 'stroke-width':1.5, 'stroke-linecap':'square'
+    }));
+    g.appendChild(_measSvgEl('line', {
+      x1:p2.x + perpX*CAP, y1:p2.y + perpY*CAP,
+      x2:p2.x - perpX*CAP, y2:p2.y - perpY*CAP,
+      stroke:'#111', 'stroke-width':1.5, 'stroke-linecap':'square'
+    }));
+    _measSvgLabel(g, mx, my, distLabel, angleDeg);
+  }
+  _measSvg.appendChild(g);
+}
+
+function _measSvgEl(tag, attrs) {
+  var el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  var keys = Object.keys(attrs);
+  for (var i = 0; i < keys.length; i++) el.setAttribute(keys[i], attrs[keys[i]]);
+  return el;
+}
+
+function _measSvgLabel(parent, x, y, text, angleDeg) {
+  var g = _measSvgEl('g', {
+    transform: 'translate(' + x + ',' + y + ') rotate(' + angleDeg + ')'
+  });
+  var commonAttrs = [
+    ['text-anchor',       'middle'],
+    ['dominant-baseline', 'middle'],
+    ['dy',                '-6'],
+    ['font-size',         '11'],
+    ['font-family',       'system-ui,sans-serif'],
+    ['font-weight',       '600']
+  ];
+  function applyAttrs(el, extra) {
+    commonAttrs.forEach(function(kv) { el.setAttribute(kv[0], kv[1]); });
+    extra.forEach(function(kv) { el.setAttribute(kv[0], kv[1]); });
+    el.textContent = text;
+  }
+  var bg = _measSvgEl('text', {});
+  applyAttrs(bg, [['fill','#fff'],['stroke','#fff'],['stroke-width','3'],['paint-order','stroke']]);
+  var fg = _measSvgEl('text', {});
+  applyAttrs(fg, [['fill','#111']]);
+  g.appendChild(bg);
+  g.appendChild(fg);
+  parent.appendChild(g);
+}
+
+_initMeasSvg();
+_initMeasEvents();
 init();
+
+// ── Settings panel ────────────────────────────────────────────────────────────
+
+var _cfgSections   = [];   // [{id, label, fields:[{key,label,desc,type,unit,value,...}]}]
+var _cfgValues     = {};   // key → current (possibly edited) value
+var _cfgOrigValues = {};   // key → value as loaded from server
+var _cfgActiveSid  = null; // active section id
+var _cfgSearchQ    = '';   // current search query
+
+async function openSettings() {
+  var overlay = document.getElementById('cfg-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('cfg-search').value = '';
+  _cfgSearchQ = '';
+  try {
+    var resp = await fetch('/api/settings');
+    var data = await resp.json();
+    _cfgSections   = data.sections;
+    _cfgValues     = {};
+    _cfgOrigValues = {};
+    for (var s of _cfgSections) {
+      for (var f of s.fields) {
+        _cfgValues[f.key]     = f.value;
+        _cfgOrigValues[f.key] = f.value;
+      }
+    }
+    _cfgRenderNav();
+    _cfgActivate(_cfgSections[0]?.id);
+  } catch(e) {
+    _cfgStatus('Failed to load settings: ' + e.message, 'err');
+  }
+}
+
+function closeSettings() {
+  if (_cfgIsDirty() && !confirm('Discard unsaved changes?')) return;
+  _cfgClose();
+}
+
+function discardSettings() { closeSettings(); }
+
+function _cfgClose() {
+  document.getElementById('cfg-overlay').style.display = 'none';
+  _cfgValues = {}; _cfgOrigValues = {}; _cfgSections = [];
+}
+
+function _cfgIsDirty() {
+  for (var key of Object.keys(_cfgValues)) {
+    if (!_cfgValEq(_cfgValues[key], _cfgOrigValues[key])) return true;
+  }
+  return false;
+}
+
+function _cfgValEq(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return String(a) === String(b);
+}
+
+function _cfgSectionDirty(section) {
+  return section.fields.some(function(f) {
+    return !_cfgValEq(_cfgValues[f.key], _cfgOrigValues[f.key]);
+  });
+}
+
+// ── Nav ───────────────────────────────────────────────────────────────────────
+
+function _cfgRenderNav() {
+  var nav = document.getElementById('cfg-nav');
+  nav.innerHTML = '';
+  for (var s of _cfgSections) {
+    (function(section) {
+      var btn = document.createElement('button');
+      btn.className = 'cfg-nav-item';
+      btn.dataset.sid = section.id;
+      var lbl = document.createElement('span');
+      lbl.textContent = section.label;
+      var dot = document.createElement('span');
+      dot.className = 'cfg-nav-dot';
+      btn.appendChild(lbl);
+      btn.appendChild(dot);
+      btn.onclick = function() { _cfgActivate(section.id); };
+      nav.appendChild(btn);
+    })(s);
+  }
+}
+
+function _cfgUpdateNavDots() {
+  for (var s of _cfgSections) {
+    var btn = document.querySelector('.cfg-nav-item[data-sid="' + s.id + '"]');
+    if (btn) btn.classList.toggle('dirty', _cfgSectionDirty(s));
+  }
+}
+
+function _cfgActivate(sid) {
+  _cfgActiveSid = sid;
+  document.querySelectorAll('.cfg-nav-item').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.sid === sid);
+  });
+  var section = _cfgSections.find(function(s) { return s.id === sid; });
+  if (!section) return;
+
+  if (_cfgSearchQ) {
+    _cfgRenderSearch(_cfgSearchQ);
+    return;
+  }
+
+  document.getElementById('cfg-section-title').textContent = section.label;
+  var container = document.getElementById('cfg-fields');
+  container.innerHTML = '';
+  var visible = section.fields.filter(function(f) { return !f._hidden; });
+  for (var field of visible) {
+    container.appendChild(_cfgFieldEl(field));
+  }
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+function cfgSearch(q) {
+  _cfgSearchQ = q.trim().toLowerCase();
+  if (!_cfgSearchQ) {
+    // Restore normal section view
+    _cfgActivate(_cfgActiveSid);
+    document.querySelectorAll('.cfg-nav-item').forEach(function(b) { b.style.display = ''; });
+    return;
+  }
+
+  // Filter nav items by whether their section has any matching field
+  var matchingSids = new Set();
+  for (var s of _cfgSections) {
+    if (s.fields.some(function(f) { return _cfgFieldMatches(f, _cfgSearchQ); })) {
+      matchingSids.add(s.id);
+    }
+  }
+  document.querySelectorAll('.cfg-nav-item').forEach(function(b) {
+    b.style.display = matchingSids.has(b.dataset.sid) ? '' : 'none';
+  });
+
+  _cfgRenderSearch(_cfgSearchQ);
+}
+
+function _cfgFieldMatches(field, q) {
+  return (field.label + ' ' + field.description + ' ' + field.key).toLowerCase().includes(q);
+}
+
+function _cfgRenderSearch(q) {
+  document.getElementById('cfg-section-title').textContent = 'Search results';
+  var container = document.getElementById('cfg-fields');
+  container.innerHTML = '';
+  var found = false;
+  for (var s of _cfgSections) {
+    var matches = s.fields.filter(function(f) { return _cfgFieldMatches(f, q); });
+    if (!matches.length) continue;
+    found = true;
+    var hdr = document.createElement('div');
+    hdr.className = 'cfg-search-section-hdr';
+    hdr.textContent = s.label;
+    container.appendChild(hdr);
+    for (var field of matches) {
+      container.appendChild(_cfgFieldEl(field));
+    }
+  }
+  if (!found) {
+    var msg = document.createElement('div');
+    msg.className = 'cfg-no-results';
+    msg.textContent = 'No settings match "' + q + '"';
+    container.appendChild(msg);
+  }
+}
+
+// ── Field rendering ───────────────────────────────────────────────────────────
+
+function _cfgFieldEl(field) {
+  var wrap = document.createElement('div');
+  wrap.className = 'cfg-field';
+
+  // Label + unit
+  var labelRow = document.createElement('div');
+  labelRow.className = 'cfg-field-label';
+  var lbl = document.createElement('span');
+  lbl.textContent = field.label;
+  labelRow.appendChild(lbl);
+  if (field.unit) {
+    var unit = document.createElement('span');
+    unit.className = 'cfg-field-unit';
+    unit.textContent = field.unit;
+    labelRow.appendChild(unit);
+  }
+  wrap.appendChild(labelRow);
+
+  // Description
+  if (field.description) {
+    var desc = document.createElement('div');
+    desc.className = 'cfg-field-desc';
+    desc.textContent = field.description;
+    wrap.appendChild(desc);
+  }
+
+  // Input row
+  var row = document.createElement('div');
+  row.className = 'cfg-field-row';
+
+  var currentVal = _cfgValues[field.key];
+  var input = _cfgMakeInput(field, currentVal);
+  row.appendChild(input);
+
+  // Nullable clear button
+  if (field.nullable && currentVal !== null) {
+    var clrBtn = document.createElement('button');
+    clrBtn.className = 'cfg-nullable-clear';
+    clrBtn.textContent = 'Use default';
+    clrBtn.onclick = function() {
+      _cfgValues[field.key] = null;
+      input.value = '';
+      input.placeholder = 'default';
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    };
+    row.appendChild(clrBtn);
+  }
+
+  wrap.appendChild(row);
+  return wrap;
+}
+
+function _cfgMakeInput(field, currentVal) {
+  var input;
+  if (field.type === 'boolean') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'cfg-input cfg-input-bool';
+    input.checked = currentVal === true;
+    input.addEventListener('change', function() {
+      _cfgValues[field.key] = input.checked;
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    });
+  } else if (field.type === 'enum') {
+    input = document.createElement('select');
+    input.className = 'cfg-input';
+    for (var opt of (field.options || [])) {
+      var o = document.createElement('option');
+      o.value = opt;
+      o.textContent = (field.option_labels && field.option_labels[opt]) ? field.option_labels[opt] + ' (' + opt + ')' : opt;
+      if (opt === currentVal) o.selected = true;
+      input.appendChild(o);
+    }
+    input.addEventListener('change', function() {
+      _cfgValues[field.key] = input.value;
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    });
+  } else if (field.type === 'number' || field.type === 'integer') {
+    input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'cfg-input';
+    input.value = currentVal !== null && currentVal !== undefined ? currentVal : '';
+    if (field.min !== undefined) input.min = field.min;
+    if (field.max !== undefined) input.max = field.max;
+    input.step = field.step !== undefined ? field.step : 1;
+    if (field.nullable) input.placeholder = 'default';
+    input.addEventListener('input', function() {
+      var v = input.value === '' && field.nullable ? null
+        : field.type === 'integer' ? parseInt(input.value, 10)
+        : parseFloat(input.value);
+      _cfgValues[field.key] = v;
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    });
+  } else {
+    input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cfg-input';
+    input.value = currentVal !== null && currentVal !== undefined ? currentVal : '';
+    if (field.nullable) input.placeholder = 'default';
+    input.addEventListener('input', function() {
+      _cfgValues[field.key] = input.value === '' && field.nullable ? null : input.value;
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    });
+  }
+  return input;
+}
+
+function _cfgMarkModified(input, key) {
+  var isModified = !_cfgValEq(_cfgValues[key], _cfgOrigValues[key]);
+  if (input.type === 'checkbox') return;  // checkbox color doesn't apply
+  input.classList.toggle('cfg-modified', isModified);
+}
+
+// ── Save / Reset ──────────────────────────────────────────────────────────────
+
+async function saveSettings() {
+  var changes = {};
+  for (var key of Object.keys(_cfgValues)) {
+    if (!_cfgValEq(_cfgValues[key], _cfgOrigValues[key])) {
+      changes[key] = _cfgValues[key];
+    }
+  }
+  if (!Object.keys(changes).length) {
+    _cfgStatus('No changes to save.', 'ok');
+    return;
+  }
+
+  var btn = document.getElementById('cfg-save-btn');
+  btn.disabled = true;
+  try {
+    var resp = await fetch('/api/settings', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(changes),
+    });
+    var data = await resp.json();
+    if (!resp.ok) {
+      _cfgStatus('Save failed: ' + (data.detail || resp.status), 'err');
+      return;
+    }
+    // Commit originals and clear modified styles
+    _cfgOrigValues = Object.assign({}, _cfgValues);
+    document.querySelectorAll('.cfg-input.cfg-modified').forEach(function(el) {
+      el.classList.remove('cfg-modified');
+    });
+    _cfgUpdateNavDots();
+    _cfgStatus('Settings saved. Some changes (output dir, cache TTLs) take effect immediately; drone/flight defaults apply to new jobs.', 'ok');
+  } catch(e) {
+    _cfgStatus('Network error: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function _cfgStatus(msg, kind) {
+  var el = document.getElementById('cfg-status-msg');
+  el.textContent = msg;
+  el.className = kind || '';
+  if (msg) setTimeout(function() { if (el.textContent === msg) el.textContent = ''; }, 5000);
+}
+
+async function openAbout() {
+  var modal = document.getElementById('about-modal');
+  modal.style.display = 'flex';
+  try {
+    var r = await fetch('/api/version');
+    var d = await r.json();
+    document.getElementById('about-version').textContent = 'v' + d.version;
+  } catch(e) {}
+}
+
+function closeAbout() {
+  document.getElementById('about-modal').style.display = 'none';
+}
+
+// ── External-change event stream ──────────────────────────────────────────────
+
+function _initEventStream() {
+  var es = new EventSource('/api/events');
+  var _debounceTimer = null;
+
+  es.onmessage = function(e) {
+    var evt;
+    try { evt = JSON.parse(e.data); } catch(ex) { return; }
+    if (evt.type !== 'jobs_changed') return;
+
+    // Debounce rapid bursts (batch runs write many files quickly)
+    if (_debounceTimer) clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(function() {
+      loadJobsList();
+      // Show notice only when the open job was touched externally (not by our own running pipeline)
+      if (_activeJob && !isRunning && evt.paths && evt.paths.indexOf(_activeJob) !== -1) {
+        showExtModifiedNotice();
+      }
+    }, 800);
+  };
+
+  es.onerror = function() {
+    // EventSource reconnects automatically — no action needed
+  };
+}
+
+function showExtModifiedNotice() {
+  var el = document.getElementById('ext-modified-notice');
+  el.innerHTML = 'Job modified externally. '
+    + '<button onclick="reloadCurrentJob()" style="margin-left:6px">Reload</button>'
+    + '<button onclick="hideExtModifiedNotice()" style="margin-left:4px">Dismiss</button>';
+  el.style.display = 'block';
+}
+
+function hideExtModifiedNotice() {
+  var el = document.getElementById('ext-modified-notice');
+  el.style.display = 'none';
+  el.innerHTML = '';
+}
+
+function reloadCurrentJob() {
+  hideExtModifiedNotice();
+  if (_activeJob) openJob(_activeJob);
+}
