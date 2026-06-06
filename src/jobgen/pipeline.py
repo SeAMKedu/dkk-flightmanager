@@ -123,7 +123,7 @@ def run_job(
     property_fetch_ts: str | None = None
 
     if parcel_ids is not None or bbox_3067 is not None:
-        _cb(progress_cb, "parcels", "Fetching parcels…", 8)
+        _cb(progress_cb, "parcels", "Fetching parcels…", 10)
         log.info("Fetching parcels …")
         parcels = fetch_parcels(
             parcel_ids=parcel_ids,
@@ -139,7 +139,7 @@ def run_job(
 
     if property_ids is not None:
         property_fetch_ts = datetime.now(timezone.utc).isoformat()
-        _cb(progress_cb, "properties", "Fetching properties…", 15)
+        _cb(progress_cb, "properties", "Fetching properties…", 20)
         log.info("Fetching kiinteistöt …")
         props = fetch_properties(
             property_ids,
@@ -184,13 +184,13 @@ def run_job(
         prelim_bounds[3] + include_buf,
     )
 
-    _cb(progress_cb, "buildings", "Fetching building tiles…", 25)
+    _cb(progress_cb, "buildings", "Fetching building tiles…", 30)
     buildings, b_records = _load_buildings(buildings_bbox, api_key, config.cache, refresh)
 
     if custom_polygon_4326 is not None:
         survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
     else:
-        _cb(progress_cb, "geometry", "Computing survey polygon…", 40)
+        _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
         survey_geom = process_survey(
             input_geoms, buildings, config.home_safety, config.polygon
         )
@@ -201,7 +201,7 @@ def run_job(
     # ------------------------------------------------------------------
     # 5. Elevation tiles (cache) + site DSM
     # ------------------------------------------------------------------
-    _cb(progress_cb, "elevation", "Fetching elevation tiles…", 55)
+    _cb(progress_cb, "elevation", "Fetching elevation tiles…", 60)
     log.info("Fetching DEM tiles …")
     d_fetcher = dem_fetcher(api_key)
     _dem_margin = config.flight.dsm_margin_m
@@ -225,7 +225,7 @@ def run_job(
     # ------------------------------------------------------------------
     # 6. Zone check
     # ------------------------------------------------------------------
-    _cb(progress_cb, "zones", "Checking UAS restriction zones…", 70)
+    _cb(progress_cb, "zones", "Checking UAS restriction zones…", 75)
     drone_cfg = config.active_drone()
     flight_height_m = drone_cfg.height_from_gsd(config.flight.target_gsd_cm)
     # 3× flight height is the "horizontal 3:1 rule" often used for risk assessment.
@@ -247,7 +247,7 @@ def run_job(
     # ------------------------------------------------------------------
     # 7. KMZ — one per piece (split policy) or single
     # ------------------------------------------------------------------
-    _cb(progress_cb, "kmz", "Building KMZ route…", 80)
+    _cb(progress_cb, "kmz", "Building KMZ route…", 85)
     kmz_results = []
     if not dry_run:
         for i, (piece_3067, piece_4326) in enumerate(
@@ -275,7 +275,7 @@ def run_job(
     # ------------------------------------------------------------------
     # 8. Homes KML
     # ------------------------------------------------------------------
-    _cb(progress_cb, "homes", "Writing homes KML…", 90)
+    _cb(progress_cb, "homes", "Writing homes KML…", 93)
     # Filter to buildings within include_buf of the closest point on the survey
     # polygon. include_buf defaults to 2× keep-out buffer so houses just outside
     # the keep-out zone still appear on the RC map.
@@ -443,12 +443,12 @@ def run_preview(
         prelim_bounds[2] + include_buf,
         prelim_bounds[3] + include_buf,
     )
-    _cb(progress_cb, "buildings", "Fetching building tiles…", 35)
+    _cb(progress_cb, "buildings", "Fetching building tiles…", 30)
     buildings, b_records = _load_buildings(buildings_bbox, api_key, config.cache, refresh)
     log.info("Preview: %d building(s)", len(buildings))
 
     # 3. Survey polygon
-    _cb(progress_cb, "geometry", "Computing survey polygon…", 55)
+    _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
     if custom_polygon_4326 is not None:
         log.info("Preview: using custom polygon (bridge/cut applied)")
         survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
@@ -467,7 +467,7 @@ def run_preview(
     dsm_b64: str | None = None
     dsm_bounds: tuple | None = None
     try:
-        _cb(progress_cb, "elevation", "Fetching elevation tiles…", 65)
+        _cb(progress_cb, "elevation", "Fetching elevation tiles…", 60)
         log.info("Preview: fetching DEM tiles for thumbnail …")
         d_fetcher = dem_fetcher(api_key)
         _dem_margin = 150
@@ -482,7 +482,7 @@ def run_preview(
     except Exception as _dsm_exc:
         log.warning("Preview: DSM thumbnail skipped — %s", _dsm_exc)
 
-    _cb(progress_cb, "zones", "Checking UAS restriction zones…", 80)
+    _cb(progress_cb, "zones", "Checking UAS restriction zones…", 75)
     log.info("Preview: checking zones …")
     zone_result = check_zones(
         survey_geom.survey_4326,
