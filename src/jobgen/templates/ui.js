@@ -1755,6 +1755,8 @@ function openMapView(folderFilter) {
   Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
   lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
   editLayers.clearLayers();
+  if (_takeoffMarker) map.removeLayer(_takeoffMarker);
+  _hideVlos();
 
   // Hide editor sidebar, swap legend
   document.getElementById('sb').classList.add('mv-hidden');
