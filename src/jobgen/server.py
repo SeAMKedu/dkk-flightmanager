@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse
 
 import jobgen._server_state as _st
 from jobgen.config import AppConfig
-from jobgen.routers import execution, management
+from jobgen.routers import execution, management, settings
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _ui_html_cache: str | None = None
@@ -37,8 +37,9 @@ def _load_ui() -> str:
     return _ui_html_cache
 
 
-def create_app(config: AppConfig) -> FastAPI:
+def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     _st.config = config
+    _st.config_path = config_path
 
     app = FastAPI(title="dkk-jobmaker", docs_url=None, redoc_url=None)
 
@@ -80,5 +81,6 @@ def create_app(config: AppConfig) -> FastAPI:
 
     app.include_router(execution.router)
     app.include_router(management.router)
+    app.include_router(settings.router)
 
     return app

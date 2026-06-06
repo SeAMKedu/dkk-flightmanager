@@ -46,6 +46,9 @@ a3_additional_kohdeluokka = [42220, 42221, 42222, 42230, 42231, 42232, 42240, 42
 # CLI: --no-keepout
 offset_enabled = true         # subtract keep-out from survey polygon
 max_area_loss_pct = 30        # flag needs_review if more than this % lost to keep-out
+# VLOS range (m) shown as two concentric dashed circles around the takeoff marker in the UI.
+# Purely informational — does not affect flight planning.
+vlos_range_m = 300
 # Distance (m) from the survey polygon boundary used to decide which buildings
 # appear in the homes KML (measured to the nearest point on the boundary).
 # Omit or set to a large value to include all nearby buildings.
@@ -101,6 +104,8 @@ cache_dir = "cache"
 tile_size_m = 1000            # grid tile side length in EPSG:3067 metres
 dem_ttl_days = 365            # korkeusmalli_2m: near-static, long TTL
 buildings_ttl_days = 180      # maastotietokanta: slower-changing, shorter TTL
+parcels_ttl_days = 400        # Ruokavirasto parcel geometries
+properties_ttl_days = 400     # MML kiinteistö geometries
 offline = false               # true = cache-only; fail cleanly on cache miss
 
 [output]
@@ -119,6 +124,9 @@ output_dir = "output"
 # The source is a periodic static dump of permanent zones — 7–30 days is fine.
 # Temporary restrictions (NOTAMs) are not in this dataset; check those manually.
 max_age_days = 14
+# Expand the survey polygon by this many metres before the zone intersection check
+# so that zones nearby — but not overlapping — are also flagged for awareness.
+check_buffer_m = 500
 
 [parcels]
 # Year of the Ruokavirasto LPIS layer to query (inspire:LC.LandCoverSurfaces.LPIS.<year>).
@@ -126,6 +134,11 @@ max_age_days = 14
 # Override here if you need a specific year.
 # lpis_year = 2025
 page_size = 1000    # WFS page size; GeoServer cap is 1000
+timeout_s = 60
+
+[properties]
+# MML kiinteistö (PalstanSijaintitiedot) OGC API Features — uses the same MML_API_KEY.
+page_size = 100     # OGC API page size (limit= parameter)
 timeout_s = 60
 
 # ---------------------------------------------------------------------------

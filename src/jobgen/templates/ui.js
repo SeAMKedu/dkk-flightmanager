@@ -2968,3 +2968,339 @@ function _measSvgLabel(parent, x, y, text, angleDeg) {
 _initMeasSvg();
 _initMeasEvents();
 init();
+
+// ── Settings panel ────────────────────────────────────────────────────────────
+
+var _cfgSections   = [];   // [{id, label, fields:[{key,label,desc,type,unit,value,...}]}]
+var _cfgValues     = {};   // key → current (possibly edited) value
+var _cfgOrigValues = {};   // key → value as loaded from server
+var _cfgActiveSid  = null; // active section id
+var _cfgSearchQ    = '';   // current search query
+
+async function openSettings() {
+  var overlay = document.getElementById('cfg-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('cfg-search').value = '';
+  _cfgSearchQ = '';
+  try {
+    var resp = await fetch('/api/settings');
+    var data = await resp.json();
+    _cfgSections   = data.sections;
+    _cfgValues     = {};
+    _cfgOrigValues = {};
+    for (var s of _cfgSections) {
+      for (var f of s.fields) {
+        _cfgValues[f.key]     = f.value;
+        _cfgOrigValues[f.key] = f.value;
+      }
+    }
+    _cfgRenderNav();
+    _cfgActivate(_cfgSections[0]?.id);
+  } catch(e) {
+    _cfgStatus('Failed to load settings: ' + e.message, 'err');
+  }
+}
+
+function closeSettings() {
+  if (_cfgIsDirty() && !confirm('Discard unsaved changes?')) return;
+  _cfgClose();
+}
+
+function discardSettings() { closeSettings(); }
+
+function _cfgClose() {
+  document.getElementById('cfg-overlay').style.display = 'none';
+  _cfgValues = {}; _cfgOrigValues = {}; _cfgSections = [];
+}
+
+function _cfgIsDirty() {
+  for (var key of Object.keys(_cfgValues)) {
+    if (!_cfgValEq(_cfgValues[key], _cfgOrigValues[key])) return true;
+  }
+  return false;
+}
+
+function _cfgValEq(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return String(a) === String(b);
+}
+
+function _cfgSectionDirty(section) {
+  return section.fields.some(function(f) {
+    return !_cfgValEq(_cfgValues[f.key], _cfgOrigValues[f.key]);
+  });
+}
+
+// ── Nav ───────────────────────────────────────────────────────────────────────
+
+function _cfgRenderNav() {
+  var nav = document.getElementById('cfg-nav');
+  nav.innerHTML = '';
+  for (var s of _cfgSections) {
+    (function(section) {
+      var btn = document.createElement('button');
+      btn.className = 'cfg-nav-item';
+      btn.dataset.sid = section.id;
+      var lbl = document.createElement('span');
+      lbl.textContent = section.label;
+      var dot = document.createElement('span');
+      dot.className = 'cfg-nav-dot';
+      btn.appendChild(lbl);
+      btn.appendChild(dot);
+      btn.onclick = function() { _cfgActivate(section.id); };
+      nav.appendChild(btn);
+    })(s);
+  }
+}
+
+function _cfgUpdateNavDots() {
+  for (var s of _cfgSections) {
+    var btn = document.querySelector('.cfg-nav-item[data-sid="' + s.id + '"]');
+    if (btn) btn.classList.toggle('dirty', _cfgSectionDirty(s));
+  }
+}
+
+function _cfgActivate(sid) {
+  _cfgActiveSid = sid;
+  document.querySelectorAll('.cfg-nav-item').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.sid === sid);
+  });
+  var section = _cfgSections.find(function(s) { return s.id === sid; });
+  if (!section) return;
+
+  if (_cfgSearchQ) {
+    _cfgRenderSearch(_cfgSearchQ);
+    return;
+  }
+
+  document.getElementById('cfg-section-title').textContent = section.label;
+  var container = document.getElementById('cfg-fields');
+  container.innerHTML = '';
+  var visible = section.fields.filter(function(f) { return !f._hidden; });
+  for (var field of visible) {
+    container.appendChild(_cfgFieldEl(field));
+  }
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+function cfgSearch(q) {
+  _cfgSearchQ = q.trim().toLowerCase();
+  if (!_cfgSearchQ) {
+    // Restore normal section view
+    _cfgActivate(_cfgActiveSid);
+    document.querySelectorAll('.cfg-nav-item').forEach(function(b) { b.style.display = ''; });
+    return;
+  }
+
+  // Filter nav items by whether their section has any matching field
+  var matchingSids = new Set();
+  for (var s of _cfgSections) {
+    if (s.fields.some(function(f) { return _cfgFieldMatches(f, _cfgSearchQ); })) {
+      matchingSids.add(s.id);
+    }
+  }
+  document.querySelectorAll('.cfg-nav-item').forEach(function(b) {
+    b.style.display = matchingSids.has(b.dataset.sid) ? '' : 'none';
+  });
+
+  _cfgRenderSearch(_cfgSearchQ);
+}
+
+function _cfgFieldMatches(field, q) {
+  return (field.label + ' ' + field.description + ' ' + field.key).toLowerCase().includes(q);
+}
+
+function _cfgRenderSearch(q) {
+  document.getElementById('cfg-section-title').textContent = 'Search results';
+  var container = document.getElementById('cfg-fields');
+  container.innerHTML = '';
+  var found = false;
+  for (var s of _cfgSections) {
+    var matches = s.fields.filter(function(f) { return _cfgFieldMatches(f, q); });
+    if (!matches.length) continue;
+    found = true;
+    var hdr = document.createElement('div');
+    hdr.className = 'cfg-search-section-hdr';
+    hdr.textContent = s.label;
+    container.appendChild(hdr);
+    for (var field of matches) {
+      container.appendChild(_cfgFieldEl(field));
+    }
+  }
+  if (!found) {
+    var msg = document.createElement('div');
+    msg.className = 'cfg-no-results';
+    msg.textContent = 'No settings match "' + q + '"';
+    container.appendChild(msg);
+  }
+}
+
+// ── Field rendering ───────────────────────────────────────────────────────────
+
+function _cfgFieldEl(field) {
+  var wrap = document.createElement('div');
+  wrap.className = 'cfg-field';
+
+  // Label + unit
+  var labelRow = document.createElement('div');
+  labelRow.className = 'cfg-field-label';
+  var lbl = document.createElement('span');
+  lbl.textContent = field.label;
+  labelRow.appendChild(lbl);
+  if (field.unit) {
+    var unit = document.createElement('span');
+    unit.className = 'cfg-field-unit';
+    unit.textContent = field.unit;
+    labelRow.appendChild(unit);
+  }
+  wrap.appendChild(labelRow);
+
+  // Description
+  if (field.description) {
+    var desc = document.createElement('div');
+    desc.className = 'cfg-field-desc';
+    desc.textContent = field.description;
+    wrap.appendChild(desc);
+  }
+
+  // Input row
+  var row = document.createElement('div');
+  row.className = 'cfg-field-row';
+
+  var currentVal = _cfgValues[field.key];
+  var input = _cfgMakeInput(field, currentVal);
+  row.appendChild(input);
+
+  // Nullable clear button
+  if (field.nullable && currentVal !== null) {
+    var clrBtn = document.createElement('button');
+    clrBtn.className = 'cfg-nullable-clear';
+    clrBtn.textContent = 'Use default';
+    clrBtn.onclick = function() {
+      _cfgValues[field.key] = null;
+      input.value = '';
+      input.placeholder = 'default';
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    };
+    row.appendChild(clrBtn);
+  }
+
+  wrap.appendChild(row);
+  return wrap;
+}
+
+function _cfgMakeInput(field, currentVal) {
+  var input;
+  if (field.type === 'boolean') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'cfg-input cfg-input-bool';
+    input.checked = currentVal === true;
+    input.addEventListener('change', function() {
+      _cfgValues[field.key] = input.checked;
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    });
+  } else if (field.type === 'enum') {
+    input = document.createElement('select');
+    input.className = 'cfg-input';
+    for (var opt of (field.options || [])) {
+      var o = document.createElement('option');
+      o.value = opt;
+      o.textContent = (field.option_labels && field.option_labels[opt]) ? field.option_labels[opt] + ' (' + opt + ')' : opt;
+      if (opt === currentVal) o.selected = true;
+      input.appendChild(o);
+    }
+    input.addEventListener('change', function() {
+      _cfgValues[field.key] = input.value;
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    });
+  } else if (field.type === 'number' || field.type === 'integer') {
+    input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'cfg-input';
+    input.value = currentVal !== null && currentVal !== undefined ? currentVal : '';
+    if (field.min !== undefined) input.min = field.min;
+    if (field.max !== undefined) input.max = field.max;
+    input.step = field.step !== undefined ? field.step : 1;
+    if (field.nullable) input.placeholder = 'default';
+    input.addEventListener('input', function() {
+      var v = input.value === '' && field.nullable ? null
+        : field.type === 'integer' ? parseInt(input.value, 10)
+        : parseFloat(input.value);
+      _cfgValues[field.key] = v;
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    });
+  } else {
+    input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cfg-input';
+    input.value = currentVal !== null && currentVal !== undefined ? currentVal : '';
+    if (field.nullable) input.placeholder = 'default';
+    input.addEventListener('input', function() {
+      _cfgValues[field.key] = input.value === '' && field.nullable ? null : input.value;
+      _cfgMarkModified(input, field.key);
+      _cfgUpdateNavDots();
+    });
+  }
+  return input;
+}
+
+function _cfgMarkModified(input, key) {
+  var isModified = !_cfgValEq(_cfgValues[key], _cfgOrigValues[key]);
+  if (input.type === 'checkbox') return;  // checkbox color doesn't apply
+  input.classList.toggle('cfg-modified', isModified);
+}
+
+// ── Save / Reset ──────────────────────────────────────────────────────────────
+
+async function saveSettings() {
+  var changes = {};
+  for (var key of Object.keys(_cfgValues)) {
+    if (!_cfgValEq(_cfgValues[key], _cfgOrigValues[key])) {
+      changes[key] = _cfgValues[key];
+    }
+  }
+  if (!Object.keys(changes).length) {
+    _cfgStatus('No changes to save.', 'ok');
+    return;
+  }
+
+  var btn = document.getElementById('cfg-save-btn');
+  btn.disabled = true;
+  try {
+    var resp = await fetch('/api/settings', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(changes),
+    });
+    var data = await resp.json();
+    if (!resp.ok) {
+      _cfgStatus('Save failed: ' + (data.detail || resp.status), 'err');
+      return;
+    }
+    // Commit originals and clear modified styles
+    _cfgOrigValues = Object.assign({}, _cfgValues);
+    document.querySelectorAll('.cfg-input.cfg-modified').forEach(function(el) {
+      el.classList.remove('cfg-modified');
+    });
+    _cfgUpdateNavDots();
+    _cfgStatus('Settings saved. Some changes (output dir, cache TTLs) take effect immediately; drone/flight defaults apply to new jobs.', 'ok');
+  } catch(e) {
+    _cfgStatus('Network error: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function _cfgStatus(msg, kind) {
+  var el = document.getElementById('cfg-status-msg');
+  el.textContent = msg;
+  el.className = kind || '';
+  if (msg) setTimeout(function() { if (el.textContent === msg) el.textContent = ''; }, 5000);
+}

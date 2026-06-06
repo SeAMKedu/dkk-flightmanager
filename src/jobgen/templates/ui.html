@@ -11,6 +11,7 @@
 <body>
 <div id="hdr">
   <h1>dkk-jobmaker</h1>
+  <button id="cfg-open-btn" onclick="openSettings()" title="Settings">&#9881;</button>
 </div>
 <div id="main">
   <div id="jp">
@@ -265,6 +266,26 @@
       <input type="text" id="folder-name-input" placeholder="e.g. spring-2026" autocomplete="off">
       <button id="folder-submit" onclick="submitFolder()">Create folder</button>
     </div>
+  </div>
+</div>
+
+<div id="cfg-overlay">
+  <div id="cfg-overlay-hdr">
+    <span id="cfg-overlay-title">Settings</span>
+    <input type="text" id="cfg-search" placeholder="Search settings&#8230;" oninput="cfgSearch(this.value)">
+    <button id="cfg-close-btn" onclick="closeSettings()" title="Close">&#10005;</button>
+  </div>
+  <div id="cfg-body-wrap">
+    <nav id="cfg-nav"></nav>
+    <div id="cfg-main">
+      <div id="cfg-section-title"></div>
+      <div id="cfg-fields"></div>
+    </div>
+  </div>
+  <div id="cfg-footer">
+    <span id="cfg-status-msg"></span>
+    <button id="cfg-discard-btn" onclick="discardSettings()">Discard</button>
+    <button id="cfg-save-btn" onclick="saveSettings()">Save</button>
   </div>
 </div>
 

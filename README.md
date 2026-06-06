@@ -57,6 +57,8 @@ cp config.example.toml config.toml   # edit flight params and buffer distances
 cp .env.example .env                  # add your MML API key (see below)
 ```
 
+Most flight and polygon settings can also be changed via the **⚙ Settings** panel in the browser UI (see below). Those changes are written directly back to `config.toml` — no manual file editing required.
+
 ### 4 — Add your MML API key
 
 Open `.env` in a text editor and set your key:
@@ -101,6 +103,7 @@ The single-page Leaflet map interface lets you:
 - **Map base layer** — a layer switcher in the top-left corner (next to the zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires a valid `MML_API_KEY` in `.env` and is served directly from MML's WMTS; browser HTTP cache handles tile caching automatically.
 - **Measure distances** — hold **Ctrl** and right-click-drag anywhere on the map to draw a dimensioning line: perpendicular end-cap ticks mark both endpoints and the measured distance appears as a label aligned to the line. Hold **Ctrl+Shift** while dragging to draw a radius line and circle instead — useful for checking separation or coverage radius. Both modes work in job-editor and map-view mode. Measurements persist until you click the **✕** button in the top-left map controls (below the layer switcher).
 - **Save** — click **Save** to write the full job (KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, thumbnail) to disk. Unsaved changes are tracked; you will be prompted before opening a different job or starting a new one.
+- **Settings** — click the **⚙** gear icon in the top-right of the header bar to open the in-browser config editor. The editor lists all configuration sections (Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties) in a VS Code-style panel: left nav for section switching, right pane with labelled fields, inline descriptions, and type-appropriate inputs (number spinners, checkboxes, dropdowns). Changed fields highlight in amber. A search box filters fields across all sections instantly. Clicking **Save** hot-reloads the change in the running server and writes it directly back to `config.toml` (drone profiles and a few structural fields are intentionally excluded and must be edited in `config.toml` directly). `config.example.toml` is the permanent reference for comments and all field options.
 
 Parcel and property geometries are cached locally (400-day TTL) so repeat previews of the same area do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL).
 
@@ -169,7 +172,7 @@ jobgen run --name pelto-2024 --parcels 5241087453 --simplify 5
 jobgen run --name pelto-2024 --parcels 5241087453 --simplify 0
 ```
 
-The default tolerance and mode are set in `config.toml` under `[polygon]`:
+The defaults are set under `[polygon]` in `config.toml` (or via **⚙ Settings → Polygon** in the browser UI):
 
 ```toml
 simplify_mode = "fixed"           # "fixed" or "auto"
@@ -196,7 +199,7 @@ jobgen run --name pelto-2024 --parcels 5241087453 --offset -5
 
 A negative offset can split the polygon or introduce holes at narrow corners — these are handled automatically by `hole_policy` / `multipart_policy` in the same way as keep-out subtraction results. If the contraction collapses the polygon entirely, the original geometry is preserved and a warning is logged.
 
-Set `survey_offset_m` in `config.toml` under `[polygon]` to apply a default offset to every job.
+Set `survey_offset_m` under `[polygon]` in `config.toml` (or via **⚙ Settings → Polygon**) to apply a default offset to every job.
 
 **Offset and polygon editing (browser UI):** When you enter vertex-drag edit mode, the map shows the offset-applied polygon. Exiting edit mode bakes that shape in — the offset field resets to 0 and the edited geometry becomes the new base. This prevents double-application if you later adjust the offset again. If you want to re-apply an offset after editing, type a new value in the Offset field after exiting edit mode.
 
@@ -214,7 +217,7 @@ When `--no-keepout` is used:
 - Buildings and their distance circles are still shown on the HTML preview map.
 - A prominent red warning is added to the preview panel reminding the operator to verify distances to all buildings manually.
 
-Use this only when you have the landowner's permission to fly close to buildings and have verified the required separation under your operating subcategory. Set `offset_enabled = false` in `config.toml` under `[home_safety]` to make it the default.
+Use this only when you have the landowner's permission to fly close to buildings and have verified the required separation under your operating subcategory. Set `offset_enabled = false` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to make it the default.
 
 ### Drone profiles (`--drone`)
 
@@ -246,7 +249,7 @@ Select a drone for a job:
 jobgen run --name pelto-2024 --parcels 5241087453 --drone m300-p1-24
 ```
 
-Set the default in `config.toml`:
+Set the default in `config.toml` (or via **⚙ Settings → Drone** in the browser UI):
 
 ```toml
 default_drone = "m3m"
@@ -323,7 +326,7 @@ jobgen cache refresh --older-than 30
 5. Edit the polygon if needed (double-click to enter, double-click background to save). Buildings and zones refresh automatically on exit.
 6. Check the white ✕ takeoff/landing marker — the tool suggests a boundary point that minimises your worst-case VLOS distance to the drone. Drag it to a more accessible location if needed (e.g. closer to a road or gate). Use **↺ Reset takeoff position** to go back to the auto suggestion.
 7. Click **Save** when satisfied.
-7. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
+8. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
 
 ### On the RC
 
@@ -342,7 +345,7 @@ jobgen cache refresh --older-than 30
 | **A2** (C2-labelled drone + A2 certificate) | ≥ flight height from people | Derived from `--height` or config |
 | **A3** (no C-label / C3 / C4) | ≥ 150 m from residential/commercial/industrial/recreational areas | 150 m fixed |
 
-The `operating_subcategory` in `config.toml` sets the default; override per-job with `--subcategory`.
+The `operating_subcategory` in `config.toml` (or **⚙ Settings → Safety**) sets the default; override per-job with `--subcategory`.
 
 ### Homes KML inclusion distance (`--homes-distance`)
 
@@ -353,7 +356,7 @@ Buildings are included in `<name>_homes.kml` if their nearest point is within th
 jobgen run --name pelto-2024 --parcels 5241087453 --subcategory A3 --homes-distance 400
 ```
 
-Set `home_include_buffer_m` in `config.toml` under `[home_safety]` to change the default permanently.
+Set `home_include_buffer_m` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to change the default permanently.
 
 ### Map preview yellow circle (`--preview-radius`)
 
@@ -369,7 +372,7 @@ jobgen run --name pelto-2024 --parcels 5241087453 --preview-radius 200
 jobgen run --name pelto-2024 --parcels 5241087453 --height 80 --subcategory A2 --preview-radius 80
 ```
 
-Set `preview_radius_m` in `config.toml` under `[home_safety]` to change the default permanently.
+Set `preview_radius_m` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to change the default permanently.
 
 ## Safety notes
 

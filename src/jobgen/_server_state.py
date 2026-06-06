@@ -19,4 +19,5 @@ job_lock: threading.Lock = threading.Lock()
 active_job_id: str | None = None
 job_queues: dict[str, asyncio.Queue] = {}
 config: "AppConfig | None" = None
+config_path: str | None = None  # absolute path to config.toml; used for override persistence
 last_preview_result: dict | None = None
