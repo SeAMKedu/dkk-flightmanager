@@ -162,8 +162,8 @@ def process_survey(
     log.info("Survey polygon vertex count after simplification: %d", total_vc)
 
     # 11. Reproject to 4326
-    survey_4326 = _reproject(survey)
-    pieces_4326 = [_reproject(p) for p in pieces]
+    survey_4326 = reproject_to_4326(survey)
+    pieces_4326 = [reproject_to_4326(p) for p in pieces]
 
     require_4326(survey_4326)
 
@@ -412,13 +412,6 @@ def reproject_to_4326(geom: BaseGeometry) -> BaseGeometry:
 def reproject_to_3067(geom: BaseGeometry) -> BaseGeometry:
     """Reproject a geometry from EPSG:4326 to EPSG:3067."""
     return transform(_T_4326_3067.transform, geom)
-
-
-# Internal alias kept for use within this module
-_reproject = reproject_to_4326
-
-
-_build_keepout = build_keepout   # backward-compat alias for existing tests
 
 
 def suggest_takeoff_point(polygon_3067: "BaseGeometry") -> tuple[float, float]:
