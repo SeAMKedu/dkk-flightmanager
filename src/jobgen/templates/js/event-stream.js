@@ -31,15 +31,15 @@ function _initEventStream() {
 
 function showExtModifiedNotice() {
   var el = document.getElementById('ext-modified-notice');
-  el.innerHTML = 'Job modified externally. '
-    + '<button onclick="reloadCurrentJob()" style="margin-left:6px">Reload</button>'
-    + '<button onclick="hideExtModifiedNotice()" style="margin-left:4px">Dismiss</button>';
-  el.style.display = 'block';
+  el.innerHTML = '<span style="flex:1">Job modified externally.</span>'
+    + '<button class="ext-mod-btn" onclick="reloadCurrentJob()">Reload</button>'
+    + '<button class="ext-mod-btn" onclick="hideExtModifiedNotice()">✕</button>';
+  el.classList.add('visible');
 }
 
 function hideExtModifiedNotice() {
   var el = document.getElementById('ext-modified-notice');
-  el.style.display = 'none';
+  el.classList.remove('visible');
   el.innerHTML = '';
 }
 

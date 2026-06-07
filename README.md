@@ -131,9 +131,9 @@ Double-click the survey polygon to enter vertex-drag edit mode; double-click the
 
 In edit mode:
 - White squares = vertices; smaller white diamonds = midpoints. Drag a midpoint to add a vertex. Click a vertex to delete it.
-- **Bridge / Cut** — right-click any vertex to start (turns orange), then left-click more vertices:
-  - 3 vertices on the same polygon → **triangle cut** (subtracts from the polygon)
-  - 2 vertices on each of two polygons → **bridge** (joins them with a quadrilateral corridor)
+- **Bridge / Split** — right-click any vertex to start (turns orange), then left-click more vertices:
+  - 2 vertices on the **same polygon** → a split line appears and a **Split job** button shows in the hint bar. Click it to divide the job into two sibling jobs, each containing one half of the polygon with all other parameters (IDs, flight settings, color) copied across.
+  - 2 vertices on each of **two polygons** (4 total) → **bridge** (joins them with a quadrilateral corridor)
   - Press **Esc** or right-click to cancel.
 - Click **↻ Reset polygon** to revert all edits.
 

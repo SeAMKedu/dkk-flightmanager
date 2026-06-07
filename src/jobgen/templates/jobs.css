@@ -48,7 +48,10 @@
 .jcard.selected{border-color:#3b82f6;background:#172035}
 .jcard.selected:hover{background:#172035}
 #stale-notice{display:none;background:#1e293b;border:1px solid #fde68a;border-radius:4px;padding:5px 8px;font-size:10px;color:#fde68a;margin-bottom:6px}
-#ext-modified-notice{display:none;background:#1e293b;border:1px solid #7dd3fc;border-radius:4px;padding:5px 8px;font-size:10px;color:#7dd3fc;margin-bottom:6px}
+#ext-modified-notice{display:none;align-items:center;gap:5px;background:#1e293b;border:1px solid #7dd3fc;border-radius:4px;padding:4px 8px;font-size:10px;color:#7dd3fc;margin-bottom:6px}
+#ext-modified-notice.visible{display:flex}
+.ext-mod-btn{width:auto;background:transparent;border:1px solid #7dd3fc;color:#7dd3fc;border-radius:3px;padding:1px 7px;font-size:10px;font-weight:600;cursor:pointer;flex-shrink:0}
+.ext-mod-btn:hover{background:#1e40af;border-color:#93c5fd;color:#fff}
 .jname-row{display:flex;align-items:center;justify-content:space-between;margin-top:6px;margin-bottom:2px}
 .jname-row label{margin:0}
 .color-pick-wrap{display:flex;align-items:center;gap:4px}

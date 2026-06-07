@@ -82,6 +82,11 @@ class PolygonOpRequest(BaseModel):
     points: list    # 3 or 4 [lng, lat] coordinates
 
 
+class SplitRequest(BaseModel):
+    polygon_a: dict  # GeoJSON for the modified existing job
+    polygon_b: dict  # GeoJSON for the new sibling job
+
+
 class MergeRequest(BaseModel):
     job_paths: list[str]
     new_name: str
@@ -346,6 +351,61 @@ async def clone_job(path: str):
 
     clone_path = f"{folder}/{clone_name}" if folder else clone_name
     return {"path": clone_path, "name": clone_name, "folder": folder}
+
+
+@router.post("/api/jobs/{path:path}/split")
+async def split_job(path: str, req: SplitRequest):
+    """Split a job into two sibling jobs.
+
+    Updates the existing job's polygon to ``polygon_a`` and creates a new
+    sibling job with ``polygon_b``, copying all other params (IDs, flight,
+    polygon settings, color).  Returns ``{modified_path, new_path, new_name}``.
+    """
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+
+    params_path = job_dir / "job_params.json"
+    if not params_path.exists():
+        raise HTTPException(404, detail=f"Job '{path}' has no job_params.json")
+    try:
+        params = json.loads(params_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+
+    # Derive a unique name for the new job
+    parent_dir = job_dir.parent
+    base_name = f"{name}-split"
+    new_name = base_name
+    counter = 2
+    while (parent_dir / new_name).exists():
+        new_name = f"{base_name}-{counter}"
+        counter += 1
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Update existing job in place (polygon_a)
+    params["custom_polygon_4326"] = req.polygon_a
+    params["last_preview_geojson"] = None
+    params["saved_at"] = now
+    params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Create new sibling job (polygon_b, copy all other params)
+    new_params = dict(params)
+    new_params["job_name"] = new_name
+    new_params["custom_polygon_4326"] = req.polygon_b
+    new_params["last_preview_geojson"] = None
+    new_params["saved_at"] = now
+
+    new_dir = parent_dir / new_name
+    new_dir.mkdir(parents=True, exist_ok=True)
+    (new_dir / "job_params.json").write_text(
+        json.dumps(new_params, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    new_path = f"{folder}/{new_name}" if folder else new_name
+    return {"modified_path": path, "new_path": new_path, "new_name": new_name}
 
 
 @router.post("/api/jobs/{path:path}/move")

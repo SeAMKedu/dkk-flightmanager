@@ -123,6 +123,12 @@ function _attachEditListeners() {
   _editKHandler = function(e) {
     // Left-click in bridge mode: pick a vertex.
     if (!_bridgeMode || e.button !== 0) return;
+    // In split-ready state, only the hint bar buttons are allowed through.
+    if (_splitReady) {
+      if (!e.target.classList.contains('bridge-split-btn') && !e.target.classList.contains('bridge-cancel-x'))
+        e.stopPropagation();
+      return;
+    }
     e.stopPropagation();
     var latlng = map.mouseEventToLatLng(e);
     var v = _nearestVertex(latlng, 28);

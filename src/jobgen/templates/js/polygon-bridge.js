@@ -1,11 +1,13 @@
-// ── Bridge / Cut mode ─────────────────────────────────────────────────────────
-// Right-click a vertex to enter bridge mode.  Pick vertices to cut a triangle
-// (3 picks on same polygon) or bridge two polygons (4 picks, 2 polygons).
+// ── Bridge / Split mode ────────────────────────────────────────────────────────
+// Right-click a vertex to enter bridge/split mode.
+// 2 picks on same polygon → split line preview + "Split job" button in hint bar.
+// 4 picks across 2 polygons → bridge (quad union).
 
 var _bridgePts = [];        // [{coord:[lng,lat], polyIdx}]
 var _bridgeVerts = [];      // all vertices of current survey geometry
 var _bridgeGroup = null;
 var _bridgeStyledEls = [];  // Leaflet.draw handle elements coloured during picking
+var _splitReady = false;    // true when 2 pts on same polygon are picked → show Split button
 
 function _currentSurveyGeom() {
   return editedPoly || (previewData && previewData.survey) || null;
@@ -82,13 +84,17 @@ function _enterBridgeModeWithVertex(v) {
   _checkAndCommit();
 }
 
-// After each pick: auto-commit when selection is complete.
+// After each pick: auto-commit bridge (4 pts) or enter split-ready (2 pts same poly).
 function _checkAndCommit() {
-  _updateBridgePreview();
   var unique = _bridgePts.map(function(p){return p.polyIdx;})
                          .filter(function(v,i,a){return a.indexOf(v)===i;});
-  if (_bridgePts.length === 3 && unique.length === 1) _commitBridge();
-  else if (_bridgePts.length === 4) _commitBridge();
+  if (_bridgePts.length === 2 && unique.length === 1) {
+    _splitReady = true;
+  } else {
+    _splitReady = false;
+    if (_bridgePts.length === 4) { _updateBridgePreview(); _commitBridge(); return; }
+  }
+  _updateBridgePreview();
 }
 
 function enterBridgeMode() {
@@ -140,6 +146,7 @@ function _restoreBridgeVertices() {
 function exitBridgeMode() {
   if (!_bridgeMode) return;
   _bridgeMode = false;
+  _splitReady = false;
   _bridgePts = [];
   _bridgeVerts = [];
   if (_bridgeGroup) { map.removeLayer(_bridgeGroup); _bridgeGroup = null; }
@@ -149,6 +156,7 @@ function exitBridgeMode() {
   hint.style.display = 'none';
   hint.style.background = '#1e293b';
   hint.style.color = '';
+  hint.classList.remove('split-ready');
   map.getContainer().style.cursor = '';
 }
 
@@ -169,23 +177,29 @@ function _updateBridgePreview() {
     if (willClose) lls.push(lls[0]);
     L.polyline(lls, {color:'#f97316', weight:2, dashArray:'5 4', interactive:false}).addTo(_bridgeGroup);
   }
+  var hint = document.getElementById('bridge-hint');
+  hint.style.display = 'block';
+  if (_splitReady) {
+    hint.classList.add('split-ready');
+    hint.innerHTML = 'Split here?&nbsp; <button class="bridge-split-btn" onclick="commitSplit()">Split job</button>&nbsp;<span class="bridge-cancel-x" onclick="exitBridgeMode()">&#x2715;</span>';
+    return;
+  }
+  hint.classList.remove('split-ready');
   var n = _bridgePts.length;
   var u = _bridgePts.map(function(p){return p.polyIdx;}).filter(function(v,i,a){return a.indexOf(v)===i;});
   var allSame = u.length <= 1;
-  var hintText = n === 0 ? 'Right-click a vertex to start — Esc to cancel'
-    : n === 1 ? 'Vertex 1 — pick 2 more to cut triangle, or cross to bridge'
-    : n === 2 && allSame  ? 'Vertex 2/3 — pick 1 more to cut triangle, or cross to bridge'
+  var hintText = n === 0 ? 'Right-click a vertex — Esc to cancel'
+    : n === 1 ? 'Pick 2nd vertex on same polygon to split, or cross to bridge'
     : n === 2 && !allSame ? 'Vertex 2/4 — pick 2 more to bridge'
-    : n === 3 && allSame  ? 'Cutting triangle…'
     : n === 3 && !allSame ? 'Vertex 3/4 — pick 1 more to bridge'
     : 'Bridging…';
-  var hint = document.getElementById('bridge-hint');
-  hint.style.display = 'block';
   hint.textContent = hintText;
 }
 
 function _showBridgeError(msg) {
+  _splitReady = false;
   var hint = document.getElementById('bridge-hint');
+  hint.classList.remove('split-ready');
   hint.style.display = 'block';
   hint.style.background = '#dc2626';
   hint.textContent = '✕ ' + msg;
@@ -193,6 +207,7 @@ function _showBridgeError(msg) {
 }
 
 async function _commitBridge() {
+  _splitReady = false;
   var geom = editMode ? _geomFromEditLayers() : _currentSurveyGeom();
   if (!geom) { exitBridgeMode(); return; }
 
@@ -231,6 +246,99 @@ async function _commitBridge() {
     _updateSurveyDisplay(data.geometry);
   } catch(e) {
     exitBridgeMode();
+    _showBridgeError('Network error: ' + e.message);
+  }
+}
+
+// ── Polygon split ─────────────────────────────────────────────────────────────
+
+// Split polygon geom at two boundary vertices, returning [halfA, halfB].
+// halfA keeps any holes and, for MultiPolygon, all other parts.
+// Returns null if the split is degenerate (< 2 vertices on either side).
+function _computeSplitPolygons(geom, coordA, coordB, polyIdx) {
+  var partCoords, otherParts = [];
+  if (geom.type === 'Polygon') {
+    partCoords = geom.coordinates;
+  } else {
+    partCoords = geom.coordinates[polyIdx];
+    for (var i = 0; i < geom.coordinates.length; i++) {
+      if (i !== polyIdx) otherParts.push(geom.coordinates[i]);
+    }
+  }
+  var ring = partCoords[0];
+  var N = ring.length - 1; // unique vertex count (ring is closed: last === first)
+  var iA = -1, iB = -1;
+  for (var i = 0; i < N; i++) {
+    if (ring[i][0] === coordA[0] && ring[i][1] === coordA[1]) iA = i;
+    if (ring[i][0] === coordB[0] && ring[i][1] === coordB[1]) iB = i;
+  }
+  if (iA === -1 || iB === -1 || iA === iB) return null;
+  if (iA > iB) { var t = iA; iA = iB; iB = t; }
+  // Require at least 2 vertices on each side (3-point ring minimum per half)
+  if (iB - iA < 2 || N - (iB - iA) < 2) return null;
+
+  // Half A: ring[iA] → ring[iB] (forward)
+  var r1 = [];
+  for (var i = iA; i <= iB; i++) r1.push(ring[i]);
+  r1.push(ring[iA]);
+
+  // Half B: ring[iB] → ring[N-1] → ring[0] → ring[iA] (wrapping)
+  var r2 = [];
+  for (var i = iB; i < N; i++) r2.push(ring[i]);
+  for (var i = 0; i <= iA; i++) r2.push(ring[i]);
+  r2.push(ring[iB]);
+
+  var holesA = partCoords.slice(1); // interior rings → stay with existing job
+  var coordsA = [r1].concat(holesA);
+  var coordsB = [r2];
+
+  var halfA, halfB;
+  if (geom.type === 'Polygon') {
+    halfA = {type: 'Polygon', coordinates: coordsA};
+    halfB = {type: 'Polygon', coordinates: coordsB};
+  } else {
+    var allPartsA = otherParts.concat([coordsA]);
+    halfA = allPartsA.length === 1
+      ? {type: 'Polygon', coordinates: allPartsA[0]}
+      : {type: 'MultiPolygon', coordinates: allPartsA};
+    halfB = {type: 'Polygon', coordinates: coordsB};
+  }
+  return [halfA, halfB];
+}
+
+async function commitSplit() {
+  if (!_activeJob) { _showBridgeError('Save the job first before splitting'); return; }
+  if (!_splitReady || _bridgePts.length !== 2) return;
+  var geom = editMode ? _geomFromEditLayers() : _currentSurveyGeom();
+  if (!geom) { exitBridgeMode(); return; }
+  var halves = _computeSplitPolygons(geom, _bridgePts[0].coord, _bridgePts[1].coord, _bridgePts[0].polyIdx);
+  if (!halves) {
+    _showBridgeError('Select points that leave at least 2 vertices on each side');
+    return;
+  }
+  exitBridgeMode();
+  if (editMode) {
+    editMode = false;
+    map.doubleClickZoom.enable();
+    editLayers.clearLayers();
+    _detachEditListeners();
+  }
+  try {
+    _ownSavedJob = _activeJob; // suppress ext-modified notice from our own write
+    var r = await fetch(jobApiUrl(_activeJob, '/split'), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({polygon_a: halves[0], polygon_b: halves[1]})
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function(){ return {detail:'Server error'}; });
+      _showBridgeError(err.detail || 'Split failed');
+      return;
+    }
+    _dirty = false;
+    await loadJobsList();
+    openJob(_activeJob);
+  } catch(e) {
     _showBridgeError('Network error: ' + e.message);
   }
 }
