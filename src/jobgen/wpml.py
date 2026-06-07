@@ -15,11 +15,10 @@ Height mode:
   DJI Pilot 2 uses these to apply the DSM on import.
 
 Battery budget:
-  Estimated from polygon area + flight height + overlap using M3E sensor
-  constants (open question 11 values from config).  A job is flagged
-  over_one_battery when estimated flight time exceeds ONE_BATTERY_MINUTES.
-  This is a rough planning hint — actual battery consumption depends on wind,
-  temperature, and take-off/landing overhead not modelled here.
+  Estimated from actual strip intersections inside the survey polygon
+  (route.py).  A job is flagged over_one_battery when estimated flight time
+  exceeds battery_minutes.  Estimate includes takeoff climb and home transit.
+  Actual consumption varies with wind, temperature, and payload.
 """
 
 from __future__ import annotations
@@ -314,50 +313,42 @@ def _estimate_budget(
     cfg: FlightConfig,
     *,
     drone: DroneConfig | None = None,
+    home_3067: tuple[float, float] | None = None,
 ) -> dict:
     """Estimate photo count and flight time for manifest + battery warning.
 
+    Uses actual scanline strip intersections in EPSG:3067 (via route.py).
     Returns dict: photo_count, flight_time_min, over_one_battery.
     """
-    pitch_m  = (drone.pixel_pitch_um  if drone else M3E_PIXEL_PITCH_UM)  * 1e-6
-    focal_m  = (drone.focal_length_mm if drone else M3E_FOCAL_LENGTH_MM) * 1e-3
-    w_px     =  drone.image_width_px  if drone else M3E_IMAGE_WIDTH_PX
-    h_px     =  drone.image_height_px if drone else M3E_IMAGE_HEIGHT_PX
-    bat_min  =  drone.battery_minutes if drone else ONE_BATTERY_MINUTES
-    H        =  drone.height_from_gsd(cfg.target_gsd_cm) if drone else cfg.derived_flight_height_m
+    from jobgen import route as _route
+    from jobgen.geometry import reproject_to_3067
 
-    fp_across = H * (w_px * pitch_m) / focal_m
-    fp_along  = H * (h_px * pitch_m) / focal_m
+    pitch_m = (drone.pixel_pitch_um  if drone else M3E_PIXEL_PITCH_UM)  * 1e-6
+    focal_m = (drone.focal_length_mm if drone else M3E_FOCAL_LENGTH_MM) * 1e-3
+    w_px    =  drone.image_width_px  if drone else M3E_IMAGE_WIDTH_PX
+    h_px    =  drone.image_height_px if drone else M3E_IMAGE_HEIGHT_PX
+    bat_min =  drone.battery_minutes if drone else ONE_BATTERY_MINUTES
+    H       =  drone.height_from_gsd(cfg.target_gsd_cm) if drone else cfg.derived_flight_height_m
 
-    strip_spacing  = fp_across * (1 - cfg.overlap_side_pct  / 100)  # m between strips
-    photo_spacing  = fp_along  * (1 - cfg.overlap_front_pct / 100)  # m between photos
+    strip_m = H * (w_px * pitch_m) / focal_m * (1 - cfg.overlap_side_pct  / 100)
+    photo_m = H * (h_px * pitch_m) / focal_m * (1 - cfg.overlap_front_pct / 100)
 
-    # Convert polygon area from degrees² to m² using a local metre-scale approximation.
-    # survey_4326 is in WGS84; use its area in degrees and scale via a midlat factor.
-    # For Finnish latitudes (~62°), 1° lon ≈ 52 000 m, 1° lat ≈ 111 000 m.
-    mid_lat = (survey_4326.bounds[1] + survey_4326.bounds[3]) / 2
-    m_per_deg_lat = 111_132.0
-    m_per_deg_lon = 111_132.0 * math.cos(math.radians(mid_lat))
-    area_m2 = survey_4326.area * m_per_deg_lon * m_per_deg_lat
-
-    # Bounding box dimensions — over-estimates vs DJI's polygon-exact calculation
-    # but also partially compensates for lead-in/lead-out photos DJI takes beyond
-    # the polygon boundary at each strip end.  Treat as rough planning estimate.
-    bbox = survey_4326.bounds
-    width_m  = (bbox[2] - bbox[0]) * m_per_deg_lon
-    height_m = (bbox[3] - bbox[1]) * m_per_deg_lat
-
-    n_strips = max(1, math.ceil(width_m / strip_spacing))
-    photos_per_strip = max(1, math.ceil(height_m / photo_spacing))
-    photo_count = n_strips * photos_per_strip
-
-    total_dist_m    = n_strips * height_m + (n_strips - 1) * strip_spacing
-    flight_time_s   = total_dist_m / cfg.auto_flight_speed_ms
-    flight_time_min = flight_time_s / 60
+    survey_3067 = reproject_to_3067(survey_4326)
+    angle_deg = _route.compute_auto_angle(survey_3067)
+    result = _route.compute_route(survey_3067, angle_deg, strip_m, photo_m,
+                                  home_3067=home_3067)
+    flight_time_min = _route.estimate_flight_time(
+        result,
+        flight_height_m=H,
+        auto_speed_ms=cfg.auto_flight_speed_ms,
+        transit_speed_ms=cfg.transitional_speed_ms,
+        takeoff_security_height_m=cfg.takeoff_security_height_m,
+        home_3067=home_3067,
+    )
 
     return {
-        "photo_count":     photo_count,
-        "flight_time_min": flight_time_min,
+        "photo_count":      result.photo_count,
+        "flight_time_min":  flight_time_min,
         "over_one_battery": flight_time_min > bat_min,
     }
 

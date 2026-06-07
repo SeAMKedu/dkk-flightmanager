@@ -29,6 +29,11 @@ function redrawRings() {
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────
+
+// Persisted user eye-toggle choices — survives preview refreshes and job switches.
+// Keys are lrKey strings; values are booleans (true = visible).
+var _legendUserVis = {};
+
 (function initLegend() {
   var rows = [
     {btnId:'leg-dsm',      lrKey:'dsm',      rowId:'leg-dsm-row',   startOff:true},
@@ -39,13 +44,15 @@ function redrawRings() {
     {btnId:'leg-ko',       lrKey:'ko',       rowId:'leg-ko-row'},
     {btnId:'leg-bldgs',    lrKey:'bldgs',    rowId:'leg-bldgs-row'},
     {btnId:'leg-zones',    lrKey:'zones',    rowId:'leg-zones-row'},
+    {btnId:'leg-route',    lrKey:'route',    rowId:'leg-route-row'},
   ];
   rows.forEach(function(r) {
     document.getElementById(r.btnId).addEventListener('click', function() {
       var layer = lrs[r.lrKey];
       if (!layer) return;
-      if (this.classList.toggle('off')) { map.removeLayer(layer); }
-      else { layer.addTo(map); }
+      var nowOff = this.classList.toggle('off');
+      if (nowOff) { map.removeLayer(layer); } else { layer.addTo(map); }
+      _legendUserVis[r.lrKey] = !nowOff;
     });
   });
   document.getElementById('legend').classList.add('inactive');

@@ -200,6 +200,11 @@ function _doNewJob() {
   clearError();
   hideExtModifiedNotice();
   document.getElementById('offset').value = 0;
+  document.getElementById('speed-ms').value = '';
+  setRouteAngleSilent(null);
+  _routeAngleAuto = null;
+  _clearRouteLayer();
+  updateRouteStats(null);
   setSimpAuto(true);
   hideStaleNotice();
   document.getElementById('xb').disabled = true;
@@ -240,7 +245,9 @@ function getParams() {
     offset_m: parseFloat(document.getElementById('offset').value) || 0,
     simplify: getSimplify(),
     keepout: document.getElementById('kochk').checked,
-    preview_radius_m: parseFloat(document.getElementById('warn-radius').value) || null
+    preview_radius_m: parseFloat(document.getElementById('warn-radius').value) || null,
+    route_angle_deg: _routeAngleDeg,
+    speed_ms: parseFloat(document.getElementById('speed-ms').value) || null,
   };
 }
 

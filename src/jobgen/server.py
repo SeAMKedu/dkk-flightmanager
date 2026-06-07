@@ -118,6 +118,8 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
                 "label":           d.label,
                 "focal_length_mm": d.focal_length_mm,
                 "pixel_pitch_um":  d.pixel_pitch_um,
+                "image_width_px":  d.image_width_px,
+                "image_height_px": d.image_height_px,
                 "battery_minutes": d.battery_minutes,
             }
             for d in _st.config.drones
@@ -145,6 +147,10 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             "keepout":     _st.config.home_safety.offset_enabled,
             "vlos_range_m": _st.config.home_safety.vlos_range_m,
             "mml_api_key": os.environ.get("MML_API_KEY", ""),
+            "overlap_front_pct": _st.config.flight.overlap_front_pct,
+            "overlap_side_pct":  _st.config.flight.overlap_side_pct,
+            "auto_flight_speed_ms": _st.config.flight.auto_flight_speed_ms,
+            "takeoff_security_height_m": _st.config.flight.takeoff_security_height_m,
         }
 
     app.include_router(execution.router)

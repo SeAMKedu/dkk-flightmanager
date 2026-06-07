@@ -2,6 +2,7 @@
 #legend.mv-hidden{display:none}
 #sp.sp-visible{display:block}
 #sp.mv-hidden{display:none!important}
+
 #mv-actions{display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:600;align-items:center;gap:6px;background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:5px 12px;box-shadow:0 2px 8px rgba(0,0,0,.15);white-space:nowrap}
 #mv-actions.visible{display:flex}
 #mv-sel-count{font-size:11px;font-weight:700;color:#1e293b;margin-right:2px}

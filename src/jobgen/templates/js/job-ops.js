@@ -42,8 +42,20 @@ async function _doOpenJob(path) {
       try {
         renderMap(previewData);
         redrawRings();
-        resetLegend();
+        if (previewData.stats && previewData.stats.route_angle_deg_auto != null) {
+          _routeAngleAuto = previewData.stats.route_angle_deg_auto;
+          _renderAngleControl();
+        }
+        updateRouteOverlay();
+        resetLegend(_legendUserVis);
         renderStatus(previewData.stats);
+        if (previewData.stats) {
+          updateRouteStats({
+            strip_count:     previewData.stats.route_strip_count,
+            photo_count:     previewData.stats.route_photo_count,
+            flight_time_min: previewData.stats.route_flight_time_min,
+          });
+        }
         document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
       } catch(ex) { console.error('[openJob] render error', ex); }
@@ -83,6 +95,8 @@ function _restoreFormFromParams(p) {
       updateGsd();
     }
     if (p.flight.subcategory) setSub(p.flight.subcategory, true);
+    setRouteAngleSilent(p.flight.route_angle_deg != null ? p.flight.route_angle_deg : null);
+    document.getElementById('speed-ms').value = p.flight.speed_ms != null ? p.flight.speed_ms : '';
   }
   if (p.polygon) {
     if (p.polygon.offset_m != null) document.getElementById('offset').value = p.polygon.offset_m;

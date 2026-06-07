@@ -113,17 +113,20 @@ The panel updates live — changes made by the CLI, MCP server, or another tab a
 | Subcategory | A2 / A3 pills |
 | Drone & height | dropdown + number field (live GSD shown) |
 | Warning radius | linked to 3× height by default; click "3:1" to restore the link |
+| Route angle | Auto pill picks the MBR longest-axis bearing; −/+ step buttons (hold for continuous rotation) override it by 1° increments |
+| Survey speed | optional per-job override of the configured default flight speed |
 | Offset | expand (+) or contract (−) the survey polygon in metres |
 | Simplify | Auto pill + −/+ step buttons |
 | Keep-out | toggle to disable building buffer subtraction |
 
 ### Preview
 
-Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all layers are toggleable from the legend.
+Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, DSM elevation overlay, and the flight route overlay — all layers are toggleable from the legend.
 
 - **UAS zones** are clickable: see altitude floor/ceiling and all overlapping zones at a point. Inner concentric zones of an airfield are shown with a dashed border for context. The zones legend layer auto-enables when zones first appear.
 - **Zone altitude cap** — when a zone hit carries an altitude floor, flight height is automatically set to 75 % of that floor and the warning radius re-syncs. An orange warning appears if you raise height above the floor. The cap is advisory; override freely.
 - **Takeoff marker** — a white ✕ on the polygon boundary marks the auto-suggested takeoff/landing point (the boundary point that minimises worst-case VLOS distance). Drag it to a more convenient spot. Click **↺ Reset takeoff position** to revert. Saved with the job.
+- **Route overlay** — amber lines show the planned lawnmower survey strips and all transit legs (inter-strip turns, takeoff-to-start, and return-to-home). The status panel below the map shows strip count, estimated photo count, and estimated total flight time. The route auto-computes on every parameter change; an accurate Python estimate (EPSG:3067 geometry, correct home transit distance) replaces the instant JS approximation 800 ms after input settles. Layer visibility is remembered across parameter changes and job switches. Legend eye toggles are persistent for the session.
 
 ### Polygon editing
 

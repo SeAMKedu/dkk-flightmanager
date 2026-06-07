@@ -17,3 +17,10 @@ var _bridgeMode = false;
 var _dirty = false;
 var _activeJob = null;       // full path (folder/name or name)
 var _activeJobFolder = null; // folder part, null for root
+
+// Route planner state
+var _routeAngleDeg = null;    // null = auto, number = user override
+var _routeAngleAuto = null;   // computed by Python on preview
+var _cfgOverlapFront = 80;    // set from /api/config
+var _cfgOverlapSide  = 70;
+var _cfgDefaultSpeedMs = 8.9;

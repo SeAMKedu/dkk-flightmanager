@@ -83,6 +83,15 @@
       <div class="gsd-row">GSD: <span id="gsdv">—</span> cm/px</div>
       <label>Warning radius (m) <span id="warn-radius-hint" style="font-weight:400;color:#94a3b8;cursor:default" title="3× flight height">3:1</span></label>
       <input type="number" id="warn-radius" min="0" max="2000" step="10" value="180">
+      <label>Route angle (°)</label>
+      <div class="simp-row">
+        <button class="simp-pill active" id="route-auto-btn" onclick="routeAngleAuto()">Auto</button>
+        <button class="simp-step" id="route-minus">&#8722;</button>
+        <span class="simp-val" id="route-angle-val">—</span>
+        <button class="simp-step" id="route-plus">&#43;</button>
+      </div>
+      <label>Survey speed (m/s) <span style="font-weight:400;color:#94a3b8">optional</span></label>
+      <input type="number" id="speed-ms" min="1" max="15" step="0.5" placeholder="default">
     </div>
 
     <div class="sec">
@@ -174,6 +183,11 @@
         <button class="leg-eye" id="leg-zones" title="UAS zones"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><div class="l-swatch" style="background:#f97316;opacity:.4;border:1px solid #ea580c;"></div></div>
         <span>UAS zones</span>
+      </div>
+      <div class="leg-row" id="leg-route-row" style="display:none">
+        <button class="leg-eye" id="leg-route" title="Route strips"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#f59e0b" stroke-width="2"/></svg></div>
+        <span>Route strips</span>
       </div>
       <div class="leg-row" id="leg-takeoff-row" style="display:none">
         <button class="leg-eye" id="leg-takeoff" title="Takeoff / Landing position"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
@@ -342,6 +356,7 @@
 {% include "js/multi-select.js" %}
 {% include "js/bulk-ops.js" %}
 {% include "js/batch-modal.js" %}
+{% include "js/route-planner.js" %}
 {% include "js/measurement.js" %}
 {% include "js/settings-panel.js" %}
 {% include "js/event-stream.js" %}

@@ -34,6 +34,12 @@ async function init() {
     }
     document.getElementById('kochk').checked = cfg.keepout !== false;
     if (cfg.vlos_range_m) _vlosRange = cfg.vlos_range_m;
+    if (cfg.overlap_front_pct) _cfgOverlapFront = cfg.overlap_front_pct;
+    if (cfg.overlap_side_pct)  _cfgOverlapSide  = cfg.overlap_side_pct;
+    if (cfg.auto_flight_speed_ms) {
+      _cfgDefaultSpeedMs = cfg.auto_flight_speed_ms;
+      document.getElementById('speed-ms').placeholder = cfg.auto_flight_speed_ms.toFixed(1) + ' (default)';
+    }
     updateGsd();
     _mmlApiKey = cfg.mml_api_key || '';
     if (_mmlApiKey) _initBaseLayers(_mmlApiKey);

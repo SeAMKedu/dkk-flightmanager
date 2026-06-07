@@ -115,6 +115,8 @@ function onSaveDone(payload) {
   _ownSavedJob = _activeJob;
   _dirty = false;
   if (payload.stats) renderStatus(payload.stats);
+  // renderStatus rebuilds the DOM — restore route stats the pipeline doesn't include
+  if (_lastRouteStats) updateRouteStats(_lastRouteStats);
   setJpOpen(true);
   loadJobsList();
 }

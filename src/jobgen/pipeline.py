@@ -439,6 +439,43 @@ def run_preview(
     except Exception:
         takeoff_point_4326 = None
 
+    # Route estimate: actual strip intersections for flight-time/photo preview.
+    from jobgen import route as _route
+    _home_3067 = None
+    if takeoff_point_4326:
+        from shapely.geometry import Point as _HPt
+        _hp = reproject_to_3067(_HPt(*takeoff_point_4326))
+        _home_3067 = (_hp.x, _hp.y)
+    _drone_cfg = drone_cfg  # already resolved above
+    _H   = flight_height_m
+    _p_m = _drone_cfg.pixel_pitch_um * 1e-6
+    _f_m = _drone_cfg.focal_length_mm * 1e-3
+    _sm  = _H * _drone_cfg.image_width_px  * _p_m / _f_m * (1 - config.flight.overlap_side_pct  / 100)
+    _pm  = _H * _drone_cfg.image_height_px * _p_m / _f_m * (1 - config.flight.overlap_front_pct / 100)
+    try:
+        _angle_auto = _route.compute_auto_angle(survey_geom.survey_3067)
+        _rr = _route.compute_route(survey_geom.survey_3067, _angle_auto, _sm, _pm,
+                                   home_3067=_home_3067)
+        _ft = _route.estimate_flight_time(
+            _rr,
+            flight_height_m=_H,
+            auto_speed_ms=config.flight.auto_flight_speed_ms,
+            transit_speed_ms=config.flight.transitional_speed_ms,
+            takeoff_security_height_m=config.flight.takeoff_security_height_m,
+            home_3067=_home_3067,
+        )
+        _route_stats = {
+            "route_angle_deg_auto": round(_angle_auto, 1),
+            "route_strip_count":    _rr.strip_count,
+            "route_photo_count":    _rr.photo_count,
+            "route_flight_time_min": round(_ft, 1),
+        }
+    except Exception as _re:
+        log.warning("Preview: route estimate failed — %s", _re)
+        _angle_auto = 0.0
+        _route_stats = {"route_angle_deg_auto": None, "route_strip_count": None,
+                        "route_photo_count": None, "route_flight_time_min": None}
+
     result = {
         "survey": dict(mapping(survey_geom.survey_4326)),
         "original_areas": [dict(mapping(reproject_to_4326(p.geometry))) for p in inp.input_geoms],
@@ -467,6 +504,7 @@ def run_preview(
             "home_buffer_m": buf,
             "has_parcels": any(hasattr(g, "parcel_id") for g in inp.input_geoms),
             "has_properties": any(hasattr(g, "property_id") for g in inp.input_geoms),
+            **_route_stats,
         },
     }
     return result

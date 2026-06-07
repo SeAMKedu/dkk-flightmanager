@@ -33,5 +33,10 @@ function renderStatus(s) {
    +'<div class="sbox"><div class="slbl">Lost</div><div class="sval">'+fmt1(s&&s.area_lost_pct)+' '+(s?'%':'')+' </div></div>'
    +'<div class="sbox"><div class="slbl">Zones</div><div class="sval">'+zh+'</div></div>'
    +'</div>'
+   +'<div class="sgrid">'
+   +'<div class="sbox"><div class="slbl">Strips</div><div class="sval" id="rstat-strips">—</div></div>'
+   +'<div class="sbox"><div class="slbl">Photos</div><div class="sval" id="rstat-photos">—</div></div>'
+   +'<div class="sbox"><div class="slbl">Flight time</div><div class="sval" id="rstat-time">—</div></div>'
+   +'</div>'
    +(rh ? '<div class="rlist">'+rh+'</div>' : '');
 }

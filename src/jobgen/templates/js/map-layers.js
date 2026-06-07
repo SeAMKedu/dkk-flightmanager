@@ -2,14 +2,6 @@
 
 function onPreviewDone(payload) {
   console.log('[preview done]', payload.stats);
-  // Capture user's eye-toggle choices before renderMap replaces the layer objects
-  var savedVis = null;
-  if (!document.getElementById('legend').classList.contains('inactive')) {
-    savedVis = {};
-    window._legendRows.forEach(function(r) {
-      savedVis[r.lrKey] = !document.getElementById(r.btnId).classList.contains('off');
-    });
-  }
   previewData = payload;
   _lastPreviewedIds = idsKey();
   clearAreaFocus();
@@ -30,15 +22,34 @@ function onPreviewDone(payload) {
     if (_radiusLinked) setRadiusLinked(true);
   }
   try {
-    if (savedVis && (payload.zone_hits||[]).length && !lrs.zones) savedVis.zones = true;
-    if (savedVis && (payload.original_areas||[]).length && !lrs.areas) savedVis.areas = true;
+    // Auto-enable zones/areas on first appearance (when not yet in user prefs)
+    if ((payload.zone_hits||[]).length && !lrs.zones && !('zones' in _legendUserVis))
+      _legendUserVis.zones = true;
+    if ((payload.original_areas||[]).length && !lrs.areas && !('areas' in _legendUserVis))
+      _legendUserVis.areas = true;
     renderMap(payload);
     redrawRings();
-    resetLegend(savedVis);
+    // Draw route BEFORE resetLegend so lrs.route is populated and visibility
+    // can be applied correctly — route is computed after renderMap clears lrs.
+    if (payload.stats && payload.stats.route_angle_deg_auto != null) {
+      _routeAngleAuto = payload.stats.route_angle_deg_auto;
+      _renderAngleControl();
+    }
+    updateRouteOverlay();
+    // _legendUserVis persists user eye choices across renders and job switches.
+    // Empty on first render → resetLegend applies startOff defaults.
+    resetLegend(_legendUserVis);
     renderStatus(payload.stats);
     if (payload.takeoff_point_4326) {
       _takeoffAuto = payload.takeoff_point_4326;
       if (!_takeoffUserMoved) _renderTakeoffMarker(_takeoffAuto);
+    }
+    if (payload.stats) {
+      updateRouteStats({
+        strip_count:      payload.stats.route_strip_count,
+        photo_count:      payload.stats.route_photo_count,
+        flight_time_min:  payload.stats.route_flight_time_min,
+      });
     }
   } catch(e) {
     console.error('[onPreviewDone]', e);
@@ -65,7 +76,7 @@ function geomToPolys(geom, style) {
 function renderMap(data) {
   exitBridgeMode();
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null};
   editLayers.clearLayers();
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
 
