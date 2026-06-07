@@ -174,6 +174,7 @@ async def start_export(req: ExportRequest):
                 property_ids=req.property_ids or None,
                 progress_cb=cb,
                 custom_polygon_4326=custom_poly,
+                folder=req.folder or None,
             )
             if req.folder:
                 job_dir = Path(output_dir) / req.folder / req.job_name

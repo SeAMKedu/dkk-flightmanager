@@ -116,15 +116,18 @@ async def jobs_geojson(folder: str | None = None):
                 "type": "Feature",
                 "geometry": geom,
                 "properties": {
-                    "path":         card["path"],
-                    "name":         card["name"],
-                    "folder":       card["folder"],
-                    "color":        card["color"],
-                    "untouched":    card["untouched"],
-                    "flight_ready": card.get("flight_ready"),
-                    "needs_review": card.get("needs_review"),
-                    "area_ha":      card.get("area_ha"),
-                    "status":       card.get("status", "ok"),
+                    "path":              card["path"],
+                    "name":              card["name"],
+                    "folder":            card["folder"],
+                    "color":             card["color"],
+                    "untouched":         card["untouched"],
+                    "flight_ready":      card.get("flight_ready"),
+                    "needs_review":      card.get("needs_review"),
+                    "area_ha":           card.get("area_ha"),
+                    "status":            card.get("status", "ok"),
+                    "sort_order":        card.get("sort_order"),
+                    "takeoff_point_4326": card.get("takeoff_point_4326"),
+                    "skipped":           card.get("skipped", False),
                 },
             })
     return {"type": "FeatureCollection", "features": features}
@@ -133,6 +136,58 @@ async def jobs_geojson(folder: str | None = None):
 # ---------------------------------------------------------------------------
 # Single-job CRUD
 # ---------------------------------------------------------------------------
+
+
+@router.post("/api/jobs/reorder")
+async def reorder_jobs(body: dict):
+    """Assign sort_order 0..n-1 to the supplied ordered list of job paths.
+
+    Body: ``{paths: ["folder/a", "folder/b", ...]}``
+    Jobs not in the list have their sort_order cleared (set to null).
+    All paths must belong to the same folder.
+    """
+    paths: list[str] = body.get("paths") or []
+    if not paths:
+        return {"ok": True}
+    output_dir = Path(_st.config.output.output_dir).resolve()
+
+    # Derive folder from the first path; all must match
+    folder0, _, _ = resolve_job_dir(output_dir, paths[0])
+    for p in paths[1:]:
+        f, _, _ = resolve_job_dir(output_dir, p)
+        if f != folder0:
+            raise HTTPException(400, detail="All paths must be in the same folder")
+
+    # Clear sort_order for all sibling jobs, then set new values
+    siblings: list[Path] = []
+    if folder0:
+        parent = output_dir / folder0
+    else:
+        parent = output_dir
+    try:
+        siblings = [d for d in parent.iterdir() if d.is_dir()]
+    except PermissionError:
+        pass
+
+    ordered_set = {p: i for i, p in enumerate(paths)}
+
+    for job_dir in siblings:
+        params_path = job_dir / "job_params.json"
+        if not params_path.exists():
+            continue
+        try:
+            data = json.loads(params_path.read_text(encoding="utf-8"))
+            job_path = f"{folder0}/{job_dir.name}" if folder0 else job_dir.name
+            new_so = ordered_set.get(job_path)  # None if not in list
+            if data.get("sort_order") != new_so:
+                data["sort_order"] = new_so
+                params_path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+        except Exception:
+            pass
+
+    return {"ok": True}
 
 
 @router.get("/api/jobs/{path:path}")
@@ -171,20 +226,25 @@ async def update_job(path: str, body: dict):
     if not job_dir.is_dir():
         raise HTTPException(404, detail=f"Job '{path}' not found")
 
-    # Color update (no rename)
-    if "color" in body and "new_name" not in body:
-        color = body.get("color")
+    # Simple field update (color, sort_order, skipped — no rename)
+    if "new_name" not in body and ("color" in body or "sort_order" in body or "skipped" in body):
         params_path = job_dir / "job_params.json"
         if params_path.exists():
             try:
                 data = json.loads(params_path.read_text(encoding="utf-8"))
-                data["color"] = color
+                if "color" in body:
+                    data["color"] = body["color"]
+                if "sort_order" in body:
+                    so = body["sort_order"]
+                    data["sort_order"] = int(so) if so is not None else None
+                if "skipped" in body:
+                    data["skipped"] = bool(body["skipped"])
                 params_path.write_text(
                     json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
             except Exception as exc:
-                raise HTTPException(500, detail=f"Could not update color: {exc}")
-        return {"path": path, "color": color}
+                raise HTTPException(500, detail=f"Could not update job: {exc}")
+        return {"path": path, "color": body.get("color"), "sort_order": body.get("sort_order"), "skipped": body.get("skipped")}
 
     # Rename
     new_name: str = body.get("new_name", "").strip()

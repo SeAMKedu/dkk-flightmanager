@@ -1024,6 +1024,7 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     if (_bridgeMode) exitBridgeMode();
     else if (editMode) saveEdit();
+    else if (_activeJob && _activeJobFolder && !_mvMode) confirmIfDirty(function(){ openMapView(_activeJobFolder); });
   }
 });
 
@@ -1490,7 +1491,8 @@ function renderJobsList(groups) {
     return;
   }
 
-  if (!_jobsCache.length) {
+  var hasNamedGroups = groups.some(function(g){ return g.name !== null; });
+  if (!_jobsCache.length && !hasNamedGroups) {
     list.innerHTML = '<div style="padding:16px 8px;color:#475569;font-size:11px;text-align:center">No saved jobs yet</div>';
     return;
   }
@@ -1509,12 +1511,14 @@ function buildFolderSection(group) {
   var displayName = isRoot ? (outputDir.split('/').pop() || 'output') : group.name;
   var dataFolder = isRoot ? '' : escHtml(group.name);
 
+  var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
   var hdr = document.createElement('div');
   hdr.className = 'jfolder-hdr';
   hdr.innerHTML = '<span class="jfolder-caret' + (isOpen ? ' open' : '') + '">&#9658;</span>'
     + '<span class="jfolder-name" title="' + escHtml(displayName) + '">' + escHtml(displayName) + '</span>'
     + '<span class="jfolder-count">' + group.jobs.length + '</span>'
     + '<button class="jfolder-sel-all-btn" title="Select all in folder">&#10003;</button>'
+    + (readyJobs.length >= 2 ? '<button class="jfolder-autosort-btn" title="Auto-sort by nearest-neighbor route">&#8635; Route</button>' : '')
     + '<button class="jfolder-map-btn" data-folder="' + dataFolder + '" title="Show jobs on map"'
     + ' onclick="showFolderOnMap(event,' + (isRoot ? 'null' : '\'' + escHtml(group.name) + '\'') + ')">Map</button>';
 
@@ -1532,26 +1536,42 @@ function buildFolderSection(group) {
     chks.forEach(function(chk){ chk.checked = !allSelected; });
   });
 
+  var autoSortBtn = hdr.querySelector('.jfolder-autosort-btn');
+  if (autoSortBtn) {
+    autoSortBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      autoSortFolder(group, folderKey);
+    });
+  }
+
   hdr.addEventListener('click', function(e) {
-    if (e.target.closest('.jfolder-map-btn')) return;
-    if (e.target.closest('.jfolder-sel-all-btn')) return;
+    if (e.target.closest('button')) return;
     isOpen = !isOpen;
     localStorage.setItem(storageKey, isOpen ? 'true' : 'false');
     jobs.classList.toggle('hidden', !isOpen);
     hdr.querySelector('.jfolder-caret').classList.toggle('open', isOpen);
   });
 
-  (group.jobs || []).forEach(function(j){ jobs.appendChild(buildJobCard(j)); });
+  // Drag-and-drop container: handle drop on the jobs container itself (end of list)
+  jobs.addEventListener('dragover', function(e) { e.preventDefault(); });
+  jobs.addEventListener('drop', function(e) {
+    e.preventDefault();
+    if (!_dragPath) return;
+    _finishDrop(group, folderKey, null, 'after');
+  });
+
+  (group.jobs || []).forEach(function(j){ jobs.appendChild(buildJobCard(j, group, folderKey)); });
   container.appendChild(hdr);
   container.appendChild(jobs);
   frag.appendChild(container);
   return frag;
 }
 
-function buildJobCard(j) {
+function buildJobCard(j, group, folderKey) {
   var card = document.createElement('div');
   var isActive = j.path === _activeJob;
   var isSelected = _selectedJobs.has(j.path);
+  var isReady = !!j.takeoff_point_4326;
   card.className = 'jcard'
     + (isActive ? ' active' : '')
     + (j.status === 'failed' ? ' failed' : '')
@@ -1560,20 +1580,37 @@ function buildJobCard(j) {
   var date = j.saved_at || j.run_at || '';
   var dateStr = date ? new Date(date).toLocaleString('fi-FI',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
   var meta = [dateStr, j.area_ha != null ? j.area_ha.toFixed(1)+' ha' : '', j.drone||''].filter(Boolean).join(' · ');
+
+  // Priority badge: show number (1-based) for Tier-1 ready jobs; dot for Tier-2
+  var priorityBadge = '';
+  if (isReady) {
+    var readyJobs = group ? (group.jobs || []).filter(function(x){ return x.takeoff_point_4326; }) : [];
+    var idx = readyJobs.indexOf(j);
+    if (j.sort_order != null) {
+      priorityBadge = '<span class="jbadge priority">' + (idx + 1) + '</span>';
+    } else {
+      priorityBadge = '<span class="jbadge priority" style="opacity:.45">' + (idx + 1) + '</span>';
+    }
+  }
+
   var badge = j.status === 'failed' ? '<span class="jbadge fail">!</span>'
     : j.untouched              ? '<span class="jbadge untouched">new</span>'
     : j.flight_ready === true  ? '<span class="jbadge ok">&#10003;</span>'
     : j.needs_review === true  ? '<span class="jbadge wrn">!</span>'
     : '';
+  var dragHandle = isReady
+    ? '<span class="jcard-drag" title="Drag to reorder">&#8942;&#8942;</span>'
+    : '';
   var thumb = j.thumbnail_svg || '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#1e293b"/><text x="32" y="40" text-anchor="middle" font-size="28" fill="#334155">?</text></svg>';
   card.innerHTML =
     '<label class="jcard-sel" title="Select"><input type="checkbox" class="jcard-chk"' + (isSelected ? ' checked' : '') + '></label>'
+    + dragHandle
     + '<div class="jcard-thumb">' + thumb + '</div>'
     + '<div class="jcard-body">'
     +   '<div class="jcard-name">' + escHtml(j.name) + '</div>'
     +   '<div class="jcard-meta">' + escHtml(meta) + '</div>'
     + '</div>'
-    + '<div class="jcard-right">' + badge
+    + '<div class="jcard-right">' + priorityBadge + badge
     +   '<button class="jcard-menu-btn" title="Actions">&#8942;</button>'
     + '</div>';
 
@@ -1581,7 +1618,6 @@ function buildJobCard(j) {
     toggleCardMenu(e, j);
   });
 
-  // Checkbox toggles selection
   var chk = card.querySelector('.jcard-chk');
   chk.addEventListener('change', function(e) {
     e.stopPropagation();
@@ -1590,10 +1626,51 @@ function buildJobCard(j) {
 
   if (j.status !== 'failed') {
     card.addEventListener('click', function(e) {
-      if (e.target.closest('.jcard-menu-btn') || e.target.closest('.jmenu') || e.target.closest('.jcard-sel')) return;
+      if (e.target.closest('.jcard-menu-btn') || e.target.closest('.jmenu') || e.target.closest('.jcard-sel') || e.target.closest('.jcard-drag')) return;
       openJob(j.path);
     });
   }
+
+  // Drag-and-drop (ready jobs only)
+  if (isReady && group) {
+    card.draggable = true;
+    card.addEventListener('dragstart', function(e) {
+      _dragPath = j.path;
+      _dragFolder = folderKey;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', function() {
+      card.classList.remove('dragging');
+      document.querySelectorAll('.jcard').forEach(function(c){
+        c.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+    });
+    card.addEventListener('dragover', function(e) {
+      if (!_dragPath || _dragFolder !== folderKey) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      var rect = card.getBoundingClientRect();
+      var mid = rect.top + rect.height / 2;
+      document.querySelectorAll('.jcard').forEach(function(c){
+        c.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+      card.classList.add(e.clientY < mid ? 'drag-over-top' : 'drag-over-bottom');
+    });
+    card.addEventListener('dragleave', function() {
+      card.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+    card.addEventListener('drop', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!_dragPath || _dragPath === j.path) return;
+      var rect = card.getBoundingClientRect();
+      var pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+      card.classList.remove('drag-over-top', 'drag-over-bottom');
+      _finishDrop(group, folderKey, j.path, pos);
+    });
+  }
+
   return card;
 }
 
@@ -1697,6 +1774,8 @@ function closeFolderDialog() {
 async function submitFolder() {
   var name = document.getElementById('folder-name-input').value.trim();
   if (!name) return;
+  var errEl = document.getElementById('folder-error');
+  errEl.style.display = 'none';
   var btn = document.getElementById('folder-submit');
   btn.disabled = true;
   try {
@@ -1706,13 +1785,16 @@ async function submitFolder() {
     });
     if (!r.ok) {
       var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(err.detail || 'Could not create folder');
+      errEl.textContent = err.detail || 'Could not create folder';
+      errEl.style.display = 'block';
       return;
     }
     closeFolderDialog();
     await loadJobsList();
-  } catch(e) { showError('Failed: ' + e.message); }
-  finally { btn.disabled = false; }
+  } catch(e) {
+    errEl.textContent = 'Failed: ' + e.message;
+    errEl.style.display = 'block';
+  } finally { btn.disabled = false; }
 }
 
 async function promptNewFolderForJob(j) {
@@ -1735,13 +1817,18 @@ async function promptNewFolderForJob(j) {
 
 // ── Map view (in-place — reuses existing #map, hides #sb) ─────────────────────
 var _mvMode = false;
+var _mvFromEditor = false;   // true only when entering map view directly from the job editor
 var _mvJobGroup = null;      // L.LayerGroup on the main map
 var _mvLayers = [];          // [{path, layer, feature}]
+var _mvHoverPopup = null;    // currently open hover popup
+var _mvHoverTimer = null;    // deferred-close timer
 var _mvSelected = new Set();
 var _mvAllFeatures = [];
 var _mvCurrentFolder = null;
 var _DEFAULT_COLOR = '#3b82f6';
 var _mmlApiKey = '';           // set from /api/config
+var _mvRouteLayer = null;    // L.layerGroup for route polyline + numbered markers
+var _mvRouteVisible = false; // toggled by the Route button; off by default
 
 function showFolderOnMap(e, folderName) {
   e.stopPropagation();
@@ -1751,6 +1838,12 @@ function showFolderOnMap(e, folderName) {
 }
 
 function openMapView(folderFilter) {
+  // Skip fitBounds only when coming directly from the job editor for this folder.
+  // _mvFromEditor is set by openJob and consumed here so map-view toggle cycles
+  // always re-fit to show all jobs.
+  var _skipFit = _mvFromEditor && _activeJobFolder === (folderFilter || null);
+  _mvFromEditor = false;
+
   _mvMode = true;
   _mvCurrentFolder = folderFilter || null;
   if (editMode) saveEdit();
@@ -1775,15 +1868,23 @@ function openMapView(folderFilter) {
   _mvSelected.clear();
   _mvUpdateSelBar();
 
+  // Route starts hidden each time map view opens
+  _mvRouteVisible = false;
+  var routeBtn = document.getElementById('mv-route-btn');
+  if (routeBtn) routeBtn.classList.remove('active');
+
   if (!_mvJobGroup) { _mvJobGroup = L.layerGroup().addTo(map); }
-  _mvLoad(folderFilter);
+  _mvLoad(folderFilter, _skipFit);
 }
 
 function closeMapView() {
   if (!_mvMode) return;
   _mvMode = false;
   _mvCurrentFolder = null;
+  clearTimeout(_mvHoverTimer);
+  if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
   _mvClearLayers();
+  if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
   _mvSelected.forEach(function(path) {
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
     if (card) card.classList.remove('selected');
@@ -1799,17 +1900,88 @@ function closeMapView() {
   map.closePopup();
 }
 
-async function _mvLoad(folderFilter) {
+async function _mvLoad(folderFilter, skipFit) {
   try {
     var r = await fetch('/api/jobs/geojson');
     if (!r.ok) return;
     var fc = await r.json();
     _mvAllFeatures = fc.features || [];
-    _mvApplyFilter(folderFilter);
+    _mvApplyFilter(folderFilter, skipFit);
+    _mvDrawRoute();
   } catch(e) { console.error('[mapview]', e); }
 }
 
-function _mvApplyFilter(folderFilter) {
+function _mvDrawRoute() {
+  if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
+  if (!_mvRouteVisible || !_mvMode) return;
+
+  var features = _mvCurrentFolder
+    ? _mvAllFeatures.filter(function(f){ return f.properties.folder === _mvCurrentFolder; })
+    : _mvAllFeatures;
+
+  // Collect ready jobs (have takeoff_point_4326) and sort by tier key
+  var routable = features.filter(function(f){ return f.properties.takeoff_point_4326 && !f.properties.skipped; });
+  routable.sort(function(a, b) {
+    var pa = a.properties, pb = b.properties;
+    var soA = pa.sort_order, soB = pb.sort_order;
+    if (soA != null && soB != null) return soA - soB;
+    if (soA != null) return -1;
+    if (soB != null) return 1;
+    return 0;
+  });
+
+  if (routable.length < 2) return;
+
+  var latlngs = routable.map(function(f){
+    var tp = f.properties.takeoff_point_4326;
+    return [tp[1], tp[0]];
+  });
+
+  _mvRouteLayer = L.layerGroup().addTo(map);
+
+  // Route polyline
+  L.polyline(latlngs, {
+    color: '#f59e0b',
+    weight: 2,
+    opacity: 0.7,
+    dashArray: '6,4',
+  }).addTo(_mvRouteLayer);
+
+  // Numbered markers at each takeoff
+  routable.forEach(function(f, i) {
+    var tp = f.properties.takeoff_point_4326;
+    var n = i + 1;
+    var icon = L.divIcon({
+      className: '',
+      html: '<div style="background:#f59e0b;color:#000;font-size:10px;font-weight:700;'
+        + 'width:18px;height:18px;border-radius:50%;display:flex;align-items:center;'
+        + 'justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5)">'
+        + n + '</div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+    });
+    L.marker([tp[1], tp[0]], {icon: icon, interactive: false}).addTo(_mvRouteLayer);
+  });
+}
+
+function toggleMvRoute() {
+  _mvRouteVisible = !_mvRouteVisible;
+  var btn = document.getElementById('mv-route-btn');
+  if (btn) btn.classList.toggle('active', _mvRouteVisible);
+  _mvDrawRoute();
+}
+
+async function _mvRefreshRouteData() {
+  try {
+    var r = await fetch('/api/jobs/geojson');
+    if (!r.ok) return;
+    var fc = await r.json();
+    _mvAllFeatures = fc.features || [];
+    _mvDrawRoute();
+  } catch(e) { console.error('[mv-refresh-route]', e); }
+}
+
+function _mvApplyFilter(folderFilter, skipFit) {
   _mvClearLayers();
   var bounds = [];
   var features = folderFilter
@@ -1824,11 +1996,12 @@ function _mvApplyFilter(folderFilter) {
       try { bounds.push(layer.getBounds()); } catch(e) {}
     }
   });
-  if (bounds.length) {
+  if (bounds.length && !skipFit) {
     var combined = bounds[0];
     bounds.forEach(function(b){ combined = combined.extend(b); });
     map.fitBounds(combined, {padding: [40, 40]});
   }
+  _mvDrawRoute();
 }
 
 function _mvClearLayers() {
@@ -1860,14 +2033,17 @@ function _mvMakeLayer(feature) {
       dashArray: dashArray,
     });
 
-    var statusLabel = p.flight_ready === true ? '✓ Ready'
-      : p.needs_review === true ? '⚠ Review'
-      : p.untouched ? 'New' : '—';
-    var areaStr = p.area_ha != null ? ' · ' + p.area_ha.toFixed(1) + ' ha' : '';
-    var ttLabel = escHtml(p.name) + (p.folder ? ' (' + escHtml(p.folder) + ')' : '')
-      + '<br><span style="font-size:10px">' + statusLabel + areaStr + '</span>';
-    layer.bindTooltip(ttLabel, {direction: 'top', opacity: 0.92, sticky: false, className: 'mv-tooltip'});
+    if (p.skipped) { layer.setStyle({opacity: 0.35, fillOpacity: 0.07}); }
 
+    layer.on('mouseover', function(e) {
+      clearTimeout(_mvHoverTimer);
+      _mvOpenHoverPopup(e.latlng, p);
+    });
+    layer.on('mouseout', function() {
+      _mvHoverTimer = setTimeout(function() {
+        if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
+      }, 150);
+    });
     layer.on('click', function(e) {
       L.DomEvent.stopPropagation(e);
       _mvToggleSel(p.path);
@@ -1888,6 +2064,35 @@ function _mvDash(p) {
   return null;
 }
 
+function _mvOpenHoverPopup(latlng, p) {
+  if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
+  var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
+    : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
+    : p.untouched ? '<span style="color:#64748b">New</span>' : '<span>—</span>';
+  var area = p.area_ha != null ? p.area_ha.toFixed(1) + ' ha' : '';
+  var skipLabel = p.skipped ? '⊘ Unskip' : '⊘ Skip';
+  var html = '<div class="mv-tt-inner">'
+    + '<div class="mv-tt-name">' + (p.skipped ? '⊘ ' : '') + escHtml(p.name)
+    + (p.folder ? ' <span class="mv-tt-folder">(' + escHtml(p.folder) + ')</span>' : '') + '</div>'
+    + '<div class="mv-tt-meta">' + statusChip + (area ? ' · ' + area : '') + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
+    + '<div class="mv-tt-actions">'
+    + '<button onclick="mvToggleSkip(\'' + escHtml(p.path) + '\',' + !!p.skipped + ')">' + skipLabel + '</button>'
+    + '<button class="mv-tt-del" onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')">✕ Delete</button>'
+    + '</div></div>';
+  _mvHoverPopup = L.popup({
+    closeButton: false, minWidth: 160, className: 'mv-popup',
+    autoClose: false, closeOnClick: true, offset: [0, -4]
+  }).setLatLng(latlng).setContent(html).openOn(map);
+  setTimeout(function() {
+    var el = _mvHoverPopup && _mvHoverPopup.getElement();
+    if (!el) return;
+    el.addEventListener('mouseenter', function() { clearTimeout(_mvHoverTimer); });
+    el.addEventListener('mouseleave', function() {
+      if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
+    });
+  }, 30);
+}
+
 function _mvShowPopup(latlng, feature, layer) {
   var p = feature.properties;
   var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
@@ -1895,22 +2100,41 @@ function _mvShowPopup(latlng, feature, layer) {
     : p.untouched ? '<span style="color:#64748b">New</span>'
     : '<span style="color:#94a3b8">—</span>';
   var area = p.area_ha != null ? p.area_ha.toFixed(1) + ' ha' : '';
-  var html = '<div style="font-size:12px;line-height:1.7;min-width:160px">'
+  var skipLabel = p.skipped ? '⊘ Unskip' : '⊘ Skip';
+  var html = '<div style="font-size:12px;line-height:1.6;min-width:150px">'
     + '<b style="font-size:13px">' + escHtml(p.name) + '</b><br>'
-    + (p.folder ? '<span style="font-size:10px;color:#64748b">' + escHtml(p.folder) + '</span><br>' : '')
+    + (p.folder ? '<span style="font-size:10px;color:#94a3b8">' + escHtml(p.folder) + '</span><br>' : '')
     + statusChip + (area ? ' &nbsp;' + area : '')
     + '<div style="display:flex;gap:5px;margin-top:8px">'
     + '<button onclick="mvOpenJob(\'' + escHtml(p.path) + '\')" style="flex:1;padding:4px;font-size:11px;background:#3b82f6;color:#fff;border:none;border-radius:3px;cursor:pointer">Open</button>'
-    + '<button onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')" style="flex:1;padding:4px;font-size:11px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer">Delete</button>'
+    + '<button onclick="mvToggleSkip(\'' + escHtml(p.path) + '\',' + !!p.skipped + ')" style="flex:1;padding:4px;font-size:11px;background:#475569;color:#fff;border:none;border-radius:3px;cursor:pointer">' + skipLabel + '</button>'
+    + '<button onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')" style="padding:4px 6px;font-size:11px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer">✕</button>'
     + '</div></div>';
 
-  L.popup({closeButton: true, minWidth: 170}).setLatLng(latlng).setContent(html).openOn(map);
+  L.popup({closeButton: true, minWidth: 170, className: 'mv-popup'}).setLatLng(latlng).setContent(html).openOn(map);
 }
 
 function mvOpenJob(path) {
   map.closePopup();
   closeMapView();
   openJob(path);
+}
+
+async function mvToggleSkip(path, currentSkipped) {
+  try {
+    var r = await fetch(jobApiUrl(path), {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({skipped: !currentSkipped})
+    });
+    if (!r.ok) { showError('Could not update job'); return; }
+    if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
+    var geoR = await fetch('/api/jobs/geojson');
+    if (geoR.ok) {
+      _mvAllFeatures = (await geoR.json()).features || [];
+      _mvApplyFilter(_mvCurrentFolder, true);
+    }
+    loadJobsList();
+  } catch(e) { showError('Failed: ' + e.message); }
 }
 
 async function mvDeleteJob(path, name) {
@@ -2040,7 +2264,7 @@ function jobApiUrl(path, suffix) {
 function openJob(path) {
   if (isRunning) return;
   if (_mvMode) closeMapView();
-  confirmIfDirty(function() { _doOpenJob(path); });
+  confirmIfDirty(function() { _mvFromEditor = true; _doOpenJob(path); });
 }
 async function _doOpenJob(path) {
   try {
@@ -2273,6 +2497,90 @@ document.getElementById('job-color').addEventListener('change', async function()
   } catch(e) { console.warn('[color patch]', e); }
 });
 
+// ── Drag-and-drop reordering ──────────────────────────────────────────────────
+var _dragPath = null;
+var _dragFolder = null;
+
+async function _finishDrop(group, folderKey, targetPath, pos) {
+  var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
+  var paths = readyJobs.map(function(j){ return j.path; });
+
+  if (targetPath) {
+    var fromIdx = paths.indexOf(_dragPath);
+    var toIdx = paths.indexOf(targetPath);
+    if (fromIdx === -1 || toIdx === -1) return;
+    paths.splice(fromIdx, 1);
+    toIdx = paths.indexOf(targetPath);
+    paths.splice(pos === 'before' ? toIdx : toIdx + 1, 0, _dragPath);
+  }
+  // else: dropped on empty space → already at end (no reorder needed if same position)
+
+  _dragPath = null;
+  _dragFolder = null;
+
+  try {
+    await fetch('/api/jobs/reorder', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({paths: paths})
+    });
+    await loadJobsList();
+    if (_mvMode && _mvCurrentFolder === folderKey) await _mvRefreshRouteData();
+  } catch(e) { console.error('[reorder]', e); }
+}
+
+// ── Greedy nearest-neighbor TSP ───────────────────────────────────────────────
+function _haversineDeg(lat1, lng1, lat2, lng2) {
+  var R = 6371000;
+  var dLat = (lat2 - lat1) * Math.PI / 180;
+  var dLng = (lng2 - lng1) * Math.PI / 180;
+  var a = Math.sin(dLat/2)*Math.sin(dLat/2)
+    + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)
+    * Math.sin(dLng/2)*Math.sin(dLng/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function _greedyTSP(pts) {
+  // pts: [{path, lat, lng}] — returns reordered copy
+  if (pts.length <= 1) return pts.slice();
+  var remaining = pts.slice();
+  // Start from northwesternmost (highest lat, then lowest lng)
+  remaining.sort(function(a, b) {
+    return b.lat !== a.lat ? b.lat - a.lat : a.lng - b.lng;
+  });
+  var route = [remaining.shift()];
+  while (remaining.length) {
+    var last = route[route.length - 1];
+    var bestDist = Infinity, bestIdx = 0;
+    for (var i = 0; i < remaining.length; i++) {
+      var d = _haversineDeg(last.lat, last.lng, remaining[i].lat, remaining[i].lng);
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    route.push(remaining.splice(bestIdx, 1)[0]);
+  }
+  return route;
+}
+
+async function autoSortFolder(group, folderKey) {
+  var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
+  if (readyJobs.length < 2) return;
+  var pts = readyJobs.map(function(j){
+    var tp = j.takeoff_point_4326;
+    return {path: j.path, lat: tp[1], lng: tp[0]};
+  });
+  var sorted = _greedyTSP(pts);
+  var paths = sorted.map(function(p){ return p.path; });
+  try {
+    await fetch('/api/jobs/reorder', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({paths: paths})
+    });
+    await loadJobsList();
+    if (_mvMode && _mvCurrentFolder === folderKey) await _mvRefreshRouteData();
+  } catch(e) { console.error('[autosort]', e); }
+}
+
 // ── Multi-select & bulk operations ────────────────────────────────────────────
 var _selectedJobs = new Set();   // Set of job path strings
 var _selectedMeta = new Map();   // path → job card object (for merge/move)
@@ -2472,7 +2780,19 @@ async function _loadSelectedJobs() {
       jobs.push({path: paths[i], params: data.params});
     } catch (e) { /* skip */ }
   }
-  return jobs.length ? {paths, jobs} : null;
+  if (!jobs.length) return null;
+  // Sort by priority tier: explicit sort_order first, then unordered ready, then rest
+  jobs.sort(function(a, b) {
+    var soA = a.params.sort_order, soB = b.params.sort_order;
+    var tpA = a.params.takeoff_point_4326 != null, tpB = b.params.takeoff_point_4326 != null;
+    var tierA = soA != null ? 0 : tpA ? 1 : 2;
+    var tierB = soB != null ? 0 : tpB ? 1 : 2;
+    if (tierA !== tierB) return tierA - tierB;
+    if (soA != null && soB != null) return soA - soB;
+    return 0;
+  });
+  paths = jobs.map(function(j){ return j.path; });
+  return {paths, jobs};
 }
 
 async function exportKml() {

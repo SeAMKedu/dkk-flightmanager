@@ -65,6 +65,7 @@ def run_job(
     refresh: bool = False,
     progress_cb: Callable[[str, str, int], None] | None = None,
     custom_polygon_4326: Any | None = None,
+    folder: str | None = None,
 ) -> dict:
     """Run one mapping job and return the manifest dict.
 
@@ -77,10 +78,11 @@ def run_job(
     Raises on hard errors (missing tiles in offline mode, invalid config, etc.).
     Review flags are recorded in the manifest rather than raising.
     """
-    job_dir = Path(config.output.output_dir) / job_name
+    base = Path(config.output.output_dir)
+    job_dir = base / folder / job_name if folder else base / job_name
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    setup_logging(job_name, config.output.output_dir)
+    setup_logging(job_name, job_dir.parent)
     log.info("=== Job %s starting (dry_run=%s) ===", job_name, dry_run)
 
     _cb(progress_cb, "start", "Starting job…", 0)
@@ -520,8 +522,8 @@ def _synth_survey_geom(poly_4326: Any, offset_m: float) -> SurveyGeometry:
         min_dist_to_home_m=None,
         offset_applied=offset_m != 0.0,
         survey_vertex_count=vc,
-        needs_review=True,
-        review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
+        needs_review=False,
+        review_reasons=[],
     )
 
 

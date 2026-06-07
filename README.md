@@ -91,7 +91,7 @@ The single-page Leaflet map interface is organised around four areas: the **Jobs
 
 ### Jobs panel
 
-The panel lists all saved jobs grouped into folders. Use the header buttons to create a new job (**＋ New Job**), batch-import IDs (**↓ Batch**), or add a folder (**＋ Folder**). A filter input sits below. Click any card to re-open a job — the form and map restore instantly and a fresh preview runs automatically. The three-dot card menu offers **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. Collapse the panel with the `◄` tab.
+The panel lists all saved jobs grouped into folders. Use the header buttons to create a new job (**＋ New Job**), batch-import IDs (**↓ Batch**), or add a folder (**＋ Folder**). If a folder name already exists the dialog stays open and shows an inline error. A filter input sits below. Click any card to re-open a job — the form and map restore instantly and a fresh preview runs automatically. The three-dot card menu offers **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. Collapse the panel with the `◄` tab.
 
 The panel updates live — changes made by the CLI, MCP server, or another tab appear immediately. If the currently open job is modified externally, a blue notice offers **Reload** or **Dismiss**.
 
@@ -99,7 +99,7 @@ The panel updates live — changes made by the CLI, MCP server, or another tab a
 
 **Multi-select:** hover a card to reveal its checkbox. Select two or more to activate the toolbar: **Merge** (union polygons into a new job), **Google Maps** (export KML + open navigation waypoints), **Move**, or **Delete**.
 
-**Map view:** click **Map** on any folder header to see all its job polygons on the map. Dash pattern encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown. Click a polygon for a popup; Ctrl+click to multi-select. Click **Map** again, open a job, or click **＋ New Job** to return to the editor.
+**Map view:** click **Map** on any folder header to see all its job polygons on the map. Dash pattern encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown. Hover a polygon to open a popup with the job name, status, area, and two quick actions: **⊘ Skip** (exclude the job from route ordering and counting) and **Delete**. Skipped jobs render at low opacity. Hover the popup to keep it open; mouse out to dismiss. Click a polygon to select it; double-click to open the job for editing. Ctrl+click to multi-select. Click **Map** again, open a job, or click **＋ New Job** to return to the editor.
 
 ### Defining the survey area
 
