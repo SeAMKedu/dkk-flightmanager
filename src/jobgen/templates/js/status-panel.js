@@ -2,6 +2,7 @@
 var _dash = '<span style="color:#cbd5e1">—</span>';
 
 function renderStatus(s) {
+  document.getElementById('sp').classList.toggle('sp-visible', !!s);
   var sh = !s ? ''
     : s.flight_ready ? '<div class="sh"><span class="sok">&#10003; FLIGHT READY</span></div>'
     : s.needs_review  ? '<div class="sh"><span class="swrn">&#9888; NEEDS REVIEW</span></div>'

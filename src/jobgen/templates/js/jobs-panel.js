@@ -1,6 +1,25 @@
 // ── Jobs panel ────────────────────────────────────────────────────────────────
 
 var _jpOpen = localStorage.getItem('jp-open') !== 'false';
+
+function _jpStickyRefresh() {
+  var list = document.getElementById('jp-list');
+  if (!list) return;
+  var listRect = list.getBoundingClientRect();
+  var offset = 0;
+  list.querySelectorAll(':scope > .jfolder').forEach(function(folder) {
+    var hdr = folder.querySelector(':scope > .jfolder-hdr');
+    if (!hdr) return;
+    hdr.style.top = offset + 'px';
+    var fr = folder.getBoundingClientRect();
+    var top = fr.top - listRect.top;
+    var bottom = fr.bottom - listRect.top;
+    var hdrH = hdr.offsetHeight;
+    // Sticking: folder top has scrolled above offset AND folder hasn't left yet
+    if (top < offset && bottom > offset + hdrH) offset += hdrH;
+  });
+}
+document.getElementById('jp-list').addEventListener('scroll', _jpStickyRefresh);
 var _jobsCache = [];         // flat list of all job cards (for filter search)
 var _jobsGroups = [];        // grouped structure from API
 var _dragPath = null;        // path of card being dragged
@@ -59,6 +78,7 @@ function renderJobsList(groups) {
   }
 
   groups.forEach(function(g) { list.appendChild(buildFolderSection(g)); });
+  _jpStickyRefresh();
 }
 
 function buildFolderSection(group) {

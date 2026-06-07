@@ -356,6 +356,16 @@ function _mvUpdateSelBar() {
     openBtn.style.display = n === 1 ? '' : 'none';
     if (n === 1) openBtn.dataset.path = Array.from(_mvSelected)[0];
   }
+  var totalArea = 0, hasArea = false;
+  _mvSelected.forEach(function(path) {
+    var item = _mvLayers.find(function(i){ return i.path === path; });
+    if (item && item.feature.properties.area_ha != null) {
+      totalArea += item.feature.properties.area_ha;
+      hasArea = true;
+    }
+  });
+  var areaEl = document.getElementById('mv-area-total');
+  if (areaEl) areaEl.textContent = (n > 0 && hasArea) ? '· ' + totalArea.toFixed(1) + ' ha' : '';
 }
 
 function mvMerge() {
