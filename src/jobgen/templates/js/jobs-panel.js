@@ -178,7 +178,7 @@ function buildJobCard(j, group, folderKey) {
     : '';
   var dragHandle = isReady
     ? '<span class="jcard-drag" title="Drag to reorder">&#8942;&#8942;</span>'
-    : '';
+    : '<span class="jcard-drag" style="visibility:hidden" aria-hidden="true">&#8942;&#8942;</span>';
   var thumb = j.thumbnail_svg || '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#1e293b"/><text x="32" y="40" text-anchor="middle" font-size="28" fill="#334155">?</text></svg>';
   card.innerHTML =
     '<label class="jcard-sel" title="Select"><input type="checkbox" class="jcard-chk"' + (isSelected ? ' checked' : '') + '></label>'
