@@ -326,7 +326,10 @@ function _mvToggleSel(path) {
   } else {
     _mvSelected.add(path);
     item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
-    if (card) card.classList.add('selected');
+    if (card) {
+      card.classList.add('selected');
+      if (_mvSelected.size === 1) card.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+    }
   }
   _mvUpdateSelBar();
 }
