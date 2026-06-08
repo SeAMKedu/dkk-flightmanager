@@ -200,6 +200,7 @@ class CacheConfig(BaseModel):
     parcels_ttl_days: int = Field(default=400, gt=0)
     properties_ttl_days: int = Field(default=400, gt=0)
     offline: bool = False
+    max_cache_size_mb: int = Field(default=0, ge=0)
 
 
 class OutputConfig(BaseModel):

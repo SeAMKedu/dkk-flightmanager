@@ -131,9 +131,14 @@ def _init_db(db: Path) -> None:
                 file_path        TEXT NOT NULL,
                 checksum         TEXT NOT NULL,
                 byte_size        INTEGER NOT NULL,
+                last_used        TEXT,
                 PRIMARY KEY (dataset, tile_id)
             )
         """)
+        # Migration: add last_used to existing databases that predate this column.
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(tiles)")}
+        if "last_used" not in existing:
+            conn.execute("ALTER TABLE tiles ADD COLUMN last_used TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS parcels (
                 parcel_id        TEXT NOT NULL,
@@ -158,7 +163,8 @@ def _init_db(db: Path) -> None:
         conn.commit()
 
 
-def _lookup(db: Path, dataset: str, tile_id: str) -> TileRecord | None:
+def _lookup(db: Path, dataset: str, tile_id: str, *, touch: bool = False) -> TileRecord | None:
+    now = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(db) as conn:
         row = conn.execute(
             "SELECT tile_id, dataset, xmin, ymin, xmax, ymax, source_url, "
@@ -166,6 +172,11 @@ def _lookup(db: Path, dataset: str, tile_id: str) -> TileRecord | None:
             "FROM tiles WHERE dataset=? AND tile_id=?",
             (dataset, tile_id),
         ).fetchone()
+        if row is not None and touch:
+            conn.execute(
+                "UPDATE tiles SET last_used=? WHERE dataset=? AND tile_id=?",
+                (now, dataset, tile_id),
+            )
     if row is None:
         return None
     return TileRecord(
@@ -178,18 +189,52 @@ def _lookup(db: Path, dataset: str, tile_id: str) -> TileRecord | None:
 
 
 def _register(db: Path, record: TileRecord) -> None:
+    now = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(db) as conn:
         conn.execute(
             """INSERT OR REPLACE INTO tiles
                (dataset, tile_id, xmin, ymin, xmax, ymax, source_url,
-                fetch_timestamp, dataset_version, file_path, checksum, byte_size)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                fetch_timestamp, dataset_version, file_path, checksum, byte_size, last_used)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (record.dataset, record.tile_id,
              record.bbox[0], record.bbox[1], record.bbox[2], record.bbox[3],
              record.source_url, record.fetch_timestamp, record.dataset_version,
-             str(record.path), record.checksum, record.byte_size),
+             str(record.path), record.checksum, record.byte_size, now),
         )
         conn.commit()
+
+
+def _evict_lru(db: Path, max_bytes: int) -> None:
+    """Delete least-recently-used tiles until total cache size is under max_bytes."""
+    with sqlite3.connect(db) as conn:
+        total = conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()[0] or 0
+        if total <= max_bytes:
+            return
+        # Oldest last_used first; NULL last_used (pre-migration rows) evicted first.
+        candidates = conn.execute(
+            "SELECT dataset, tile_id, file_path, byte_size "
+            "FROM tiles ORDER BY COALESCE(last_used, fetch_timestamp) ASC"
+        ).fetchall()
+
+    evicted = 0
+    for dataset, tile_id, file_path, byte_size in candidates:
+        if total - evicted <= max_bytes:
+            break
+        try:
+            Path(file_path).unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("Could not delete evicted tile %s: %s", file_path, e)
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "DELETE FROM tiles WHERE dataset=? AND tile_id=?", (dataset, tile_id)
+            )
+        evicted += byte_size or 0
+        log.debug("LRU evicted %s/%s (%d bytes)", dataset, tile_id, byte_size or 0)
+
+    if evicted:
+        log.info("LRU eviction freed %d bytes (%d tile(s))", evicted, len([
+            c for c in candidates if c[3] and evicted >= c[3]
+        ]))
 
 
 # ---------------------------------------------------------------------------
@@ -335,10 +380,12 @@ def get_tiles(
                     dataset, tile_id, tile_bbox, fetcher, db, cache_dir
                 )
                 _ns.record_download(dataset, record.byte_size)
+                if config.max_cache_size_mb > 0:
+                    _evict_lru(db, config.max_cache_size_mb * 1024 * 1024)
             else:
                 log.debug("Cache hit: %s tile %s", dataset, tile_id)
                 _ns.record_hit(dataset)
-                record = existing  # type: ignore[assignment]
+                record = _lookup(db, dataset, tile_id, touch=True) or existing  # type: ignore[assignment]
 
         records.append(record)
 
@@ -366,6 +413,16 @@ def tile_provenance(records: list[TileRecord]) -> dict:
 
 # Parcel and property geometry caches live in geo_cache.py.
 # They use the same SQLite file via _db_path/_init_db above.
+
+
+def query_disk_size(cache_dir: str | Path) -> int:
+    """Return total bytes stored in the tile cache, or 0 if the cache is empty."""
+    db = _db_path(Path(cache_dir))
+    if not db.exists():
+        return 0
+    with sqlite3.connect(db) as conn:
+        row = conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()
+    return int(row[0] or 0)
 
 
 def check_tile_exists(cache_config: "CacheConfig", dataset: str, tile_id: str) -> bool:

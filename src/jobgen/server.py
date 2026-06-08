@@ -104,7 +104,7 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
         except asyncio.CancelledError:
             pass
         from jobgen.net_stats import print_summary as _print_net_stats
-        _print_net_stats()
+        _print_net_stats(_st.config.cache.cache_dir)
 
     app = FastAPI(title="dkk-jobmaker", docs_url=None, redoc_url=None, lifespan=lifespan)
 
@@ -136,7 +136,10 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     @app.get("/api/stats")
     async def get_stats():
         from jobgen.net_stats import get as _get_stats
-        return _get_stats()
+        from jobgen.cache import query_disk_size
+        data = _get_stats()
+        data["cache_disk_bytes"] = query_disk_size(_st.config.cache.cache_dir)
+        return data
 
     def _compute_default_speed() -> float:
         """Return the strip speed that will be used for the current config/drone.

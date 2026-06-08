@@ -72,7 +72,7 @@ def _fmt_bytes(n: int) -> str:
     return f"{n / (1024 * 1024):.1f} MB"
 
 
-def print_summary() -> None:
+def print_summary(cache_dir: "str | Path | None" = None) -> None:
     """Print a session statistics table to stdout. No-op if nothing was tracked."""
     s = get()
     total_dl    = sum(v["downloads"] for v in s.values())
@@ -108,6 +108,13 @@ def print_summary() -> None:
     if b_total:
         summary += f",  {b_total} downloaded"
     lines.append(f"  {'Total':12}{summary}")
+
+    if cache_dir is not None:
+        from jobgen.cache import query_disk_size
+        disk_bytes = query_disk_size(cache_dir)
+        if disk_bytes:
+            lines.append(f"  {'Cache on disk':14}{_fmt_bytes(disk_bytes)}")
+
     lines.append("─" * W)
 
     print("\n".join(lines))

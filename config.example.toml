@@ -112,6 +112,7 @@ pylons_ttl_days = 180         # suurjannitelinjanpylvas: HV pylon towers (for ov
 parcels_ttl_days = 400        # Ruokavirasto parcel geometries
 properties_ttl_days = 400     # MML kiinteistö geometries
 offline = false               # true = cache-only; fail cleanly on cache miss
+max_cache_size_mb = 0         # 0 = unlimited; set e.g. 2000 to cap tile cache at ~2 GB (LRU eviction)
 
 [output]
 output_dir = "output"
