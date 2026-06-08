@@ -509,13 +509,18 @@ def _write_job_params(
             if preview_result else None
         ),
     }
-    # Preserve existing color when this request carries none
-    if params["color"] is None and (job_dir / "job_params.json").exists():
+    # Preserve existing color, sort_order, and skipped from prior save
+    if (job_dir / "job_params.json").exists():
         try:
             existing = json.loads(
                 (job_dir / "job_params.json").read_text(encoding="utf-8")
             )
-            params["color"] = existing.get("color")
+            if params["color"] is None:
+                params["color"] = existing.get("color")
+            if "sort_order" in existing:
+                params["sort_order"] = existing["sort_order"]
+            if "skipped" in existing:
+                params["skipped"] = existing["skipped"]
         except Exception:
             pass
 
