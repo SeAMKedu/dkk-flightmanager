@@ -11,7 +11,7 @@ var _mvAllFeatures = [];
 var _mvCurrentFolder = null;
 var _DEFAULT_COLOR = '#3b82f6';
 var _mvRouteLayer = null;    // L.layerGroup for route polyline + numbered markers
-var _mvRouteVisible = false; // toggled by the Route button; off by default
+var _mvRouteVisible = true; // toggled by the Route button; on by default
 
 function showFolderOnMap(e, folderName) {
   e.stopPropagation();
@@ -46,7 +46,7 @@ function openMapView(folderFilter) {
   _mvSelected.clear();
   _mvUpdateSelBar();
 
-  if (!_comingFromEditor) _mvRouteVisible = false;
+  if (!_comingFromEditor) _mvRouteVisible = true;
   var routeBtn = document.getElementById('mv-route-btn');
   if (routeBtn) routeBtn.classList.toggle('active', _mvRouteVisible);
 
