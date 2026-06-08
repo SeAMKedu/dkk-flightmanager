@@ -21,7 +21,8 @@ function showFolderOnMap(e, folderName) {
 }
 
 function openMapView(folderFilter) {
-  var _skipFit = _mvFromEditor && _activeJobFolder === (folderFilter || null);
+  var _comingFromEditor = _mvFromEditor && _activeJobFolder === (folderFilter || null);
+  var _skipFit = _comingFromEditor;
   _mvFromEditor = false;
 
   _mvMode = true;
@@ -45,9 +46,9 @@ function openMapView(folderFilter) {
   _mvSelected.clear();
   _mvUpdateSelBar();
 
-  _mvRouteVisible = false;
+  if (!_comingFromEditor) _mvRouteVisible = false;
   var routeBtn = document.getElementById('mv-route-btn');
-  if (routeBtn) routeBtn.classList.remove('active');
+  if (routeBtn) routeBtn.classList.toggle('active', _mvRouteVisible);
 
   if (!_mvJobGroup) { _mvJobGroup = L.layerGroup().addTo(map); }
   _mvLoad(folderFilter, _skipFit);
