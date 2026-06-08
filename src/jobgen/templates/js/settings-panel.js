@@ -324,6 +324,61 @@ function _cfgStatus(msg, kind) {
 }
 
 // ── About modal ───────────────────────────────────────────────────────────────
+
+var _STAT_LABELS = {
+  dem:        'DEM tiles',
+  buildings:  'Buildings',
+  parcels:    'Parcels',
+  properties: 'Properties',
+  zones:      'UAS zones',
+};
+
+function _fmtBytes(n) {
+  if (!n) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function _renderStats(data) {
+  var el = document.getElementById('about-stats');
+  if (!el) return;
+
+  var totalDl = 0, totalHits = 0, totalBytes = 0;
+  var rows = [];
+  var sources = ['dem', 'buildings', 'parcels', 'properties', 'zones'];
+  for (var src of sources) {
+    var v = data[src] || {downloads: 0, hits: 0, bytes: 0};
+    if (!v.downloads && !v.hits) continue;
+    totalDl    += v.downloads;
+    totalHits  += v.hits;
+    totalBytes += v.bytes || 0;
+    var parts = [];
+    if (v.downloads) {
+      var b = _fmtBytes(v.bytes);
+      parts.push(v.downloads + ' fetched' + (b ? ' (' + b + ')' : ''));
+    }
+    if (v.hits) parts.push(v.hits + ' cached');
+    var total = v.downloads + v.hits;
+    if (total > 1 && v.hits) parts.push(Math.round(100 * v.hits / total) + '% cache rate');
+    rows.push([_STAT_LABELS[src] || src, parts.join(',  ')]);
+  }
+
+  if (!rows.length) { el.innerHTML = ''; return; }
+
+  var b = _fmtBytes(totalBytes);
+  var summary = totalDl + ' fetched,  ' + totalHits + ' cached' + (b ? ',  ' + b : '');
+
+  var html = '<div class="about-stats-title">Session statistics</div>'
+    + '<table class="about-stats-table">';
+  for (var row of rows) {
+    html += '<tr><td>' + row[0] + '</td><td>' + row[1] + '</td></tr>';
+  }
+  html += '<tr class="about-stats-total"><td>Total</td><td>' + summary + '</td></tr>';
+  html += '</table>';
+  el.innerHTML = html;
+}
+
 async function openAbout() {
   var modal = document.getElementById('about-modal');
   modal.style.display = 'flex';
@@ -331,6 +386,11 @@ async function openAbout() {
     var r = await fetch('/api/version');
     var d = await r.json();
     document.getElementById('about-version').textContent = 'v' + d.version;
+  } catch(e) {}
+  try {
+    var rs = await fetch('/api/stats');
+    var ds = await rs.json();
+    _renderStats(ds);
   } catch(e) {}
 }
 

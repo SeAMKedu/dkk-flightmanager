@@ -330,6 +330,9 @@ def run_job_cmd(
         else:
             typer.echo(f"Warning: map file not found at {map_path}", err=True)
 
+    from jobgen.net_stats import print_summary as _print_net_stats
+    _print_net_stats()
+
     if manifest.get("needs_review") or not manifest.get("flight_ready"):
         raise typer.Exit(2)   # non-zero so scripts can detect review-needed
 
@@ -375,6 +378,8 @@ def cache_warm(
     typer.echo(f"  Buildings: {len(bldg_records)} tile(s) cached.")
 
     typer.echo("Cache warm complete.")
+    from jobgen.net_stats import print_summary as _print_net_stats
+    _print_net_stats()
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +712,8 @@ def batch_cmd(
 
     typer.echo()
     typer.echo(f"Created: {ok}  Skipped: {skipped}  Failed: {failed}")
+    from jobgen.net_stats import print_summary as _print_net_stats
+    _print_net_stats()
     if failed:
         raise typer.Exit(1)
 

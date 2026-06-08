@@ -15,7 +15,11 @@ function _initBaseLayers(mmlKey) {
     + '&LAYER=ortokuva&STYLE=default&TILEMATRIXSET=WGS84_Pseudo-Mercator'
     + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg'
     + '&api-key=' + mmlKey;
-  _baseOrto = L.tileLayer(url, {attribution:'&copy; <a href="https://maanmittauslaitos.fi">MML</a>', maxZoom:21});
+  // maxNativeZoom: MML WGS84_Pseudo-Mercator ortokuva tops out at zoom 15;
+  // Leaflet upscales those tiles for zooms 16–19 rather than showing empty tiles.
+  // maxNativeZoom: MML WGS84_Pseudo-Mercator ortokuva tops out at zoom 15;
+  // Leaflet upscales those tiles for higher zooms rather than showing empty tiles.
+  _baseOrto = L.tileLayer(url, {attribution:'&copy; <a href="https://maanmittauslaitos.fi">MML</a>', maxZoom:21, maxNativeZoom:15});
   if (_baseLayerCtrl) map.removeControl(_baseLayerCtrl);
   _baseLayerCtrl = L.control.layers({'Map': _baseOSM, 'Ortho': _baseOrto}, null, {position:'topleft', collapsed:true}).addTo(map);
 }

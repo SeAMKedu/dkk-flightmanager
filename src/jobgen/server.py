@@ -103,6 +103,8 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             await task
         except asyncio.CancelledError:
             pass
+        from jobgen.net_stats import print_summary as _print_net_stats
+        _print_net_stats()
 
     app = FastAPI(title="dkk-jobmaker", docs_url=None, redoc_url=None, lifespan=lifespan)
 
@@ -129,6 +131,11 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     async def get_version():
         from jobgen import __version__
         return {"name": "dkk-jobmaker", "version": __version__}
+
+    @app.get("/api/stats")
+    async def get_stats():
+        from jobgen.net_stats import get as _get_stats
+        return _get_stats()
 
     @app.get("/api/config")
     async def get_config():

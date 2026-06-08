@@ -25,6 +25,7 @@ from math import floor
 from pathlib import Path
 from typing import Callable
 
+import jobgen.net_stats as _ns
 from jobgen.config import CacheConfig
 
 log = logging.getLogger(__name__)
@@ -325,8 +326,10 @@ def get_tiles(
                 record = _fetch_and_register(
                     dataset, tile_id, tile_bbox, fetcher, db, cache_dir
                 )
+                _ns.record_download(dataset, record.byte_size)
             else:
                 log.debug("Cache hit: %s tile %s", dataset, tile_id)
+                _ns.record_hit(dataset)
                 record = existing  # type: ignore[assignment]
 
         records.append(record)

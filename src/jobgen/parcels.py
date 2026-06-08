@@ -20,6 +20,7 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.wkt import dumps as wkt_dumps, loads as wkt_loads
 
+import jobgen.net_stats as _ns
 from jobgen.config import CacheConfig, ParcelsConfig
 from jobgen.crs import require_3067
 
@@ -114,6 +115,7 @@ def _fetch_by_ids_cached(
                 area_ha=record.area_ha,
                 geometry=geom,
             ))
+            _ns.record_hit("parcels")
             log.debug("Parcel cache hit: %s year=%d", pid, cfg.lpis_year)
         else:
             missing_ids.append(pid)
@@ -197,6 +199,7 @@ def _paginate(
         params = {**base_params, "startIndex": start}
         resp = sess.get(_WFS_URL, params=params, timeout=cfg.timeout_s)
         resp.raise_for_status()
+        _ns.record_download("parcels", len(resp.content))
         data = resp.json()
 
         page = data.get("features") or []

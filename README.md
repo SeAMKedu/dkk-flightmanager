@@ -142,7 +142,7 @@ In edit mode:
 
 ### Map tools
 
-- **Base layer** — the layer switcher (top-left, next to zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires `MML_API_KEY` in `.env`.
+- **Base layer** — the layer switcher (top-left, next to zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires `MML_API_KEY` in `.env`. MML's ortho tiles are natively available up to zoom 15; zooming in further upscales those tiles so the imagery stays visible for boundary editing rather than going blank.
 - **Measure** — hold **Ctrl** and right-click-drag to draw a dimensioning line with a distance label. Hold **Ctrl+Shift** to draw a radius circle instead. Click **✕** in the map controls to clear all measurements.
 - **Job color** — the color swatch next to the **Name** field sets the per-job display color used in map view. Saved immediately.
 
@@ -150,8 +150,9 @@ In edit mode:
 
 - **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs.
 - **⚙ Settings** — opens the in-browser config editor (all sections: Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties). Changed fields highlight in amber; a search box filters across all sections. Saving hot-reloads the server and writes directly to `config.toml`. Drone profiles must be edited in `config.toml` directly; `config.example.toml` is the reference for all options.
+- **ⓘ About** — the `⋯` button in the header opens the About dialog, which shows the software version and a **session statistics** table: how many tiles, parcel geometries, and zone records were fetched from the network vs. served from the local cache, and the total bytes downloaded.
 
-Parcel and property geometries are cached locally (400-day TTL) so repeat previews do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL).
+Parcel and property geometries are cached locally (400-day TTL) so repeat previews do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL). The same statistics are also printed to the terminal when `jobgen serve` shuts down (Ctrl-C).
 
 ---
 
@@ -474,6 +475,23 @@ jobgen cache status
 # Refresh tiles older than 30 days
 jobgen cache refresh --older-than 30
 ```
+
+After `jobgen run`, `jobgen batch`, and `jobgen cache warm` complete, a session statistics table is printed showing fetches vs. cache hits per data source and total bytes downloaded:
+
+```
+──────────────────────────────────────────────────────
+              Session network statistics
+──────────────────────────────────────────────────────
+  DEM tiles   3 fetched  (2.3 MB),  61 cached,  95% cache rate
+  Buildings   3 fetched  (56.3 KB),  57 cached,  95% cache rate
+  Parcels     18 cached,  100% cache rate
+  UAS zones   18 cached,  100% cache rate
+──────────────────────────────────────────────────────
+  Total       6 fetched,  154 cached,  2.3 MB downloaded
+──────────────────────────────────────────────────────
+```
+
+The same table appears on `jobgen serve` shutdown and in the **ⓘ About** dialog in the browser UI.
 
 ## Operator workflow
 
