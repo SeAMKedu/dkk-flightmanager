@@ -15,11 +15,13 @@ _downloads: dict[str, int] = {}   # source → network fetches this session
 _bytes: dict[str, int] = {}       # source → bytes downloaded this session
 _hits: dict[str, int] = {}        # source → cache hits this session
 
-_SOURCES = ("dem", "buildings", "parcels", "properties", "zones")
+_SOURCES = ("dem", "buildings", "powerlines", "pylons", "parcels", "properties", "zones")
 
 _LABELS: dict[str, str] = {
     "dem":        "DEM tiles   ",
     "buildings":  "Buildings   ",
+    "powerlines": "Power lines ",
+    "pylons":     "Pylons      ",
     "parcels":    "Parcels     ",
     "properties": "Properties  ",
     "zones":      "UAS zones   ",

@@ -36,6 +36,8 @@ log = logging.getLogger(__name__)
 _DATASET_EXT: dict[str, str] = {
     "dem": ".tif",
     "buildings": ".geojson",
+    "powerlines": ".geojson",
+    "pylons": ".geojson",
 }
 
 # (tile_id, bbox) → tile bbox in EPSG:3067
@@ -299,7 +301,13 @@ def get_tiles(
     if dataset not in _DATASET_EXT:
         raise ValueError(f"Unknown dataset '{dataset}'; expected one of {list(_DATASET_EXT)}")
 
-    ttl_days = config.dem_ttl_days if dataset == "dem" else config.buildings_ttl_days
+    ttl_map = {
+        "dem": config.dem_ttl_days,
+        "buildings": config.buildings_ttl_days,
+        "powerlines": config.powerlines_ttl_days,
+        "pylons": config.pylons_ttl_days,
+    }
+    ttl_days = ttl_map.get(dataset, config.buildings_ttl_days)
     cache_dir = Path(config.cache_dir)
     db = _db_path(cache_dir)
     _init_db(db)

@@ -104,12 +104,21 @@ cache_dir = "cache"
 tile_size_m = 1000            # grid tile side length in EPSG:3067 metres
 dem_ttl_days = 365            # korkeusmalli_2m: near-static, long TTL
 buildings_ttl_days = 180      # maastotietokanta: slower-changing, shorter TTL
+powerlines_ttl_days = 180     # sahkolinja: high-voltage line geometry
+pylons_ttl_days = 180         # suurjannitelinjanpylvas: HV pylon towers (for overhead correction)
 parcels_ttl_days = 400        # Ruokavirasto parcel geometries
 properties_ttl_days = 400     # MML kiinteistö geometries
 offline = false               # true = cache-only; fail cleanly on cache miss
 
 [output]
 output_dir = "output"
+
+[powerlines]
+# MML Maastotietokanta sahkolinja: overhead high-voltage lines (110 kV+, kohdeluokka 22312).
+# No voltage attribute in the data — all overhead lines get the same buffer.
+# Set enabled = false to skip fetching and keep-out entirely.
+enabled = true
+overhead_buffer_m = 30.0    # keep-out distance around each overhead line (metres)
 
 [zones]
 # Traficom publishes Finnish UAS zones at a confirmed open endpoint (no auth).

@@ -26,6 +26,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from jobgen.buildings import Building, dedup_buildings, load_tile, tile_fetcher as buildings_fetcher
+from jobgen.powerlines import (
+    PowerLine, dedup_power_lines, load_tile as load_pl_tile, tile_fetcher as powerlines_fetcher,
+    Pylon, dedup_pylons, load_pylon_tile, pylon_tile_fetcher, correct_overhead_from_pylons,
+)
 from jobgen.cache import FetcherFn, TileRecord, get_tiles, tile_provenance
 from jobgen.config import AppConfig
 from jobgen.elevation import tile_fetcher as dem_fetcher, validate_tile
@@ -109,8 +113,11 @@ def run_job(
         survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
     else:
         _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
+        _pl_geoms_job = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+        _pl_buf_job = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
         survey_geom = process_survey(
-            inp.input_geoms, inp.buildings, config.home_safety, config.polygon
+            inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
+            _pl_geoms_job, _pl_buf_job,
         )
     pieces_count = len(survey_geom.pieces_3067)
 
@@ -334,11 +341,25 @@ def run_preview(
         survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
     else:
         log.info("Preview: computing survey geometry …")
-        survey_geom = process_survey(inp.input_geoms, inp.buildings, config.home_safety, config.polygon)
+        _pl_geoms_prev = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+        _pl_buf_prev = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
+        survey_geom = process_survey(
+            inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
+            _pl_geoms_prev, _pl_buf_prev,
+        )
 
-    # 4. Keep-out zone geometry for visualisation
-    keepout_3067 = build_keepout(inp.buildings, config.home_safety)
+    # 4. Keep-out zone geometry for visualisation (overhead lines only for buffer)
+    _pl_buf = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
+    _overhead_geoms = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+    keepout_3067 = build_keepout(inp.buildings, config.home_safety, _overhead_geoms, _pl_buf)
     keepout_4326 = reproject_to_4326(keepout_3067) if keepout_3067 else None
+
+    # Power line keepout buffer for map display (overhead only)
+    _pl_keepout_4326 = None
+    if _overhead_geoms and _pl_buf > 0:
+        from shapely.ops import unary_union as _uu
+        _pl_ko_3067 = _uu([g.buffer(_pl_buf) for g in _overhead_geoms])
+        _pl_keepout_4326 = reproject_to_4326(_pl_ko_3067)
 
     # 5. Zone check
     drone_cfg = config.active_drone()
@@ -476,11 +497,19 @@ def run_preview(
         _route_stats = {"route_angle_deg_auto": None, "route_strip_count": None,
                         "route_photo_count": None, "route_flight_time_min": None}
 
+    # Power lines for map display (both overhead and underground)
+    power_lines_data = []
+    for pl in inp.power_lines:
+        pl_4326 = reproject_to_4326(pl.geometry)
+        power_lines_data.append({"geojson": dict(mapping(pl_4326)), "is_overhead": pl.is_overhead})
+
     result = {
         "survey": dict(mapping(survey_geom.survey_4326)),
         "original_areas": [dict(mapping(reproject_to_4326(p.geometry))) for p in inp.input_geoms],
         "buildings": buildings_data,
         "keepout_zone": dict(mapping(keepout_4326)) if keepout_4326 else None,
+        "power_lines": power_lines_data,
+        "powerlines_keepout": dict(mapping(_pl_keepout_4326)) if _pl_keepout_4326 else None,
         "zone_hits": zone_hits_data,
         "takeoff_point_4326": takeoff_point_4326,
         "dsm_b64": dsm_b64,
@@ -528,6 +557,8 @@ class _InputResult:
     input_geoms: list
     buildings: list[Building]
     b_records: list[TileRecord]
+    power_lines: list[PowerLine]
+    pl_records: list[TileRecord]
     # Manifest provenance — populated for every run; empty when no IDs were fetched
     parcel_ids_used: list[str]
     parcel_fetch_ts: str
@@ -580,6 +611,40 @@ def _load_buildings(
     buildings = dedup_buildings(raw)
     log.info("%d building(s) loaded after dedup", len(buildings))
     return buildings, b_records
+
+
+def _load_powerlines(
+    bbox: tuple,
+    api_key: str,
+    cache_config,
+    refresh: bool,
+) -> tuple[list[PowerLine], list[TileRecord]]:
+    """Fetch power line tiles from cache and return ``(lines, tile_records)``."""
+    pl_fetcher = powerlines_fetcher(api_key)
+    pl_records = get_tiles("powerlines", bbox, pl_fetcher, cache_config, refresh=refresh)
+    raw: list[PowerLine] = []
+    for rec in pl_records:
+        raw.extend(load_pl_tile(rec.path))
+    lines = dedup_power_lines(raw)
+    log.info("%d power line(s) loaded after dedup", len(lines))
+    return lines, pl_records
+
+
+def _load_pylons(
+    bbox: tuple,
+    api_key: str,
+    cache_config,
+    refresh: bool,
+) -> list[Pylon]:
+    """Fetch HV pylon tower tiles from cache and return pylon list."""
+    py_fetcher = pylon_tile_fetcher(api_key)
+    py_records = get_tiles("pylons", bbox, py_fetcher, cache_config, refresh=refresh)
+    raw: list[Pylon] = []
+    for rec in py_records:
+        raw.extend(load_pylon_tile(rec.path))
+    pylons = dedup_pylons(raw)
+    log.info("%d pylon(s) loaded after dedup", len(pylons))
+    return pylons
 
 
 def _fetch_survey_inputs(
@@ -657,10 +722,22 @@ def _fetch_survey_inputs(
     _cb(progress_cb, "buildings", "Fetching building tiles…", 30)
     buildings, b_records = _load_buildings(buildings_bbox, api_key, config.cache, refresh)
 
+    power_lines: list[PowerLine] = []
+    pl_records: list[TileRecord] = []
+    if config.powerlines.enabled:
+        try:
+            power_lines, pl_records = _load_powerlines(buildings_bbox, api_key, config.cache, refresh)
+            pylons = _load_pylons(buildings_bbox, api_key, config.cache, refresh)
+            power_lines = correct_overhead_from_pylons(power_lines, pylons)
+        except Exception as _pl_exc:
+            log.warning("Power lines fetch failed — skipping: %s", _pl_exc)
+
     return _InputResult(
         input_geoms=input_geoms,
         buildings=buildings,
         b_records=b_records,
+        power_lines=power_lines,
+        pl_records=pl_records,
         parcel_ids_used=parcel_ids_used,
         parcel_fetch_ts=parcel_fetch_ts,
         property_ids_used=property_ids_used,

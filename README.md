@@ -2,9 +2,9 @@
 
 DJI terrain-following mapping job generator for Finnish agricultural field parcels.
 
-`dkk-jobgen` is a planning tool for drone mapping surveys over Finnish farmland. Identify the survey area by pasting *peruslohkotunnus* field parcel IDs (Ruokavirasto), *kiinteistötunnus* cadastral property IDs, a bounding box, or a polygon drawn directly on the map — the tool fetches field boundaries, 2 m terrain elevation, and building footprints from National Land Survey of Finland (MML) open data APIs, checks Traficom UAS restriction zones, and writes a ready-to-fly DJI Pilot 2 mapping job. A built-in browser UI handles everything from parcel lookup and polygon editing to flight parameter tuning and batch job creation for large parcel sets.
+`dkk-jobgen` is a planning tool for drone mapping surveys over Finnish farmland. Identify the survey area by pasting *peruslohkotunnus* field parcel IDs (Ruokavirasto), *kiinteistötunnus* cadastral property IDs, a bounding box, or a polygon drawn directly on the map — the tool fetches field boundaries, 2 m terrain elevation, building footprints, and high-voltage power line geometry from National Land Survey of Finland (MML) open data APIs, checks Traficom UAS restriction zones, and writes a ready-to-fly DJI Pilot 2 mapping job. A built-in browser UI handles everything from parcel lookup and polygon editing to flight parameter tuning and batch job creation for large parcel sets.
 
-All underlying data — field boundaries (Ruokavirasto *Peltolohkorekisteri*), terrain elevation and buildings (MML *Maastotietokanta*), cadastral geometry (MML *Kiinteistötietojärjestelmä*), and UAS restriction zones (Traficom) — is sourced from free Finnish open data APIs, with attribution recorded in every manifest. Only an MML API key (free) is required.
+All underlying data — field boundaries (Ruokavirasto *Peltolohkorekisteri*), terrain elevation, buildings, and high-voltage power lines (MML *Maastotietokanta*), cadastral geometry (MML *Kiinteistötietojärjestelmä*), and UAS restriction zones (Traficom) — is sourced from free Finnish open data APIs, with attribution recorded in every manifest. Only an MML API key (free) is required.
 
 Output files written per job:
 
@@ -127,6 +127,7 @@ A toolbar floats at the top of the map whenever map view is active. **Export Rou
 
 Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, DSM elevation overlay, and the flight route overlay — all layers are toggleable from the legend.
 
+- **Power lines** — high-voltage lines (110 kV+) from MML *Maastotietokanta* (`sahkolinja`) are fetched for the same area as buildings. Overhead spans (solid amber on the map) automatically subtract a configurable keep-out buffer from the survey polygon. Underground cables (dashed amber) are shown for situational awareness only — no keep-out buffer applied. MTK misclassification is corrected automatically: any 22311-coded segment whose endpoints match pylon tower locations in `suurjannitelinjanpylvas` is re-classified as overhead before the keep-out is computed. Disable or adjust the buffer under **⚙ Settings → Power Lines**.
 - **UAS zones** are clickable: see altitude floor/ceiling and all overlapping zones at a point. Inner concentric zones of an airfield are shown with a dashed border for context. The zones legend layer auto-enables when zones first appear.
 - **Zone altitude cap** — when a zone hit carries an altitude floor, flight height is automatically set to 75 % of that floor and the warning radius re-syncs. An orange warning appears if you raise height above the floor. The cap is advisory; override freely.
 - **Takeoff marker** — a white ✕ on the polygon boundary marks the auto-suggested takeoff/landing point (the boundary point that minimises worst-case VLOS distance). Drag it to a more convenient spot. Click **↺ Reset takeoff position** to revert. Saved with the job.
@@ -488,10 +489,12 @@ After `jobgen run`, `jobgen batch`, and `jobgen cache warm` complete, a session 
 ──────────────────────────────────────────────────────
   DEM tiles   3 fetched  (2.3 MB),  61 cached,  95% cache rate
   Buildings   3 fetched  (56.3 KB),  57 cached,  95% cache rate
+  Power lines 3 fetched  (12.1 KB),  57 cached,  95% cache rate
+  Pylons      3 fetched  (4.2 KB),   57 cached,  95% cache rate
   Parcels     18 cached,  100% cache rate
   UAS zones   18 cached,  100% cache rate
 ──────────────────────────────────────────────────────
-  Total       6 fetched,  154 cached,  2.3 MB downloaded
+  Total       12 fetched,  268 cached,  2.4 MB downloaded
 ──────────────────────────────────────────────────────
 ```
 
@@ -528,6 +531,27 @@ The same table appears on `jobgen serve` shutdown and in the **ⓘ About** dialo
 |---|---|---|
 | **A2** (C2-labelled drone + A2 certificate) | ≥ flight height from people | Derived from `--height` or config |
 | **A3** (no C-label / C3 / C4) | ≥ 150 m from residential/commercial/industrial/recreational areas | 150 m fixed |
+
+### Power line keep-out (`overhead_buffer_m`)
+
+High-voltage power lines are a significant hazard for low-altitude drone operations. The tool fetches MML *Maastotietokanta* `sahkolinja` features (110 kV+ lines only) for the same bounding box used for buildings.
+
+| Feature type | MTK kohdeluokka | Treatment |
+|---|---|---|
+| Ilmajohto (overhead span) | 22312 | Keep-out buffer subtracted from survey polygon |
+| Kaapeli (underground cable) | 22311 | Shown on map only — no keep-out |
+
+Because MML data contains known misclassifications (some overhead spans between pylon towers are coded as 22311), the tool cross-references line endpoints against `suurjannitelinjanpylvas` pylon tower locations. Any 22311 segment whose both endpoints sit within 2 m of a pylon tower is treated as overhead for keep-out purposes.
+
+Configure under `[powerlines]` in `config.toml` (or **⚙ Settings → Power Lines** in the browser UI):
+
+```toml
+[powerlines]
+enabled = true
+overhead_buffer_m = 30.0   # metres; Finnish aviation guidance recommends staying well clear
+```
+
+Set `overhead_buffer_m = 0` to show lines on the map without subtracting a buffer.
 
 The `operating_subcategory` in `config.toml` (or **⚙ Settings → Safety**) sets the default; override per-job with `--subcategory`.
 
@@ -608,6 +632,7 @@ All data sources require attribution. The manifest records the exact strings wit
 |---|---|
 | Elevation (DEM 2 m) | Contains data from the National Land Survey of Finland, Elevation model 2 m, retrieved \<date\>. |
 | Buildings (Maastotietokanta) | Contains data from the National Land Survey of Finland, Topographic Database, retrieved \<date\>. |
+| Power lines (Maastotietokanta) | Contains data from the National Land Survey of Finland, Topographic Database, retrieved \<date\>. |
 | Parcels (Ruokavirasto) | Contains data from Ruokavirasto (Finnish Food Authority), Peltolohkorekisteri, retrieved \<date\>. |
 | Properties (Kiinteistötietojärjestelmä) | Contains data from the National Land Survey of Finland, Cadastral Index Map, retrieved \<date\>. |
 | UAS zones | Contains data from Traficom, UAS Geographical Zones, retrieved \<date\>. |

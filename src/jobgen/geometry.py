@@ -91,6 +91,8 @@ def process_survey(
     buildings: list[Building],
     home_safety: HomeSafetyConfig,
     polygon_cfg: PolygonConfig,
+    power_line_geoms: list[BaseGeometry] | None = None,
+    power_line_buffer_m: float = 0.0,
 ) -> SurveyGeometry:
     """Run the full geometry pipeline and return a SurveyGeometry.
 
@@ -119,7 +121,7 @@ def process_survey(
     survey = apply_survey_offset(survey, polygon_cfg.survey_offset_m)
 
     # 5. Build keep-out zone
-    keepout = build_keepout(buildings, home_safety)
+    keepout = build_keepout(buildings, home_safety, power_line_geoms, power_line_buffer_m)
 
     # 6. Apply keep-out (or measure distance)
     survey, area_lost_pct, min_dist, offset_applied = _apply_keepout(
@@ -246,33 +248,38 @@ def apply_survey_offset(geom: BaseGeometry, offset_m: float) -> BaseGeometry:
 def build_keepout(
     buildings: list[Building],
     home_safety: HomeSafetyConfig,
+    power_line_geoms: list[BaseGeometry] | None = None,
+    power_line_buffer_m: float = 0.0,
 ) -> BaseGeometry | None:
-    """Buffer relevant buildings by home_buffer_m and union into a keep-out zone."""
-    if not buildings:
-        return None
+    """Buffer buildings and overhead power lines and union into a keep-out zone."""
+    zones: list[BaseGeometry] = []
 
     res_codes = set(home_safety.residential_kohdeluokka)
     a3_codes = set(home_safety.a3_additional_kohdeluokka)
-
-    if home_safety.operating_subcategory == "A3":
-        relevant_codes = res_codes | a3_codes
-    else:
-        relevant_codes = res_codes
-
+    relevant_codes = res_codes | a3_codes if home_safety.operating_subcategory == "A3" else res_codes
     relevant = [b for b in buildings if b.kohdeluokka in relevant_codes]
-    if not relevant:
+
+    if relevant:
+        buf = home_safety.home_buffer_m
+        zones.extend(b.geometry.buffer(buf) for b in relevant)
+        log.info(
+            "Keep-out: buffered %d building(s) by %.1f m (subcategory %s)",
+            len(relevant), buf, home_safety.operating_subcategory,
+        )
+    else:
         log.debug("No relevant buildings for keep-out in subcategory %s",
                   home_safety.operating_subcategory)
-        return None
 
-    buf = home_safety.home_buffer_m
-    buffered = [b.geometry.buffer(buf) for b in relevant]
-    keepout = unary_union(buffered)
-    log.info(
-        "Keep-out: buffered %d building(s) by %.1f m (subcategory %s)",
-        len(relevant), buf, home_safety.operating_subcategory,
-    )
-    return keepout
+    if power_line_geoms and power_line_buffer_m > 0:
+        zones.extend(g.buffer(power_line_buffer_m) for g in power_line_geoms)
+        log.info(
+            "Keep-out: buffered %d overhead power line(s) by %.1f m",
+            len(power_line_geoms), power_line_buffer_m,
+        )
+
+    if not zones:
+        return None
+    return unary_union(zones)
 
 
 def _apply_keepout(

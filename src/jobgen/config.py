@@ -162,11 +162,22 @@ class PolygonConfig(BaseModel):
     hole_policy: Literal["review", "fill", "clip"] = "fill"
 
 
+class PowerLinesConfig(BaseModel):
+    # MTK only contains suurjännitejohto (110 kV+) overhead lines; no voltage attribute.
+    # enabled=False skips fetching and keep-out entirely.
+    enabled: bool = True
+    # Keep-out buffer around overhead power lines (kohdeluokka 22312), metres.
+    # Finnish aviation guidance recommends staying well clear of high-voltage lines.
+    overhead_buffer_m: float = Field(default=30.0, ge=0)
+
+
 class CacheConfig(BaseModel):
     cache_dir: str = "cache"
     tile_size_m: int = Field(default=1000, gt=0)
     dem_ttl_days: int = Field(default=365, gt=0)
     buildings_ttl_days: int = Field(default=180, gt=0)
+    powerlines_ttl_days: int = Field(default=180, gt=0)
+    pylons_ttl_days: int = Field(default=180, gt=0)
     parcels_ttl_days: int = Field(default=400, gt=0)
     properties_ttl_days: int = Field(default=400, gt=0)
     offline: bool = False
@@ -224,6 +235,7 @@ class AppConfig(BaseModel):
     parcels: ParcelsConfig = Field(default_factory=ParcelsConfig)
     properties: PropertiesConfig = Field(default_factory=PropertiesConfig)
     zones: ZonesConfig = Field(default_factory=ZonesConfig)
+    powerlines: PowerLinesConfig = Field(default_factory=PowerLinesConfig)
     # Drone / payload profiles.  The built-in list covers common DJI mapping drones.
     # Add [[drones]] entries in config.toml to extend or override.
     default_drone: str = "m3m-ms"
@@ -268,6 +280,7 @@ _SAVE_SKIP: dict[str, set[str]] = {
 
 _SAVE_SECTIONS = [
     "flight", "home_safety", "polygon", "zones", "cache", "output", "parcels", "properties",
+    "powerlines",
 ]
 
 

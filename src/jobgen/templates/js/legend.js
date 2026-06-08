@@ -43,6 +43,8 @@ var _legendUserVis = {};
     {btnId:'leg-rings',    lrKey:'rings',    rowId:'leg-rings-row'},
     {btnId:'leg-ko',       lrKey:'ko',       rowId:'leg-ko-row'},
     {btnId:'leg-bldgs',    lrKey:'bldgs',    rowId:'leg-bldgs-row'},
+    {btnId:'leg-plines',   lrKey:'plines',   rowId:'leg-plines-row'},
+    {btnId:'leg-plko',     lrKey:'plko',     rowId:'leg-plko-row'},
     {btnId:'leg-zones',    lrKey:'zones',    rowId:'leg-zones-row'},
     {btnId:'leg-route',    lrKey:'route',    rowId:'leg-route-row'},
   ];
