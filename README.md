@@ -138,11 +138,12 @@ Click **↻ Update** (or change any parameter) to run a preview. The map shows t
 Double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to exit and save. On exit, buildings and UAS zones refresh automatically for the new shape.
 
 In edit mode:
-- White squares = vertices; smaller white diamonds = midpoints. Drag a midpoint to add a vertex. Click a vertex to delete it.
+- White squares = vertices; smaller white diamonds = midpoints. Drag a midpoint to add a vertex. Click a vertex to delete it. A polygon can be reduced to a triangle (3 vertices); to remove it entirely, right-click any of its remaining vertices.
 - **Bridge / Split** — right-click any vertex to start (turns orange), then left-click more vertices:
   - 2 vertices on the **same polygon** → a split line appears and a **Split job** button shows in the hint bar. Click it to divide the job into two sibling jobs, each containing one half of the polygon with all other parameters (IDs, flight settings, color) copied across.
   - 2 vertices on each of **two polygons** (4 total) → **bridge** (joins them with a quadrilateral corridor)
   - Press **Esc** or right-click to cancel.
+- When a keep-out buffer (e.g. power line) splits the parcel into multiple polygons, each piece is independently editable. Unwanted fragments can be removed by reducing them to a triangle and right-clicking a vertex.
 - Click **↻ Reset polygon** to revert all edits.
 
 ### Map tools
