@@ -91,9 +91,7 @@ function _mvDrawRoute() {
   if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
   if (!_mvRouteVisible || !_mvMode) return;
 
-  var features = _mvCurrentFolder
-    ? _mvAllFeatures.filter(function(f){ return f.properties.folder === _mvCurrentFolder; })
-    : _mvAllFeatures;
+  var features = _mvAllFeatures.filter(function(f){ return (f.properties.folder || null) === _mvCurrentFolder; });
 
   var routable = features.filter(function(f){ return f.properties.takeoff_point_4326 && !f.properties.skipped; });
   routable.sort(function(a, b) {
@@ -153,9 +151,7 @@ async function _mvRefreshRouteData() {
 function _mvApplyFilter(folderFilter, skipFit) {
   _mvClearLayers();
   var bounds = [];
-  var features = folderFilter
-    ? _mvAllFeatures.filter(function(f){ return f.properties.folder === folderFilter; })
-    : _mvAllFeatures;
+  var features = _mvAllFeatures.filter(function(f){ return (f.properties.folder || null) === (folderFilter || null); });
   features.forEach(function(f) {
     if (!f.geometry) return;
     var layer = _mvMakeLayer(f);
