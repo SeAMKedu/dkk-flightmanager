@@ -1,3 +1,4 @@
+#battery-timeline{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:600;pointer-events:none;background:rgba(15,23,42,.82);border-radius:8px;padding:5px 8px;backdrop-filter:blur(3px);display:none}
 #sb.mv-hidden{display:none}
 #legend.mv-hidden{display:none}
 #sp.sp-visible{display:block}

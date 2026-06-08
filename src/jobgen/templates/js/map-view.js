@@ -59,6 +59,7 @@ function closeMapView() {
   _mvCurrentFolder = null;
   clearTimeout(_mvHoverTimer);
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
+  destroyBatteryTimeline();
   _mvClearLayers();
   if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
   _mvSelected.forEach(function(path) {
@@ -167,6 +168,7 @@ function _mvApplyFilter(folderFilter, skipFit) {
     map.fitBounds(combined, {padding: [40, 40]});
   }
   _mvDrawRoute();
+  showBatteryTimeline();
 }
 
 function _mvClearLayers() {
@@ -365,6 +367,7 @@ function _mvUpdateSelBar() {
   });
   var areaEl = document.getElementById('mv-area-total');
   if (areaEl) areaEl.textContent = (n > 0 && hasArea) ? '· ' + totalArea.toFixed(1) + ' ha' : '';
+  showBatteryTimeline();
 }
 
 function mvMerge() {

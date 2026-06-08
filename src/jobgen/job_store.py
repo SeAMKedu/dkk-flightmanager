@@ -164,6 +164,14 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
 
     g = manifest.get("geometry", {})
     f = manifest.get("flight", {})
+    bat = manifest.get("battery") or {}
+    if "estimated_flight_time_min" in bat:
+        flight_time_min: float | None = bat["estimated_flight_time_min"]
+    elif "pieces" in bat:
+        flight_time_min = sum(p.get("estimated_flight_time_min", 0) for p in bat["pieces"])
+    else:
+        flight_time_min = None
+
     return {
         "name": name,
         "folder": folder,
@@ -175,6 +183,7 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "vertex_count": g.get("survey_vertex_count"),
         "drone": f.get("drone"),
         "drone_label": f.get("drone_label"),
+        "flight_time_min": flight_time_min,
         "flight_ready": manifest.get("flight_ready"),
         "needs_review": manifest.get("needs_review"),
         "untouched": untouched,

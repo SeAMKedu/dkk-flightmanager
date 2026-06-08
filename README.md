@@ -103,6 +103,8 @@ The panel updates live — changes made by the CLI, MCP server, or another tab a
 
 A toolbar floats at the top of the map whenever map view is active. **Export Route** copies the `.kmz` and homes KML for every route job in the current folder to a local directory you specify — a quick way to collect all mission files before heading to the field. Route jobs are those with a computed takeoff point that have not been marked as skipped; `homes.kml` files are renamed `<job_name>_homes.kml` to avoid collisions. The remaining toolbar buttons (**Merge**, **Export KML**, **Google Maps**, **Route rename**, **Move**, **Delete**) become active when one or more jobs are selected.
 
+**Battery / flight-time timeline:** a proportional bar appears near the bottom centre of the map whenever there is at least one routable job (a job with a computed route and a flight-time estimate in its manifest). Each segment represents one job, scaled by its estimated flight time. Route index numbers appear below each segment in the same amber circles used on the map. Battery boundaries are shown as outline battery icons above the bar: a new battery starts whenever the remaining charge (85 % of the drone's rated battery duration) is insufficient to cover the next job. The total flight time for the displayed route is shown to the right. Click any segment to pan and zoom the map to that job's polygon. When jobs are multi-selected, only the selected jobs appear on the timeline; otherwise all routable jobs in the folder are shown.
+
 ### Defining the survey area
 
 - **Parcel / property IDs** — paste Ruokavirasto parcel IDs or MML kiinteistötunnus values; the map updates on blur.

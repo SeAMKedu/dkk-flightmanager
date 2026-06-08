@@ -97,7 +97,7 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
                 q.put_nowait(None)
             except asyncio.QueueFull:
                 pass
-        await asyncio.sleep(0)  # one tick — let generators process the sentinel
+        await asyncio.sleep(0.15)  # let all SSE generators drain their sentinel
         task.cancel()
         try:
             await task

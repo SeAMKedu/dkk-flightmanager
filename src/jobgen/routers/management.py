@@ -129,6 +129,8 @@ async def jobs_geojson(folder: str | None = None):
                     "flight_ready":      card.get("flight_ready"),
                     "needs_review":      card.get("needs_review"),
                     "area_ha":           card.get("area_ha"),
+                    "flight_time_min":   card.get("flight_time_min"),
+                    "drone":             card.get("drone"),
                     "status":            card.get("status", "ok"),
                     "sort_order":        card.get("sort_order"),
                     "takeoff_point_4326": card.get("takeoff_point_4326"),
