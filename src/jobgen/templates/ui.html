@@ -91,8 +91,13 @@
         <span class="simp-val" id="route-angle-val">—</span>
         <button class="simp-step" id="route-plus">&#43;</button>
       </div>
-      <label>Survey speed (m/s) <span style="font-weight:400;color:#94a3b8">optional</span></label>
-      <input type="number" id="speed-ms" min="1" max="15" step="0.5" placeholder="default">
+      <label>Survey speed (m/s)</label>
+      <div class="simp-row">
+        <button class="simp-pill active" id="speed-auto-btn" onclick="speedAuto()">Auto</button>
+        <button class="simp-step" id="speed-minus">&#8722;</button>
+        <span class="simp-val" id="speed-val">—</span>
+        <button class="simp-step" id="speed-plus">&#43;</button>
+      </div>
     </div>
 
     <div class="sec">

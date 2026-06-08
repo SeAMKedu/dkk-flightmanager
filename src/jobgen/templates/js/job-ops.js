@@ -96,7 +96,7 @@ function _restoreFormFromParams(p) {
     }
     if (p.flight.subcategory) setSub(p.flight.subcategory, true);
     setRouteAngleSilent(p.flight.route_angle_deg != null ? p.flight.route_angle_deg : null);
-    document.getElementById('speed-ms').value = p.flight.speed_ms != null ? p.flight.speed_ms : '';
+    setSpeedSilent(p.flight.speed_ms != null ? p.flight.speed_ms : null);
   }
   if (p.polygon) {
     if (p.polygon.offset_m != null) document.getElementById('offset').value = p.polygon.offset_m;

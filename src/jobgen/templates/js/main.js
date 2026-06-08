@@ -38,7 +38,6 @@ async function init() {
     if (cfg.overlap_side_pct)  _cfgOverlapSide  = cfg.overlap_side_pct;
     if (cfg.auto_flight_speed_ms) {
       _cfgDefaultSpeedMs = cfg.auto_flight_speed_ms;
-      document.getElementById('speed-ms').placeholder = cfg.auto_flight_speed_ms.toFixed(1) + ' (default)';
     }
     updateGsd();
     _mmlApiKey = cfg.mml_api_key || '';

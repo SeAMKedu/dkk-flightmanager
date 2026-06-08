@@ -88,7 +88,10 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     if (_bridgeMode) exitBridgeMode();
     else if (editMode) saveEdit();
-    else if (_activeJob && _activeJobFolder && !_mvMode) confirmIfDirty(function(){ openMapView(_activeJobFolder); });
+    else if (!_mvMode) {
+      if (_activeJob) confirmIfDirty(function(){ openMapView(_activeJobFolder); });
+      else openMapView(null);
+    }
   }
 });
 

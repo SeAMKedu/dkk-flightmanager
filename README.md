@@ -118,7 +118,7 @@ A toolbar floats at the top of the map whenever map view is active. **Export Rou
 | Drone & height | dropdown + number field (live GSD shown) |
 | Warning radius | linked to 3× height by default; click "3:1" to restore the link |
 | Route angle | Auto pill picks the MBR longest-axis bearing; −/+ step buttons (hold for continuous rotation) override it by 1° increments |
-| Survey speed | optional per-job override; leave blank to use auto-calculated speed (see below) |
+| Survey speed | **Auto** pill recomputes from altitude and drone profile; −/+ buttons (hold for continuous change, 0.1 m/s steps) override it — see below |
 | Offset | expand (+) or contract (−) the survey polygon in metres |
 | Simplify | Auto pill + −/+ step buttons |
 | Keep-out | toggle to disable building buffer subtraction |
@@ -394,6 +394,7 @@ jobgen drones
 Name               GSD@50m   GSD@100m  Label
 m3m                  1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB channel
 m3m-ms               2.14 cm    4.28 cm  DJI Mavic 3 Multispectral — MS-limited GSD
+m3m-rgb              1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB only
 m3e                  1.34 cm    2.68 cm  DJI Mavic 3 Enterprise — RGB camera
 m300-p1-24           0.92 cm    1.83 cm  DJI Matrice 300 RTK + Zenmuse P1 (24 mm)
 m300-p1-35           0.63 cm    1.26 cm  DJI Matrice 300 RTK + Zenmuse P1 (35 mm)
@@ -439,8 +440,9 @@ strip_speed = (1 − front_overlap) × altitude × (sensor_height / focal_length
 
 | Profile | Capture mode | Interval | Calibrated from |
 |---|---|---|---|
-| `m3m`, `m3m-ms` | RGB + MS simultaneously (5 files ≈ 49 MB/capture) | 2.38 s | DJI Pilot 2 auto-speed: 8.9 m/s at 100 m AGL, 80% front overlap |
-| `m3e` | RGB only (1 file ≈ 9 MB/capture) | 1.41 s | M3M in RGB-only mode: 15 m/s at 100 m (same sensor) |
+| `m3m` | RGB + MS simultaneously (5 files ≈ 49 MB/capture) | 2.38 s | DJI Pilot 2: 8.9 m/s at 100 m AGL, 80% front overlap |
+| `m3m-ms` | RGB + MS simultaneously, GSD planned for MS sensor | 1.868 s | Back-calculated from DJI's 8.9 m/s using the MS sensor footprint |
+| `m3m-rgb`, `m3e` | RGB only (1 file ≈ 9 MB/capture) | 1.41 s | DJI Pilot 2: 15 m/s at 100 m AGL, 80% front overlap |
 | P1 profiles | — | 2.0 s | Estimate — calibrate from DJI Pilot 2 at a known altitude |
 
 Example speeds for the M3M (RGB+MS) at 80% front overlap:
@@ -452,7 +454,7 @@ Example speeds for the M3M (RGB+MS) at 80% front overlap:
 | 80 m | ~7.1 m/s |
 | 100 m | ~8.9 m/s |
 
-To override with a fixed speed, set `auto_flight_speed_ms` under `[flight]` in `config.toml` or use the **Survey speed** field in the browser UI. Leave it blank (the default) to keep auto mode. To calibrate a new drone or capture mode, read the auto-speed value from DJI Pilot 2 at a known altitude and back-calculate: `interval = (1 − overlap) × altitude × (sensor_height / focal_length) / speed`.
+To override with a fixed speed for all jobs, set `auto_flight_speed_ms` under `[flight]` in `config.toml`. In the browser UI the **Survey speed** control defaults to **Auto** (recomputes from altitude and drone profile); use the −/+ buttons to set a per-job override, or click **Auto** to return to computed mode. To calibrate a new drone or capture mode, read the auto-speed value from DJI Pilot 2 at a known altitude and back-calculate: `interval = (1 − overlap) × altitude × (sensor_height / focal_length) / speed`.
 
 ### Batch skeleton job creation (`jobgen batch`)
 

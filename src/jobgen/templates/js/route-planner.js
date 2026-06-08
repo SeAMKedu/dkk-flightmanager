@@ -186,7 +186,7 @@ async function _fetchAccurateEstimate() {
     angle_deg:          _routeAngleDeg,
     height_m:           parseFloat(document.getElementById('hgt').value) || null,
     drone:              document.getElementById('dsel').value || null,
-    speed_ms:           parseFloat(document.getElementById('speed-ms').value) || null,
+    speed_ms:           _speedMsOverride,
     takeoff_point_4326: home || null,
   };
   try {
@@ -239,6 +239,45 @@ function setRouteAngleSilent(v) {
   _renderAngleControl();
 }
 
+// ── Speed control ─────────────────────────────────────────────────────────────
+
+function _autoSpeedMs() {
+  var h = parseFloat(document.getElementById('hgt').value);
+  var d = drones.find(function(x) { return x.name === document.getElementById('dsel').value; });
+  if (!d || isNaN(h) || h <= 0) return null;
+  var sensor_h_m   = d.image_height_px * d.pixel_pitch_um * 1e-6;
+  var footprint_m  = h * sensor_h_m / (d.focal_length_mm * 1e-3);
+  var trigger_m    = (1 - _cfgOverlapFront / 100) * footprint_m;
+  return trigger_m / d.min_capture_interval_s;
+}
+
+function _renderSpeedControl() {
+  var isAuto = (_speedMsOverride === null);
+  document.getElementById('speed-auto-btn').classList.toggle('active', isAuto);
+  var val = isAuto ? _autoSpeedMs() : _speedMsOverride;
+  document.getElementById('speed-val').textContent = val != null ? val.toFixed(1) : '—';
+}
+
+function speedAuto() {
+  _speedMsOverride = null;
+  _renderSpeedControl();
+  markDirty();
+  _scheduleAccurateEstimate();
+}
+
+function speedStep(dir) {
+  var cur = _speedMsOverride !== null ? _speedMsOverride : (_autoSpeedMs() || 4.0);
+  _speedMsOverride = Math.max(0.1, Math.round((cur + dir * 0.1) * 10) / 10);
+  _renderSpeedControl();
+  markDirty();
+  _scheduleAccurateEstimate();
+}
+
+function setSpeedSilent(v) {
+  _speedMsOverride = (v != null) ? v : null;
+  _renderSpeedControl();
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 (function _initAngleButtons() {
@@ -271,4 +310,33 @@ function setRouteAngleSilent(v) {
   });
 
   _renderAngleControl();
+}());
+
+(function _initSpeedButtons() {
+  var _speedHoldTimer = null, _speedRepeatInterval = null;
+
+  function _stopRepeat() {
+    clearTimeout(_speedHoldTimer);
+    clearInterval(_speedRepeatInterval);
+    _speedHoldTimer = null; _speedRepeatInterval = null;
+  }
+
+  function _startRepeat(dir) {
+    speedStep(dir);
+    _speedHoldTimer = setTimeout(function() {
+      _speedRepeatInterval = setInterval(function() { speedStep(dir); }, 80);
+    }, 350);
+  }
+
+  ['speed-minus', 'speed-plus'].forEach(function(id) {
+    var btn = document.getElementById(id);
+    var dir = id === 'speed-plus' ? 1 : -1;
+    btn.addEventListener('mousedown', function(e) { e.preventDefault(); _startRepeat(dir); });
+    btn.addEventListener('touchstart', function(e) { e.preventDefault(); _startRepeat(dir); }, {passive: false});
+    ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(function(ev) {
+      btn.addEventListener(ev, _stopRepeat);
+    });
+  });
+
+  _renderSpeedControl();
 }());

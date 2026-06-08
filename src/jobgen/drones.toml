@@ -51,8 +51,30 @@ image_width_px     = 2592
 image_height_px    = 1944
 image_format       = "visable,narrow_band"
 battery_minutes    = 28.0
-# Same physical camera burst as m3m (5-file write, ~49 MB).
-min_capture_interval_s = 2.38
+# Same physical burst as m3m (5-file write, ~49 MB); DJI limits speed against
+# the RGB footprint not the MS footprint.  Back-calculated from 8.9 m/s at 100 m
+# using the MS sensor: interval = 83.1 m × 0.20 / 8.9 m/s ≈ 1.868 s.
+min_capture_interval_s = 1.868
+
+[[drone]]
+name               = "m3m-rgb"
+label              = "DJI Mavic 3 Multispectral — RGB only"
+drone_enum         = 77
+drone_sub_enum     = 0
+payload_enum       = 68
+payload_sub_enum   = 3
+payload_position_index = 0
+# Same 20 MP 4/3" RGB sensor as m3m, but single-file (D.JPG ~9 MB) capture only.
+# DJI Pilot 2 auto-speed: 15 m/s at 100 m AGL, 80% front overlap.
+focal_length_mm    = 12.3
+pixel_pitch_um     = 3.3
+image_width_px     = 5280
+image_height_px    = 3956
+image_format       = "wide"
+battery_minutes    = 28.0
+# 1-file write (~9 MB). Back-calculated from 15 m/s at 100 m:
+# interval = 106.1 m × 0.20 / 15 m/s ≈ 1.41 s.
+min_capture_interval_s = 1.41
 
 # ── Mavic 3 Enterprise ────────────────────────────────────────────────────────
 # Same airframe and RGB sensor as M3M; payload_sub_enum 0 = RGB-only capture.

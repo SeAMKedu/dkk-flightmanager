@@ -68,9 +68,9 @@ class DroneConfig(BaseModel):
         (min_capture_interval_s).  At lower altitudes the along-track footprint
         shrinks, so the drone must slow down to maintain the required overlap.
         """
-        sensor_h_m = self.image_height_px * self.pixel_pitch_um * 1e-6
+        sensor_h_m  = self.image_height_px * self.pixel_pitch_um * 1e-6
         footprint_m = altitude_m * sensor_h_m / (self.focal_length_mm * 1e-3)
-        trigger_m = (1 - overlap_front_pct / 100) * footprint_m
+        trigger_m   = (1 - overlap_front_pct / 100) * footprint_m
         return trigger_m / self.min_capture_interval_s
 
 

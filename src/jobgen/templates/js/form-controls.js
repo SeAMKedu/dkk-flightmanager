@@ -24,6 +24,7 @@ function updateGsd() {
   var el = document.getElementById('gsdv');
   if (!d || isNaN(h)) { el.textContent = '—'; return; }
   el.textContent = (h * d.pixel_pitch_um / (d.focal_length_mm * 10)).toFixed(2);
+  if (_speedMsOverride === null) _renderSpeedControl();
 }
 var _radiusLinked = true;
 
@@ -200,7 +201,7 @@ function _doNewJob() {
   clearError();
   hideExtModifiedNotice();
   document.getElementById('offset').value = 0;
-  document.getElementById('speed-ms').value = '';
+  setSpeedSilent(null);
   setRouteAngleSilent(null);
   _routeAngleAuto = null;
   _clearRouteLayer();
@@ -247,7 +248,7 @@ function getParams() {
     keepout: document.getElementById('kochk').checked,
     preview_radius_m: parseFloat(document.getElementById('warn-radius').value) || null,
     route_angle_deg: _routeAngleDeg,
-    speed_ms: parseFloat(document.getElementById('speed-ms').value) || null,
+    speed_ms: _speedMsOverride,
   };
 }
 

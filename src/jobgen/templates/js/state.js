@@ -21,6 +21,7 @@ var _activeJobFolder = null; // folder part, null for root
 // Route planner state
 var _routeAngleDeg = null;    // null = auto, number = user override
 var _routeAngleAuto = null;   // computed by Python on preview
+var _speedMsOverride = null;  // null = auto, number = user override
 var _cfgOverlapFront = 80;    // set from /api/config
 var _cfgOverlapSide  = 70;
 var _cfgDefaultSpeedMs = 8.9;

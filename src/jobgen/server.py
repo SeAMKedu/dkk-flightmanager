@@ -122,7 +122,8 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
                 "pixel_pitch_um":  d.pixel_pitch_um,
                 "image_width_px":  d.image_width_px,
                 "image_height_px": d.image_height_px,
-                "battery_minutes": d.battery_minutes,
+                "battery_minutes":       d.battery_minutes,
+                "min_capture_interval_s": d.min_capture_interval_s,
             }
             for d in _st.config.drones
         ]
