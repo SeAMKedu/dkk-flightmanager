@@ -165,6 +165,54 @@ async function openGoogleMaps() {
   }
 }
 
+// ── Route rename ─────────────────────────────────────────────────────────────
+// Prefix every selected job with YYYYMMDD-NN- in route order.
+// Strips any existing prefix matching that pattern before applying the new one.
+var _ROUTE_PREFIX_RE = /^\d{8}-\d{2,}-/;
+
+async function routeRename() {
+  var result = await _loadSelectedJobs();
+  if (!result) return;
+  // Skeleton jobs (no sort_order and no takeoff point) are not part of any
+  // route — exclude them so the index sequence only counts flyable jobs.
+  var jobs = result.jobs.filter(function(j) {
+    return j.params.sort_order != null || j.params.takeoff_point_4326 != null;
+  });
+  var n = jobs.length;
+  if (!n) return;
+
+  var today = new Date();
+  var dd = today.getFullYear().toString()
+    + String(today.getMonth() + 1).padStart(2, '0')
+    + String(today.getDate()).padStart(2, '0');
+  var digits = n >= 100 ? 3 : 2;
+
+  for (var i = 0; i < jobs.length; i++) {
+    var job = jobs[i];
+    var baseName = (job.params.job_name || job.path.replace(/^.*\//, ''))
+      .replace(_ROUTE_PREFIX_RE, '');
+    var idx = String(i + 1).padStart(digits, '0');
+    var newName = dd + '-' + idx + '-' + baseName;
+    if (newName === baseName) continue;
+    try {
+      var r = await fetch(jobApiUrl(job.path), {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({new_name: newName})
+      });
+      if (!r.ok) {
+        var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
+        showError('Rename failed for ' + baseName + ': ' + (e.detail || ''));
+      } else {
+        var data = await r.json();
+        if (_activeJob === job.path) { _activeJob = data.path; }
+        job.path = data.path;
+      }
+    } catch(err) { showError('Rename failed: ' + err.message); }
+  }
+  clearSelection();
+  await loadJobsList();
+}
+
 // ── Bulk delete ───────────────────────────────────────────────────────────────
 async function bulkDelete() {
   var n = _selectedJobs.size;
