@@ -118,7 +118,7 @@ A toolbar floats at the top of the map whenever map view is active. **Export Rou
 | Drone & height | dropdown + number field (live GSD shown) |
 | Warning radius | linked to 3× height by default; click "3:1" to restore the link |
 | Route angle | Auto pill picks the MBR longest-axis bearing; −/+ step buttons (hold for continuous rotation) override it by 1° increments |
-| Survey speed | optional per-job override of the configured default flight speed |
+| Survey speed | optional per-job override; leave blank to use auto-calculated speed (see below) |
 | Offset | expand (+) or contract (−) the survey polygon in metres |
 | Simplify | Auto pill + −/+ step buttons |
 | Keep-out | toggle to disable building buffer subtraction |
@@ -423,6 +423,35 @@ the built-in list entirely, so copy across any profiles you still want to use.
 > Before flying a job generated for an M350 RTK, verify the value by exporting a
 > test mission from DJI Pilot 2 on the aircraft and checking `wpml:droneEnumValue`
 > in the KMZ.
+
+### Strip speed (auto mode)
+
+The KMZ `autoFlightSpeed` value written into every mission is calculated automatically from the drone's SD card write throughput, the flight altitude, and the front overlap setting. This matches how DJI Pilot 2 computes its own "auto speed" and prevents the drone from triggering captures faster than the card can write — which causes buffer overflow and mid-flight image loss at low altitudes.
+
+The formula is:
+
+```
+strip_speed = (1 − front_overlap) × altitude × (sensor_height / focal_length) / capture_interval
+```
+
+`capture_interval` is the minimum time between consecutive shutter triggers, limited by how fast the SD card can flush one burst of files. Each drone profile in `drones.toml` carries a calibrated `min_capture_interval_s` value:
+
+| Profile | Capture mode | Interval | Calibrated from |
+|---|---|---|---|
+| `m3m`, `m3m-ms` | RGB + MS simultaneously (5 files ≈ 49 MB/capture) | 2.38 s | DJI Pilot 2 auto-speed: 8.9 m/s at 100 m AGL, 80% front overlap |
+| `m3e` | RGB only (1 file ≈ 9 MB/capture) | 1.41 s | M3M in RGB-only mode: 15 m/s at 100 m (same sensor) |
+| P1 profiles | — | 2.0 s | Estimate — calibrate from DJI Pilot 2 at a known altitude |
+
+Example speeds for the M3M (RGB+MS) at 80% front overlap:
+
+| Altitude | Strip speed |
+|---|---|
+| 30 m | ~2.7 m/s |
+| 50 m | ~4.5 m/s |
+| 80 m | ~7.1 m/s |
+| 100 m | ~8.9 m/s |
+
+To override with a fixed speed, set `auto_flight_speed_ms` under `[flight]` in `config.toml` or use the **Survey speed** field in the browser UI. Leave it blank (the default) to keep auto mode. To calibrate a new drone or capture mode, read the auto-speed value from DJI Pilot 2 at a known altitude and back-calculate: `interval = (1 − overlap) × altitude × (sensor_height / focal_length) / speed`.
 
 ### Batch skeleton job creation (`jobgen batch`)
 

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from jobgen._server_state import SSEResponse
+from jobgen.wpml import resolve_strip_speed
 from pydantic import BaseModel
 
 import jobgen._server_state as _st
@@ -351,7 +352,7 @@ async def route_estimate(req: RouteEstimateRequest):
         drone = cfg.active_drone()
 
     H = req.height_m if req.height_m else drone.height_from_gsd(cfg.flight.target_gsd_cm)
-    speed_ms = req.speed_ms if req.speed_ms else cfg.flight.auto_flight_speed_ms
+    speed_ms = req.speed_ms if req.speed_ms else resolve_strip_speed(cfg.flight, drone, H)
 
     p_m = drone.pixel_pitch_um * 1e-6
     f_m = drone.focal_length_mm * 1e-3

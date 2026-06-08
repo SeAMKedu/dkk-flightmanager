@@ -63,6 +63,33 @@ _PAYLOAD_POS_IDX = "0"
 # Default battery threshold (M3M).  Exported for use in tests.
 ONE_BATTERY_MINUTES = 28.0
 
+# Fallback capture interval when no DroneConfig is available.
+# Calibrated from M3M: 8.9 m/s at 100 m AGL, 80% front overlap.
+_FALLBACK_CAPTURE_INTERVAL_S = 2.38
+
+
+def resolve_strip_speed(
+    cfg: FlightConfig,
+    drone: DroneConfig | None,
+    height_m: float,
+) -> float:
+    """Return the strip speed (m/s) to write into the KMZ.
+
+    If cfg.auto_flight_speed_ms is set it takes precedence (manual override).
+    Otherwise the speed is calculated from the drone's min_capture_interval_s,
+    the flight altitude, and the front overlap — matching DJI Pilot 2's own
+    auto-speed logic.
+    """
+    if cfg.auto_flight_speed_ms is not None:
+        return cfg.auto_flight_speed_ms
+    if drone is not None:
+        return drone.auto_speed(height_m, cfg.overlap_front_pct)
+    # Fallback: M3M-like calculation when no drone profile is loaded.
+    sensor_h_m = M3E_IMAGE_HEIGHT_PX * M3E_PIXEL_PITCH_UM * 1e-6
+    footprint_m = height_m * sensor_h_m / (M3E_FOCAL_LENGTH_MM * 1e-3)
+    trigger_m = (1 - cfg.overlap_front_pct / 100) * footprint_m
+    return trigger_m / _FALLBACK_CAPTURE_INTERVAL_S
+
 
 # ---- Public return type ----
 
@@ -75,6 +102,7 @@ class KmzResult:
     estimated_flight_time_min: float
     over_one_battery: bool
     drone_name: str = "m3m"
+    strip_speed_ms: float = 0.0
 
 
 # ---- Main entry point ----
@@ -104,12 +132,15 @@ def build_kmz(
         if drone else flight_config.derived_flight_height_m
     )
     gsd_cm = flight_config.target_gsd_cm
+    speed_ms = resolve_strip_speed(flight_config, drone, height_m)
 
-    log.info("Building KMZ: height=%.1f m, GSD=%.1f cm, drone=%s, terrain_follow=%s",
-             height_m, gsd_cm, drone.name if drone else "m3m(default)", dsm_path is not None)
+    log.info(
+        "Building KMZ: height=%.1f m, GSD=%.1f cm, speed=%.1f m/s, drone=%s, terrain_follow=%s",
+        height_m, gsd_cm, speed_ms, drone.name if drone else "m3m(default)", dsm_path is not None,
+    )
 
     # Battery budget estimate
-    budget = _estimate_budget(survey_4326, flight_config, drone=drone)
+    budget = _estimate_budget(survey_4326, flight_config, speed_ms=speed_ms, drone=drone)
     battery_limit = drone.battery_minutes if drone else ONE_BATTERY_MINUTES
 
     if budget["over_one_battery"]:
@@ -124,8 +155,8 @@ def build_kmz(
     if dsm_path is not None and dsm_path.exists():
         dsm_kmz_name = f"wpmz/res/dsm/{dsm_path.name}"
 
-    template_xml = _build_template_kml(survey_4326, flight_config, dsm_kmz_name, drone=drone)
-    waylines_xml = _build_waylines_stub(flight_config, drone=drone)
+    template_xml = _build_template_kml(survey_4326, flight_config, dsm_kmz_name, speed_ms=speed_ms, drone=drone)
+    waylines_xml = _build_waylines_stub(flight_config, speed_ms=speed_ms, drone=drone)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -145,6 +176,7 @@ def build_kmz(
         estimated_flight_time_min=budget["flight_time_min"],
         over_one_battery=budget["over_one_battery"],
         drone_name=drone.name if drone else "m3m",
+        strip_speed_ms=speed_ms,
     )
 
 
@@ -155,6 +187,7 @@ def _build_template_kml(
     cfg: FlightConfig,
     dsm_kmz_name: str | None,
     *,
+    speed_ms: float,
     drone: DroneConfig | None = None,
 ) -> str:
     height   = drone.height_from_gsd(cfg.target_gsd_cm) if drone else cfg.derived_flight_height_m
@@ -207,7 +240,7 @@ def _build_template_kml(
         _tx(wc, f"{_WPML}surfaceRelativeHeight",     height_s)
         _tx(wc, f"{_WPML}dsmFile",                  dsm_kmz_name)
 
-    _tx(folder, f"{_WPML}autoFlightSpeed", f"{cfg.auto_flight_speed_ms:.15g}")
+    _tx(folder, f"{_WPML}autoFlightSpeed", f"{speed_ms:.15g}")
 
     # Placemark
     pm = etree.SubElement(folder, f"{_KML}Placemark")
@@ -257,7 +290,7 @@ def _build_template_kml(
     ).decode("utf-8")
 
 
-def _build_waylines_stub(cfg: FlightConfig, *, drone: DroneConfig | None = None) -> str:
+def _build_waylines_stub(cfg: FlightConfig, *, speed_ms: float, drone: DroneConfig | None = None) -> str:
     """Minimal waylines.wpml — missionConfig only, no waypoints.
 
     DJI Pilot 2 regenerates the lawnmower waypoints from template.kml on
@@ -296,7 +329,7 @@ def _build_waylines_stub(cfg: FlightConfig, *, drone: DroneConfig | None = None)
     _tx(folder, f"{_WPML}waylineId",         "0")
     _tx(folder, f"{_WPML}distance",          "0")
     _tx(folder, f"{_WPML}duration",          "0")
-    _tx(folder, f"{_WPML}autoFlightSpeed",   f"{cfg.auto_flight_speed_ms:.15g}")
+    _tx(folder, f"{_WPML}autoFlightSpeed",   f"{speed_ms:.15g}")
 
     return etree.tostring(
         root,
@@ -312,6 +345,7 @@ def _estimate_budget(
     survey_4326: BaseGeometry,
     cfg: FlightConfig,
     *,
+    speed_ms: float,
     drone: DroneConfig | None = None,
     home_3067: tuple[float, float] | None = None,
 ) -> dict:
@@ -340,7 +374,7 @@ def _estimate_budget(
     flight_time_min = _route.estimate_flight_time(
         result,
         flight_height_m=H,
-        auto_speed_ms=cfg.auto_flight_speed_ms,
+        auto_speed_ms=speed_ms,
         transit_speed_ms=cfg.transitional_speed_ms,
         takeoff_security_height_m=cfg.takeoff_security_height_m,
         home_3067=home_3067,

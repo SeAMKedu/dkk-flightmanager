@@ -55,8 +55,9 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "description": "Lateral overlap between adjacent flight strips.",
     },
     "flight.auto_flight_speed_ms": {
-        "label": "Strip flight speed", "unit": "m/s",
-        "description": "Speed along mapping strips. DJI Pilot 2 derives shutter timing from this — match to your sensor's max shutter speed at the target GSD.",
+        "label": "Strip flight speed override", "unit": "m/s",
+        "description": "Speed along mapping strips. Leave blank for auto mode (calculated per flight from altitude, overlap, and drone capture interval). Set a fixed value only to override — e.g. to slow down in strong winds.",
+        "nullable": True,
     },
     "flight.dsm_margin_m": {
         "label": "DSM margin", "unit": "m",

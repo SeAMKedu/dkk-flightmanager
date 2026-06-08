@@ -13,8 +13,11 @@ takeoff_security_height_m = 50
 transitional_speed_ms = 15    # m/s transit between waylines
 overlap_front_pct = 80
 overlap_side_pct = 70
-# Speed along mapping strips (m/s). Default matches the reference fixture (8.9 m/s).
-auto_flight_speed_ms = 8.9
+# Speed along mapping strips (m/s).
+# Omit (or comment out) to use auto mode: speed is calculated per flight from the
+# drone's min_capture_interval_s, altitude, and front overlap — matching DJI Pilot 2.
+# Set a fixed value here only to override (e.g. to slow down in strong winds).
+# auto_flight_speed_ms = 8.9
 # Extra margin around the survey polygon in the terrain-follow DSM (metres).
 # Covers the RTH path and takeoff/landing area outside the survey polygon.
 dsm_margin_m = 300

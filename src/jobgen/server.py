@@ -137,6 +137,18 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
         from jobgen.net_stats import get as _get_stats
         return _get_stats()
 
+    def _compute_default_speed() -> float:
+        """Return the strip speed that will be used for the current config/drone.
+
+        When auto_flight_speed_ms is None the speed is altitude-dependent; we
+        compute it at the current default altitude so the UI can show a sensible
+        placeholder.  The actual KMZ value is re-computed at export time.
+        """
+        from jobgen.wpml import resolve_strip_speed
+        drone = _st.config.active_drone()
+        H = drone.height_from_gsd(_st.config.flight.target_gsd_cm)
+        return resolve_strip_speed(_st.config.flight, drone, H)
+
     @app.get("/api/config")
     async def get_config():
         import os
@@ -156,7 +168,7 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             "mml_api_key": os.environ.get("MML_API_KEY", ""),
             "overlap_front_pct": _st.config.flight.overlap_front_pct,
             "overlap_side_pct":  _st.config.flight.overlap_side_pct,
-            "auto_flight_speed_ms": _st.config.flight.auto_flight_speed_ms,
+            "auto_flight_speed_ms": _compute_default_speed(),
             "takeoff_security_height_m": _st.config.flight.takeoff_security_height_m,
         }
 

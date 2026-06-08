@@ -46,6 +46,13 @@ class DroneConfig(BaseModel):
     # Battery planning — flag jobs that exceed this estimated flight time.
     battery_minutes: float = Field(default=28.0, gt=0)
 
+    # Minimum time (s) between consecutive shutter triggers — the SD card write
+    # bottleneck.  Used by auto_speed() to derive the maximum safe strip speed.
+    # Calibrate by back-calculating from DJI Pilot 2's auto-speed at a known
+    # altitude: interval = (1 - overlap) * altitude * sensor_h/focal / speed.
+    # M3M: 2.38 s (5-file MS+RGB burst, ~49 MB; calibrated from 8.9 m/s at 100 m).
+    min_capture_interval_s: float = Field(default=2.0, gt=0)
+
     def height_from_gsd(self, gsd_cm: float) -> float:
         """Return required AGL height (m) for a given GSD (cm/px)."""
         return (gsd_cm / 100) * self.focal_length_mm / (self.pixel_pitch_um / 1000)
@@ -53,6 +60,18 @@ class DroneConfig(BaseModel):
     def gsd_from_height(self, height_m: float) -> float:
         """Return achievable GSD (cm/px) at a given AGL height (m)."""
         return height_m * self.pixel_pitch_um / (self.focal_length_mm * 10)
+
+    def auto_speed(self, altitude_m: float, overlap_front_pct: int) -> float:
+        """Return the maximum safe strip speed (m/s) at a given altitude and front overlap.
+
+        Speed is limited by how quickly the camera can write each capture burst
+        (min_capture_interval_s).  At lower altitudes the along-track footprint
+        shrinks, so the drone must slow down to maintain the required overlap.
+        """
+        sensor_h_m = self.image_height_px * self.pixel_pitch_um * 1e-6
+        footprint_m = altitude_m * sensor_h_m / (self.focal_length_mm * 1e-3)
+        trigger_m = (1 - overlap_front_pct / 100) * footprint_m
+        return trigger_m / self.min_capture_interval_s
 
 
 def _default_drones() -> list[DroneConfig]:
@@ -71,10 +90,10 @@ class FlightConfig(BaseModel):
     transitional_speed_ms: float = Field(default=15.0)
     overlap_front_pct: int = Field(default=80, ge=0, le=100)
     overlap_side_pct: int = Field(default=70, ge=0, le=100)
-    # Speed along mapping strips (m/s). Default matches the reference fixture.
-    # DJI Pilot 2 derives this from sensor shutter speed + GSD; 8.9 m/s is
-    # appropriate for 80% front overlap at ~100 m AGL on the M3E.
-    auto_flight_speed_ms: float = Field(default=8.9, gt=0)
+    # Speed along mapping strips (m/s).  None (default) = auto-calculate from
+    # the active drone's min_capture_interval_s, altitude, and front overlap.
+    # Set a fixed value here only to override the auto calculation.
+    auto_flight_speed_ms: float | None = Field(default=None, gt=0)
     # Extra margin around the survey polygon bbox in the terrain-follow DSM (metres).
     # Covers the RTH path and takeoff/landing area outside the survey polygon.
     dsm_margin_m: int = Field(default=300, ge=0)

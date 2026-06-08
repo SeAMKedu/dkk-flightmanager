@@ -27,6 +27,10 @@ image_width_px     = 5280
 image_height_px    = 3956
 image_format       = "visable,narrow_band"
 battery_minutes    = 28.0
+# DJI Pilot 2 auto-speed at 100 m AGL, 80% front overlap:
+#   RGB+MS (this mode): 8.9 m/s → 2.38 s/capture (5 files: D.JPG 9 MB + 4×MS TIF 10 MB ≈ 49 MB)
+#   RGB-only:          15 m/s → 1.41 s/capture (1 file: D.JPG 9 MB only)
+min_capture_interval_s = 2.38
 
 [[drone]]
 name               = "m3m-ms"
@@ -47,6 +51,8 @@ image_width_px     = 2592
 image_height_px    = 1944
 image_format       = "visable,narrow_band"
 battery_minutes    = 28.0
+# Same physical camera burst as m3m (5-file write, ~49 MB).
+min_capture_interval_s = 2.38
 
 # ── Mavic 3 Enterprise ────────────────────────────────────────────────────────
 # Same airframe and RGB sensor as M3M; payload_sub_enum 0 = RGB-only capture.
@@ -67,6 +73,9 @@ image_width_px     = 5280
 image_height_px    = 3956
 image_format       = "wide"
 battery_minutes    = 28.0
+# RGB-only (~9 MB JPEG). M3M in RGB-only mode: 15 m/s at 100 m → 1.41 s.
+# M3E has the same sensor so the same interval applies — not directly verified on M3E.
+min_capture_interval_s = 1.41
 
 # ── Matrice 300 RTK + Zenmuse P1 ─────────────────────────────────────────────
 # drone_enum 60, payload_enum 50 confirmed from DJI Cloud-API-Doc.
@@ -87,6 +96,8 @@ image_width_px     = 8192
 image_height_px    = 5460
 image_format       = "wide"
 battery_minutes    = 35.0
+# 45 MP sensor. Estimate — calibrate from DJI Pilot 2 auto-speed at a known altitude.
+min_capture_interval_s = 2.0
 
 [[drone]]
 name               = "m300-p1-35"
@@ -102,6 +113,7 @@ image_width_px     = 8192
 image_height_px    = 5460
 image_format       = "wide"
 battery_minutes    = 35.0
+min_capture_interval_s = 2.0
 
 [[drone]]
 name               = "m300-p1-50"
@@ -117,6 +129,7 @@ image_width_px     = 8192
 image_height_px    = 5460
 image_format       = "wide"
 battery_minutes    = 35.0
+min_capture_interval_s = 2.0
 
 # ── Matrice 350 RTK + Zenmuse P1 ─────────────────────────────────────────────
 # drone_enum 89 is from community sources — NOT confirmed from official DJI WPML
@@ -137,6 +150,7 @@ image_width_px     = 8192
 image_height_px    = 5460
 image_format       = "wide"
 battery_minutes    = 40.0
+min_capture_interval_s = 2.0
 
 [[drone]]
 name               = "m350-p1-35"
@@ -152,6 +166,7 @@ image_width_px     = 8192
 image_height_px    = 5460
 image_format       = "wide"
 battery_minutes    = 40.0
+min_capture_interval_s = 2.0
 
 [[drone]]
 name               = "m350-p1-50"
@@ -167,3 +182,4 @@ image_width_px     = 8192
 image_height_px    = 5460
 image_format       = "wide"
 battery_minutes    = 40.0
+min_capture_interval_s = 2.0

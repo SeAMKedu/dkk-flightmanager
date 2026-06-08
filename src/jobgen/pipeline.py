@@ -43,7 +43,7 @@ from jobgen.parcels import fetch_parcels
 from jobgen.properties import fetch_properties
 from jobgen.raster import build_site_dsm
 from jobgen.preview import build_map_preview, build_preview_dsm_thumbnail
-from jobgen.wpml import build_homes_kml, build_kmz
+from jobgen.wpml import build_homes_kml, build_kmz, resolve_strip_speed
 from jobgen.zones import ZoneHit, check_zones
 
 log = logging.getLogger(__name__)
@@ -480,7 +480,7 @@ def run_preview(
         _ft = _route.estimate_flight_time(
             _rr,
             flight_height_m=_H,
-            auto_speed_ms=config.flight.auto_flight_speed_ms,
+            auto_speed_ms=resolve_strip_speed(config.flight, _drone_cfg, _H),
             transit_speed_ms=config.flight.transitional_speed_ms,
             takeoff_security_height_m=config.flight.takeoff_security_height_m,
             home_3067=_home_3067,
