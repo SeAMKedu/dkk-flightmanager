@@ -101,6 +101,8 @@ The panel updates live — changes made by the CLI, MCP server, or another tab a
 
 **Map view:** click **Map** on any folder header to see all its job polygons on the map. Dash pattern encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown. Hover a polygon to open a popup with the job name, status, area, and two quick actions: **⊘ Skip** (exclude the job from route ordering and counting) and **Delete**. Skipped jobs render at low opacity. Hover the popup to keep it open; mouse out to dismiss. Click a polygon to select it; double-click to open the job for editing. Ctrl+click to multi-select. Click **Map** again, open a job, or click **＋ New Job** to return to the editor.
 
+A toolbar floats at the top of the map whenever map view is active. **Export Route** copies the `.kmz` and homes KML for every route job in the current folder to a local directory you specify — a quick way to collect all mission files before heading to the field. Route jobs are those with a computed takeoff point that have not been marked as skipped; `homes.kml` files are renamed `<job_name>_homes.kml` to avoid collisions. The remaining toolbar buttons (**Merge**, **Export KML**, **Google Maps**, **Route rename**, **Move**, **Delete**) become active when one or more jobs are selected.
+
 ### Defining the survey area
 
 - **Parcel / property IDs** — paste Ruokavirasto parcel IDs or MML kiinteistötunnus values; the map updates on blur.
@@ -510,7 +512,7 @@ The same table appears on `jobgen serve` shutdown and in the **ⓘ About** dialo
 
 ### On the RC
 
-1. Copy `<name>.kmz` and `<name>_homes.kml` to the RC via USB.
+1. Copy mission files to the RC via USB. Use **Export Route** in map view to copy all `.kmz` and homes KML files for the planned route to a single folder in one click, then transfer that folder to the RC.
 2. Open DJI Pilot 2 → **Routes** → import `<name>.kmz`.
    The DSM is embedded in the KMZ — Pilot 2 links it automatically.
 3. In the map view → **Custom layers** → import `<name>_homes.kml` to see building pins.

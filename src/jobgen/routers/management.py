@@ -688,6 +688,52 @@ async def create_folder(body: dict):
     return {"name": folder_name}
 
 
+@router.post("/api/export-route")
+async def export_route(body: dict):
+    """Copy .kmz and homes.kml for every route job to a local directory.
+
+    Route jobs are those with a takeoff_point_4326 and skipped != true.
+    ``folder`` scopes to a specific group folder; null exports all folders.
+    homes.kml is renamed ``<job_name>_homes.kml`` to avoid collisions.
+    """
+    dest_str = (body.get("dest_dir") or "").strip()
+    if not dest_str:
+        raise HTTPException(400, detail="dest_dir is required")
+
+    folder: str | None = body.get("folder")
+
+    dest_path = Path(dest_str).expanduser().resolve()
+    try:
+        dest_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(400, detail=f"Cannot create destination folder: {exc}") from exc
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    groups = scan_jobs(output_dir)
+
+    copied = 0
+    for group in groups:
+        if folder is None:
+            if group["name"] is not None:
+                continue
+        elif group["name"] != folder:
+            continue
+        for card in group["jobs"]:
+            if not card.get("takeoff_point_4326") or card.get("skipped", False):
+                continue
+            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
+            job_name = card["name"]
+            for kmz_file in sorted(job_dir.glob("*.kmz")):
+                shutil.copy2(kmz_file, dest_path / kmz_file.name)
+                copied += 1
+            homes_kml = job_dir / "homes.kml"
+            if homes_kml.exists():
+                shutil.copy2(homes_kml, dest_path / f"{job_name}_homes.kml")
+                copied += 1
+
+    return {"ok": True, "copied": copied, "dest_dir": str(dest_path)}
+
+
 @router.delete("/api/folders/{folder_name}")
 async def delete_folder(folder_name: str, force: bool = False):
     output_dir = Path(_st.config.output.output_dir).resolve()

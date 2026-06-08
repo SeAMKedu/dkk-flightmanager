@@ -130,6 +130,7 @@
       <button class="sel-action" onclick="exportKml()">Export KML</button>
       <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
       <button class="sel-action" onclick="routeRename()">Route rename</button>
+      <button class="sel-action" onclick="exportRoute()">Export Route</button>
       <button class="sel-action" onclick="mvBulkMove()">Move</button>
       <button class="sel-action danger" id="mv-delete-btn" onclick="mvBulkDelete()">Delete</button>
       <button class="sel-clear" onclick="mvClearSel()" title="Clear selection">&#10005;</button>
@@ -287,6 +288,22 @@
       <input type="text" id="folder-name-input" placeholder="e.g. spring-2026" autocomplete="off">
       <div id="folder-error" style="display:none;color:#f87171;font-size:11px;margin-top:4px"></div>
       <button id="folder-submit" onclick="submitFolder()">Create folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="export-route-modal">
+  <div id="export-route-card">
+    <div class="batch-hdr">
+      <span>Export Route</span>
+      <button class="batch-close" onclick="closeExportRouteModal()">&#10005;</button>
+    </div>
+    <div id="export-route-form">
+      <p id="export-route-desc">Copies .kmz and homes KML for all route jobs to a folder on disk.</p>
+      <label>Destination folder</label>
+      <input type="text" id="export-route-dest" placeholder="~/Desktop/route" autocomplete="off">
+      <div id="export-route-error" style="display:none;color:#f87171;font-size:11px;margin-top:4px"></div>
+      <button id="export-route-submit" onclick="submitExportRoute()">Export</button>
     </div>
   </div>
 </div>

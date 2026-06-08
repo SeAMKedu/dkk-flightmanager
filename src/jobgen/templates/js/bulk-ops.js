@@ -213,6 +213,56 @@ async function routeRename() {
   await loadJobsList();
 }
 
+// ── Export Route ─────────────────────────────────────────────────────────────
+function exportRoute() {
+  var modal = document.getElementById('export-route-modal');
+  var desc  = document.getElementById('export-route-desc');
+  var err   = document.getElementById('export-route-error');
+  var scope = _mvCurrentFolder ? 'folder "' + _mvCurrentFolder + '"' : 'all folders';
+  desc.textContent = 'Copies .kmz and homes KML for all route jobs in ' + scope + ' to a folder on disk.';
+  err.style.display = 'none';
+  document.getElementById('export-route-dest').value = '';
+  modal.classList.add('open');
+  setTimeout(function(){ document.getElementById('export-route-dest').focus(); }, 50);
+}
+
+function closeExportRouteModal() {
+  document.getElementById('export-route-modal').classList.remove('open');
+}
+
+async function submitExportRoute() {
+  var dest = document.getElementById('export-route-dest').value.trim();
+  var err  = document.getElementById('export-route-error');
+  if (!dest) { err.textContent = 'Please enter a destination path.'; err.style.display = 'block'; return; }
+  err.style.display = 'none';
+
+  var btn = document.getElementById('export-route-submit');
+  btn.disabled = true;
+  btn.textContent = 'Exporting…';
+
+  try {
+    var r = await fetch('/api/export-route', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({dest_dir: dest, folder: _mvCurrentFolder})
+    });
+    var data = await r.json();
+    if (!r.ok) {
+      err.textContent = data.detail || 'Export failed (HTTP ' + r.status + ')';
+      err.style.display = 'block';
+      return;
+    }
+    btn.textContent = '✓ ' + data.copied + ' file' + (data.copied !== 1 ? 's' : '') + ' copied';
+    setTimeout(closeExportRouteModal, 1500);
+  } catch(e) {
+    err.textContent = 'Export failed: ' + e.message;
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Export';
+  }
+}
+
 // ── Bulk delete ───────────────────────────────────────────────────────────────
 async function bulkDelete() {
   var n = _selectedJobs.size;
