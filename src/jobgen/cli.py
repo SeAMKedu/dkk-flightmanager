@@ -330,6 +330,9 @@ def run_job_cmd(
         else:
             typer.echo(f"Warning: map file not found at {map_path}", err=True)
 
+    from jobgen.net_stats import print_summary as _print_net_stats
+    _print_net_stats()
+
     if manifest.get("needs_review") or not manifest.get("flight_ready"):
         raise typer.Exit(2)   # non-zero so scripts can detect review-needed
 
@@ -375,6 +378,8 @@ def cache_warm(
     typer.echo(f"  Buildings: {len(bldg_records)} tile(s) cached.")
 
     typer.echo("Cache warm complete.")
+    from jobgen.net_stats import print_summary as _print_net_stats
+    _print_net_stats()
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +712,8 @@ def batch_cmd(
 
     typer.echo()
     typer.echo(f"Created: {ok}  Skipped: {skipped}  Failed: {failed}")
+    from jobgen.net_stats import print_summary as _print_net_stats
+    _print_net_stats()
     if failed:
         raise typer.Exit(1)
 
@@ -756,7 +763,30 @@ def serve_cmd(
     if not no_open:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
-    uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")
+    # Suppress CancelledError noise from SSE connections cancelled at shutdown.
+    # Starlette's listen_for_disconnect raises CancelledError when uvicorn
+    # force-cancels open connections after the graceful-shutdown timeout;
+    # this is expected behaviour, not a real error.
+    import asyncio as _asyncio
+    import logging as _logging
+
+    class _DropCancelledError(_logging.Filter):
+        def filter(self, record: _logging.LogRecord) -> bool:
+            if record.exc_info and record.exc_info[0] is not None:
+                if issubclass(record.exc_info[0], _asyncio.CancelledError):
+                    return False
+            return True
+
+    _logging.getLogger("uvicorn.error").addFilter(_DropCancelledError())
+
+    uvicorn.run(
+        web_app,
+        host="127.0.0.1",
+        port=port,
+        log_level="info",
+        access_log=False,
+        timeout_graceful_shutdown=3,
+    )
 
 
 if __name__ == "__main__":

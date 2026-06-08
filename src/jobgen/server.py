@@ -88,11 +88,23 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
         output_dir = Path(_st.config.output.output_dir).resolve()
         task = asyncio.create_task(_watch_output_dir(output_dir))
         yield
+        # Send shutdown sentinel to all /api/events clients so their generators
+        # exit cleanly before uvicorn tears down the connections. Without this,
+        # Starlette's listen_for_disconnect gets a CancelledError mid-wait and
+        # uvicorn logs it as ERROR.
+        for q in list(_st.event_queues):
+            try:
+                q.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+        await asyncio.sleep(0.15)  # let all SSE generators drain their sentinel
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+        from jobgen.net_stats import print_summary as _print_net_stats
+        _print_net_stats()
 
     app = FastAPI(title="dkk-jobmaker", docs_url=None, redoc_url=None, lifespan=lifespan)
 
@@ -108,6 +120,8 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
                 "label":           d.label,
                 "focal_length_mm": d.focal_length_mm,
                 "pixel_pitch_um":  d.pixel_pitch_um,
+                "image_width_px":  d.image_width_px,
+                "image_height_px": d.image_height_px,
                 "battery_minutes": d.battery_minutes,
             }
             for d in _st.config.drones
@@ -117,6 +131,11 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     async def get_version():
         from jobgen import __version__
         return {"name": "dkk-jobmaker", "version": __version__}
+
+    @app.get("/api/stats")
+    async def get_stats():
+        from jobgen.net_stats import get as _get_stats
+        return _get_stats()
 
     @app.get("/api/config")
     async def get_config():
@@ -135,6 +154,10 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             "keepout":     _st.config.home_safety.offset_enabled,
             "vlos_range_m": _st.config.home_safety.vlos_range_m,
             "mml_api_key": os.environ.get("MML_API_KEY", ""),
+            "overlap_front_pct": _st.config.flight.overlap_front_pct,
+            "overlap_side_pct":  _st.config.flight.overlap_side_pct,
+            "auto_flight_speed_ms": _st.config.flight.auto_flight_speed_ms,
+            "takeoff_security_height_m": _st.config.flight.takeoff_security_height_m,
         }
 
     app.include_router(execution.router)

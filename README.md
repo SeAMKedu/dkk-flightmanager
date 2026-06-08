@@ -91,15 +91,19 @@ The single-page Leaflet map interface is organised around four areas: the **Jobs
 
 ### Jobs panel
 
-The panel lists all saved jobs grouped into folders. Use the header buttons to create a new job (**＋ New Job**), batch-import IDs (**↓ Batch**), or add a folder (**＋ Folder**). A filter input sits below. Click any card to re-open a job — the form and map restore instantly and a fresh preview runs automatically. The three-dot card menu offers **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. Collapse the panel with the `◄` tab.
+The panel lists all saved jobs grouped into folders. Use the header buttons to create a new job (**＋ New Job**), batch-import IDs (**↓ Batch**), or add a folder (**＋ Folder**). If a folder name already exists the dialog stays open and shows an inline error. A filter input sits below. Click any card to re-open a job — the form and map restore instantly and a fresh preview runs automatically. The three-dot card menu offers **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. Collapse the panel with the `◄` tab.
 
 The panel updates live — changes made by the CLI, MCP server, or another tab appear immediately. If the currently open job is modified externally, a blue notice offers **Reload** or **Dismiss**.
 
 **Batch import:** click **↓ Batch**, paste parcel/property IDs (one per line, `#` comments ignored) or load a `.txt`/`.csv` file, pick a folder and optional param overrides, then click **Create N jobs**. Each ID becomes a skeleton job (polygon stored, no KMZ yet). Equivalent CLI command: `jobgen batch`.
 
-**Multi-select:** hover a card to reveal its checkbox. Select two or more to activate the toolbar: **Merge** (union polygons into a new job), **Google Maps** (export KML + open navigation waypoints), **Move**, or **Delete**.
+**Multi-select:** hover a card to reveal its checkbox. Select two or more to activate the toolbar: **Merge** (union polygons into a new job), **Export KML** (download selected jobs as a KML file), **Google Maps** (open navigation waypoints in Google Maps), **Route rename** (prefix each selected job with `YYYYMMDD-NN-` in route order, skipping skeleton jobs — re-running on the same selection replaces the existing prefix), **Move**, or **Delete**.
 
-**Map view:** click **Map** on any folder header to see all its job polygons on the map. Dash pattern encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown. Click a polygon for a popup; Ctrl+click to multi-select. Click **Map** again, open a job, or click **＋ New Job** to return to the editor.
+**Map view:** click **Map** on any folder header to see all its job polygons on the map. Dash pattern encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown. Hover a polygon to open a popup with the job name, status, area, and two quick actions: **⊘ Skip** (exclude the job from route ordering and counting) and **Delete**. Skipped jobs render at low opacity. Hover the popup to keep it open; mouse out to dismiss. Click a polygon to select it; double-click to open the job for editing. Ctrl+click to multi-select. Click **Map** again, open a job, or click **＋ New Job** to return to the editor.
+
+A toolbar floats at the top of the map whenever map view is active. **Export Route** copies the `.kmz` and homes KML for every route job in the current folder to a local directory you specify — a quick way to collect all mission files before heading to the field. Route jobs are those with a computed takeoff point that have not been marked as skipped; `homes.kml` files are renamed `<job_name>_homes.kml` to avoid collisions. The remaining toolbar buttons (**Merge**, **Export KML**, **Google Maps**, **Route rename**, **Move**, **Delete**) become active when one or more jobs are selected.
+
+**Battery / flight-time timeline:** a proportional bar appears near the bottom centre of the map whenever there is at least one routable job (a job with a computed route and a flight-time estimate in its manifest). Each segment represents one job, scaled by its estimated flight time. Route index numbers appear below each segment in the same amber circles used on the map. Battery boundaries are shown as outline battery icons above the bar: a new battery starts whenever the remaining charge (85 % of the drone's rated battery duration) is insufficient to cover the next job. The total flight time for the displayed route is shown to the right. Click any segment to pan and zoom the map to that job's polygon. When jobs are multi-selected, only the selected jobs appear on the timeline; otherwise all routable jobs in the folder are shown.
 
 ### Defining the survey area
 
@@ -113,17 +117,20 @@ The panel updates live — changes made by the CLI, MCP server, or another tab a
 | Subcategory | A2 / A3 pills |
 | Drone & height | dropdown + number field (live GSD shown) |
 | Warning radius | linked to 3× height by default; click "3:1" to restore the link |
+| Route angle | Auto pill picks the MBR longest-axis bearing; −/+ step buttons (hold for continuous rotation) override it by 1° increments |
+| Survey speed | optional per-job override of the configured default flight speed |
 | Offset | expand (+) or contract (−) the survey polygon in metres |
 | Simplify | Auto pill + −/+ step buttons |
 | Keep-out | toggle to disable building buffer subtraction |
 
 ### Preview
 
-Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, and a DSM elevation overlay — all layers are toggleable from the legend.
+Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, DSM elevation overlay, and the flight route overlay — all layers are toggleable from the legend.
 
 - **UAS zones** are clickable: see altitude floor/ceiling and all overlapping zones at a point. Inner concentric zones of an airfield are shown with a dashed border for context. The zones legend layer auto-enables when zones first appear.
 - **Zone altitude cap** — when a zone hit carries an altitude floor, flight height is automatically set to 75 % of that floor and the warning radius re-syncs. An orange warning appears if you raise height above the floor. The cap is advisory; override freely.
 - **Takeoff marker** — a white ✕ on the polygon boundary marks the auto-suggested takeoff/landing point (the boundary point that minimises worst-case VLOS distance). Drag it to a more convenient spot. Click **↺ Reset takeoff position** to revert. Saved with the job.
+- **Route overlay** — amber lines show the planned lawnmower survey strips and all transit legs (inter-strip turns, takeoff-to-start, and return-to-home). The status panel below the map shows strip count, estimated photo count, and estimated total flight time. The route auto-computes on every parameter change; an accurate Python estimate (EPSG:3067 geometry, correct home transit distance) replaces the instant JS approximation 800 ms after input settles. Layer visibility is remembered across parameter changes and job switches. Legend eye toggles are persistent for the session.
 
 ### Polygon editing
 
@@ -131,15 +138,15 @@ Double-click the survey polygon to enter vertex-drag edit mode; double-click the
 
 In edit mode:
 - White squares = vertices; smaller white diamonds = midpoints. Drag a midpoint to add a vertex. Click a vertex to delete it.
-- **Bridge / Cut** — right-click any vertex to start (turns orange), then left-click more vertices:
-  - 3 vertices on the same polygon → **triangle cut** (subtracts from the polygon)
-  - 2 vertices on each of two polygons → **bridge** (joins them with a quadrilateral corridor)
+- **Bridge / Split** — right-click any vertex to start (turns orange), then left-click more vertices:
+  - 2 vertices on the **same polygon** → a split line appears and a **Split job** button shows in the hint bar. Click it to divide the job into two sibling jobs, each containing one half of the polygon with all other parameters (IDs, flight settings, color) copied across.
+  - 2 vertices on each of **two polygons** (4 total) → **bridge** (joins them with a quadrilateral corridor)
   - Press **Esc** or right-click to cancel.
 - Click **↻ Reset polygon** to revert all edits.
 
 ### Map tools
 
-- **Base layer** — the layer switcher (top-left, next to zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires `MML_API_KEY` in `.env`.
+- **Base layer** — the layer switcher (top-left, next to zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires `MML_API_KEY` in `.env`. MML's ortho tiles are natively available up to zoom 15; zooming in further upscales those tiles so the imagery stays visible for boundary editing rather than going blank.
 - **Measure** — hold **Ctrl** and right-click-drag to draw a dimensioning line with a distance label. Hold **Ctrl+Shift** to draw a radius circle instead. Click **✕** in the map controls to clear all measurements.
 - **Job color** — the color swatch next to the **Name** field sets the per-job display color used in map view. Saved immediately.
 
@@ -147,8 +154,9 @@ In edit mode:
 
 - **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs.
 - **⚙ Settings** — opens the in-browser config editor (all sections: Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties). Changed fields highlight in amber; a search box filters across all sections. Saving hot-reloads the server and writes directly to `config.toml`. Drone profiles must be edited in `config.toml` directly; `config.example.toml` is the reference for all options.
+- **ⓘ About** — the `⋯` button in the header opens the About dialog, which shows the software version and a **session statistics** table: how many tiles, parcel geometries, and zone records were fetched from the network vs. served from the local cache, and the total bytes downloaded.
 
-Parcel and property geometries are cached locally (400-day TTL) so repeat previews do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL).
+Parcel and property geometries are cached locally (400-day TTL) so repeat previews do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL). The same statistics are also printed to the terminal when `jobgen serve` shuts down (Ctrl-C).
 
 ---
 
@@ -472,6 +480,23 @@ jobgen cache status
 jobgen cache refresh --older-than 30
 ```
 
+After `jobgen run`, `jobgen batch`, and `jobgen cache warm` complete, a session statistics table is printed showing fetches vs. cache hits per data source and total bytes downloaded:
+
+```
+──────────────────────────────────────────────────────
+              Session network statistics
+──────────────────────────────────────────────────────
+  DEM tiles   3 fetched  (2.3 MB),  61 cached,  95% cache rate
+  Buildings   3 fetched  (56.3 KB),  57 cached,  95% cache rate
+  Parcels     18 cached,  100% cache rate
+  UAS zones   18 cached,  100% cache rate
+──────────────────────────────────────────────────────
+  Total       6 fetched,  154 cached,  2.3 MB downloaded
+──────────────────────────────────────────────────────
+```
+
+The same table appears on `jobgen serve` shutdown and in the **ⓘ About** dialog in the browser UI.
+
 ## Operator workflow
 
 ### Planning (office / laptop)
@@ -489,7 +514,7 @@ jobgen cache refresh --older-than 30
 
 ### On the RC
 
-1. Copy `<name>.kmz` and `<name>_homes.kml` to the RC via USB.
+1. Copy mission files to the RC via USB. Use **Export Route** in map view to copy all `.kmz` and homes KML files for the planned route to a single folder in one click, then transfer that folder to the RC.
 2. Open DJI Pilot 2 → **Routes** → import `<name>.kmz`.
    The DSM is embedded in the KMZ — Pilot 2 links it automatically.
 3. In the map view → **Custom layers** → import `<name>_homes.kml` to see building pins.

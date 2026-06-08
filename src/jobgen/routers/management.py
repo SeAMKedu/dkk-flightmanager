@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from jobgen._server_state import SSEResponse
 from pydantic import BaseModel
 
 import jobgen._server_state as _st
@@ -54,6 +54,8 @@ async def job_events():
             while True:
                 try:
                     data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    if data is None:  # shutdown sentinel — exit cleanly
+                        return
                     yield f"data: {data}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
@@ -62,7 +64,7 @@ async def job_events():
         finally:
             _st.event_queues.discard(queue)
 
-    return StreamingResponse(
+    return SSEResponse(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -78,6 +80,11 @@ class PolygonOpRequest(BaseModel):
     operation: str  # "bridge" | "subtract"
     polygon: dict   # GeoJSON Polygon or MultiPolygon (current survey)
     points: list    # 3 or 4 [lng, lat] coordinates
+
+
+class SplitRequest(BaseModel):
+    polygon_a: dict  # GeoJSON for the modified existing job
+    polygon_b: dict  # GeoJSON for the new sibling job
 
 
 class MergeRequest(BaseModel):
@@ -114,15 +121,20 @@ async def jobs_geojson(folder: str | None = None):
                 "type": "Feature",
                 "geometry": geom,
                 "properties": {
-                    "path":         card["path"],
-                    "name":         card["name"],
-                    "folder":       card["folder"],
-                    "color":        card["color"],
-                    "untouched":    card["untouched"],
-                    "flight_ready": card.get("flight_ready"),
-                    "needs_review": card.get("needs_review"),
-                    "area_ha":      card.get("area_ha"),
-                    "status":       card.get("status", "ok"),
+                    "path":              card["path"],
+                    "name":              card["name"],
+                    "folder":            card["folder"],
+                    "color":             card["color"],
+                    "untouched":         card["untouched"],
+                    "flight_ready":      card.get("flight_ready"),
+                    "needs_review":      card.get("needs_review"),
+                    "area_ha":           card.get("area_ha"),
+                    "flight_time_min":   card.get("flight_time_min"),
+                    "drone":             card.get("drone"),
+                    "status":            card.get("status", "ok"),
+                    "sort_order":        card.get("sort_order"),
+                    "takeoff_point_4326": card.get("takeoff_point_4326"),
+                    "skipped":           card.get("skipped", False),
                 },
             })
     return {"type": "FeatureCollection", "features": features}
@@ -131,6 +143,58 @@ async def jobs_geojson(folder: str | None = None):
 # ---------------------------------------------------------------------------
 # Single-job CRUD
 # ---------------------------------------------------------------------------
+
+
+@router.post("/api/jobs/reorder")
+async def reorder_jobs(body: dict):
+    """Assign sort_order 0..n-1 to the supplied ordered list of job paths.
+
+    Body: ``{paths: ["folder/a", "folder/b", ...]}``
+    Jobs not in the list have their sort_order cleared (set to null).
+    All paths must belong to the same folder.
+    """
+    paths: list[str] = body.get("paths") or []
+    if not paths:
+        return {"ok": True}
+    output_dir = Path(_st.config.output.output_dir).resolve()
+
+    # Derive folder from the first path; all must match
+    folder0, _, _ = resolve_job_dir(output_dir, paths[0])
+    for p in paths[1:]:
+        f, _, _ = resolve_job_dir(output_dir, p)
+        if f != folder0:
+            raise HTTPException(400, detail="All paths must be in the same folder")
+
+    # Clear sort_order for all sibling jobs, then set new values
+    siblings: list[Path] = []
+    if folder0:
+        parent = output_dir / folder0
+    else:
+        parent = output_dir
+    try:
+        siblings = [d for d in parent.iterdir() if d.is_dir()]
+    except PermissionError:
+        pass
+
+    ordered_set = {p: i for i, p in enumerate(paths)}
+
+    for job_dir in siblings:
+        params_path = job_dir / "job_params.json"
+        if not params_path.exists():
+            continue
+        try:
+            data = json.loads(params_path.read_text(encoding="utf-8"))
+            job_path = f"{folder0}/{job_dir.name}" if folder0 else job_dir.name
+            new_so = ordered_set.get(job_path)  # None if not in list
+            if data.get("sort_order") != new_so:
+                data["sort_order"] = new_so
+                params_path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+        except Exception:
+            pass
+
+    return {"ok": True}
 
 
 @router.get("/api/jobs/{path:path}")
@@ -169,20 +233,25 @@ async def update_job(path: str, body: dict):
     if not job_dir.is_dir():
         raise HTTPException(404, detail=f"Job '{path}' not found")
 
-    # Color update (no rename)
-    if "color" in body and "new_name" not in body:
-        color = body.get("color")
+    # Simple field update (color, sort_order, skipped — no rename)
+    if "new_name" not in body and ("color" in body or "sort_order" in body or "skipped" in body):
         params_path = job_dir / "job_params.json"
         if params_path.exists():
             try:
                 data = json.loads(params_path.read_text(encoding="utf-8"))
-                data["color"] = color
+                if "color" in body:
+                    data["color"] = body["color"]
+                if "sort_order" in body:
+                    so = body["sort_order"]
+                    data["sort_order"] = int(so) if so is not None else None
+                if "skipped" in body:
+                    data["skipped"] = bool(body["skipped"])
                 params_path.write_text(
                     json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
             except Exception as exc:
-                raise HTTPException(500, detail=f"Could not update color: {exc}")
-        return {"path": path, "color": color}
+                raise HTTPException(500, detail=f"Could not update job: {exc}")
+        return {"path": path, "color": body.get("color"), "sort_order": body.get("sort_order"), "skipped": body.get("skipped")}
 
     # Rename
     new_name: str = body.get("new_name", "").strip()
@@ -284,6 +353,61 @@ async def clone_job(path: str):
 
     clone_path = f"{folder}/{clone_name}" if folder else clone_name
     return {"path": clone_path, "name": clone_name, "folder": folder}
+
+
+@router.post("/api/jobs/{path:path}/split")
+async def split_job(path: str, req: SplitRequest):
+    """Split a job into two sibling jobs.
+
+    Updates the existing job's polygon to ``polygon_a`` and creates a new
+    sibling job with ``polygon_b``, copying all other params (IDs, flight,
+    polygon settings, color).  Returns ``{modified_path, new_path, new_name}``.
+    """
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+
+    params_path = job_dir / "job_params.json"
+    if not params_path.exists():
+        raise HTTPException(404, detail=f"Job '{path}' has no job_params.json")
+    try:
+        params = json.loads(params_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+
+    # Derive a unique name for the new job
+    parent_dir = job_dir.parent
+    base_name = f"{name}-split"
+    new_name = base_name
+    counter = 2
+    while (parent_dir / new_name).exists():
+        new_name = f"{base_name}-{counter}"
+        counter += 1
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Update existing job in place (polygon_a)
+    params["custom_polygon_4326"] = req.polygon_a
+    params["last_preview_geojson"] = None
+    params["saved_at"] = now
+    params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Create new sibling job (polygon_b, copy all other params)
+    new_params = dict(params)
+    new_params["job_name"] = new_name
+    new_params["custom_polygon_4326"] = req.polygon_b
+    new_params["last_preview_geojson"] = None
+    new_params["saved_at"] = now
+
+    new_dir = parent_dir / new_name
+    new_dir.mkdir(parents=True, exist_ok=True)
+    (new_dir / "job_params.json").write_text(
+        json.dumps(new_params, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    new_path = f"{folder}/{new_name}" if folder else new_name
+    return {"modified_path": path, "new_path": new_path, "new_name": new_name}
 
 
 @router.post("/api/jobs/{path:path}/move")
@@ -564,6 +688,52 @@ async def create_folder(body: dict):
     folder_dir.mkdir(parents=True, exist_ok=True)
     (folder_dir / ".dkk-folder").write_text("", encoding="utf-8")
     return {"name": folder_name}
+
+
+@router.post("/api/export-route")
+async def export_route(body: dict):
+    """Copy .kmz and homes.kml for every route job to a local directory.
+
+    Route jobs are those with a takeoff_point_4326 and skipped != true.
+    ``folder`` scopes to a specific group folder; null exports all folders.
+    homes.kml is renamed ``<job_name>_homes.kml`` to avoid collisions.
+    """
+    dest_str = (body.get("dest_dir") or "").strip()
+    if not dest_str:
+        raise HTTPException(400, detail="dest_dir is required")
+
+    folder: str | None = body.get("folder")
+
+    dest_path = Path(dest_str).expanduser().resolve()
+    try:
+        dest_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(400, detail=f"Cannot create destination folder: {exc}") from exc
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    groups = scan_jobs(output_dir)
+
+    copied = 0
+    for group in groups:
+        if folder is None:
+            if group["name"] is not None:
+                continue
+        elif group["name"] != folder:
+            continue
+        for card in group["jobs"]:
+            if not card.get("takeoff_point_4326") or card.get("skipped", False):
+                continue
+            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
+            job_name = card["name"]
+            for kmz_file in sorted(job_dir.glob("*.kmz")):
+                shutil.copy2(kmz_file, dest_path / kmz_file.name)
+                copied += 1
+            homes_kml = job_dir / "homes.kml"
+            if homes_kml.exists():
+                shutil.copy2(homes_kml, dest_path / f"{job_name}_homes.kml")
+                copied += 1
+
+    return {"ok": True, "copied": copied, "dest_dir": str(dest_path)}
 
 
 @router.delete("/api/folders/{folder_name}")

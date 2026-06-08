@@ -43,6 +43,7 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shp_transform, unary_union
 
+import jobgen.net_stats as _ns
 from jobgen.config import ZonesConfig
 from jobgen.crs import require_4326
 
@@ -264,6 +265,7 @@ def _get_features(
     cache_path = Path(cache_dir) / "zones" / "uas_zones.json"
     if _cache_fresh(cache_path, config.max_age_days):
         log.debug("Zone cache hit: %s", cache_path)
+        _ns.record_hit("zones")
         return _parse_features(json.loads(cache_path.read_text(encoding="utf-8"))), _file_date(cache_path)
 
     return _fetch_and_cache(cache_path, session)
@@ -297,6 +299,7 @@ def _fetch_and_cache(
         log.info("Fetching UAS zones from Traficom API")
         resp = sess.get(_API_URL, timeout=30)
         resp.raise_for_status()
+        _ns.record_download("zones", len(resp.content))
         data = resp.json()
     except Exception as exc:
         log.error("Failed to fetch UAS zones: %s", exc)

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from jobgen._server_state import SSEResponse
 from pydantic import BaseModel
 
 import jobgen._server_state as _st
@@ -36,6 +36,17 @@ class PreviewRequest(BaseModel):
     keepout: bool = True
     preview_radius_m: float | None = None
     custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
+    route_angle_deg: float | None = None
+    speed_ms: float | None = None
+
+
+class RouteEstimateRequest(BaseModel):
+    polygon_4326: dict          # GeoJSON Polygon geometry
+    angle_deg: float | None = None
+    height_m: float | None = None
+    drone: str | None = None
+    speed_ms: float | None = None
+    takeoff_point_4326: list | None = None  # [lon, lat]
 
 
 class ExportRequest(PreviewRequest):
@@ -174,6 +185,7 @@ async def start_export(req: ExportRequest):
                 property_ids=req.property_ids or None,
                 progress_cb=cb,
                 custom_polygon_4326=custom_poly,
+                folder=req.folder or None,
             )
             if req.folder:
                 job_dir = Path(output_dir) / req.folder / req.job_name
@@ -252,17 +264,20 @@ async def progress_stream(job_id: str):
         raise HTTPException(404, detail="Job not found")
 
     async def generate():
-        while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=25.0)
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event.get("stage") in ("done", "error"):
-                    _st.job_queues.pop(job_id, None)
-                    break
-            except asyncio.TimeoutError:
-                yield 'data: {"stage":"keepalive"}\n\n'
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    if event.get("stage") in ("done", "error"):
+                        _st.job_queues.pop(job_id, None)
+                        break
+                except asyncio.TimeoutError:
+                    yield 'data: {"stage":"keepalive"}\n\n'
+        except asyncio.CancelledError:
+            pass
 
-    return StreamingResponse(
+    return SSEResponse(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -320,6 +335,69 @@ async def start_batch(req: BatchRequest):
 
     loop.run_in_executor(None, run)
     return {"job_id": job_id}
+
+
+@router.post("/api/route_estimate")
+async def route_estimate(req: RouteEstimateRequest):
+    """Quick route estimate: actual strip intersections, no pipeline needed."""
+    from shapely.geometry import LineString, Point, shape as _shape
+    from jobgen import route as _route
+    from jobgen.geometry import reproject_to_3067, reproject_to_4326
+    from shapely.geometry import mapping
+
+    cfg = _st.config
+    drone = next((d for d in cfg.drones if d.name == req.drone), None) if req.drone else None
+    if drone is None:
+        drone = cfg.active_drone()
+
+    H = req.height_m if req.height_m else drone.height_from_gsd(cfg.flight.target_gsd_cm)
+    speed_ms = req.speed_ms if req.speed_ms else cfg.flight.auto_flight_speed_ms
+
+    p_m = drone.pixel_pitch_um * 1e-6
+    f_m = drone.focal_length_mm * 1e-3
+    strip_m = H * drone.image_width_px  * p_m / f_m * (1 - cfg.flight.overlap_side_pct  / 100)
+    photo_m = H * drone.image_height_px * p_m / f_m * (1 - cfg.flight.overlap_front_pct / 100)
+
+    poly_4326 = _shape(req.polygon_4326)
+    poly_3067 = reproject_to_3067(poly_4326)
+
+    angle_deg = req.angle_deg
+    if angle_deg is None:
+        angle_deg = _route.compute_auto_angle(poly_3067)
+
+    home_3067 = None
+    if req.takeoff_point_4326:
+        hp = reproject_to_3067(Point(req.takeoff_point_4326))
+        home_3067 = (hp.x, hp.y)
+
+    result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
+    flight_time = _route.estimate_flight_time(
+        result,
+        flight_height_m=H,
+        auto_speed_ms=speed_ms,
+        transit_speed_ms=cfg.flight.transitional_speed_ms,
+        takeoff_security_height_m=cfg.flight.takeoff_security_height_m,
+        home_3067=home_3067,
+    )
+
+    def _seg_to_feature(x1, y1, x2, y2):
+        line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
+        return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
+
+    strips_features  = [_seg_to_feature(*s) for s in result.strips_3067]
+    transit_features = [_seg_to_feature(*s) for s in result.transit_segs_3067]
+
+    return {
+        "strip_count":       result.strip_count,
+        "photo_count":       result.photo_count,
+        "route_dist_m":      round(result.total_route_dist_m),
+        "flight_time_min":   round(flight_time, 1),
+        "angle_deg_used":    round(angle_deg, 1),
+        "over_one_battery":  flight_time > drone.battery_minutes,
+        "battery_minutes":   drone.battery_minutes,
+        "strips_geojson":    {"type": "FeatureCollection", "features": strips_features},
+        "transits_geojson":  {"type": "FeatureCollection", "features": transit_features},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +466,9 @@ def _prepare_config(req: PreviewRequest):
     if req.preview_radius_m is not None:
         cfg.home_safety.preview_radius_m = req.preview_radius_m
 
+    if req.speed_ms is not None and req.speed_ms > 0:
+        cfg.flight.auto_flight_speed_ms = req.speed_ms
+
     return cfg
 
 
@@ -406,9 +487,11 @@ def _write_job_params(
             "property_ids": req.property_ids,
         },
         "flight": {
-            "drone":       req.drone,
-            "height_m":    req.height_m,
-            "subcategory": req.subcategory,
+            "drone":           req.drone,
+            "height_m":        req.height_m,
+            "subcategory":     req.subcategory,
+            "route_angle_deg": req.route_angle_deg,
+            "speed_ms":        req.speed_ms,
         },
         "polygon": {
             "offset_m": req.offset_m,
@@ -426,13 +509,18 @@ def _write_job_params(
             if preview_result else None
         ),
     }
-    # Preserve existing color when this request carries none
-    if params["color"] is None and (job_dir / "job_params.json").exists():
+    # Preserve existing color, sort_order, and skipped from prior save
+    if (job_dir / "job_params.json").exists():
         try:
             existing = json.loads(
                 (job_dir / "job_params.json").read_text(encoding="utf-8")
             )
-            params["color"] = existing.get("color")
+            if params["color"] is None:
+                params["color"] = existing.get("color")
+            if "sort_order" in existing:
+                params["sort_order"] = existing["sort_order"]
+            if "skipped" in existing:
+                params["skipped"] = existing["skipped"]
         except Exception:
             pass
 

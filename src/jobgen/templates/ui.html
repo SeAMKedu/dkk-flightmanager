@@ -6,7 +6,7 @@
 <title>dkk-jobmaker</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
-<style>{% include "ui.css" %}</style>
+<style>{% include "base.css" %}{% include "legend.css" %}{% include "jobs.css" %}{% include "map.css" %}{% include "settings.css" %}</style>
 </head>
 <body>
 <div id="hdr">
@@ -30,6 +30,7 @@
         <button class="sel-action" id="sel-merge-btn" onclick="openMergeModal()">Merge</button>
         <button class="sel-action" onclick="exportKml()">Export KML</button>
         <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
+        <button class="sel-action" onclick="routeRename()">Route rename</button>
         <button class="sel-action" onclick="bulkMove()">Move</button>
         <button class="sel-action danger" onclick="bulkDelete()">Delete</button>
         <button class="sel-clear" onclick="clearSelection()" title="Clear selection">&#10005;</button>
@@ -41,7 +42,7 @@
 
   <div id="sb">
     <div id="stale-notice"></div>
-    <div id="ext-modified-notice" style="display:none"></div>
+    <div id="ext-modified-notice"></div>
 
     <div class="sec">
       <h3>Job</h3>
@@ -83,6 +84,15 @@
       <div class="gsd-row">GSD: <span id="gsdv">—</span> cm/px</div>
       <label>Warning radius (m) <span id="warn-radius-hint" style="font-weight:400;color:#94a3b8;cursor:default" title="3× flight height">3:1</span></label>
       <input type="number" id="warn-radius" min="0" max="2000" step="10" value="180">
+      <label>Route angle (°)</label>
+      <div class="simp-row">
+        <button class="simp-pill active" id="route-auto-btn" onclick="routeAngleAuto()">Auto</button>
+        <button class="simp-step" id="route-minus">&#8722;</button>
+        <span class="simp-val" id="route-angle-val">—</span>
+        <button class="simp-step" id="route-plus">&#43;</button>
+      </div>
+      <label>Survey speed (m/s) <span style="font-weight:400;color:#94a3b8">optional</span></label>
+      <input type="number" id="speed-ms" min="1" max="15" step="0.5" placeholder="default">
     </div>
 
     <div class="sec">
@@ -114,10 +124,13 @@
     <!-- Map view: floating action bar (top-center, visible when jobs selected) -->
     <div id="mv-actions">
       <span id="mv-sel-count"></span>
+      <span id="mv-area-total" style="font-size:10px;color:#64748b"></span>
       <button class="sel-action" id="mv-open-btn" onclick="mvOpenJob(this.dataset.path)" style="display:none">Open</button>
       <button class="sel-action" id="mv-merge-btn" onclick="mvMerge()">Merge</button>
       <button class="sel-action" onclick="exportKml()">Export KML</button>
       <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
+      <button class="sel-action" onclick="routeRename()">Route rename</button>
+      <button class="sel-action" onclick="exportRoute()">Export Route</button>
       <button class="sel-action" onclick="mvBulkMove()">Move</button>
       <button class="sel-action danger" id="mv-delete-btn" onclick="mvBulkDelete()">Delete</button>
       <button class="sel-clear" onclick="mvClearSel()" title="Clear selection">&#10005;</button>
@@ -129,6 +142,8 @@
       <div class="mv-leg-row"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#374151" stroke-width="2.5" stroke-dasharray="8,4"/></svg><span>Needs review</span></div>
       <div class="mv-leg-row"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#374151" stroke-width="2.5" stroke-dasharray="4,4"/></svg><span>Untouched</span></div>
       <div class="mv-leg-row"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#374151" stroke-width="2" stroke-dasharray="2,5"/></svg><span>Unknown</span></div>
+      <div class="mv-leg-row"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6,4"/></svg><span>Route</span></div>
+      <button id="mv-route-btn" onclick="toggleMvRoute()">Route on/off</button>
     </div>
     <div id="legend">
       <h4>Layers</h4>
@@ -171,6 +186,11 @@
         <button class="leg-eye" id="leg-zones" title="UAS zones"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><div class="l-swatch" style="background:#f97316;opacity:.4;border:1px solid #ea580c;"></div></div>
         <span>UAS zones</span>
+      </div>
+      <div class="leg-row" id="leg-route-row" style="display:none">
+        <button class="leg-eye" id="leg-route" title="Route strips"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+        <div class="leg-icon"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#f59e0b" stroke-width="2"/></svg></div>
+        <span>Route strips</span>
       </div>
       <div class="leg-row" id="leg-takeoff-row" style="display:none">
         <button class="leg-eye" id="leg-takeoff" title="Takeoff / Landing position"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
@@ -266,7 +286,24 @@
     <div id="folder-form">
       <label>Folder name</label>
       <input type="text" id="folder-name-input" placeholder="e.g. spring-2026" autocomplete="off">
+      <div id="folder-error" style="display:none;color:#f87171;font-size:11px;margin-top:4px"></div>
       <button id="folder-submit" onclick="submitFolder()">Create folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="export-route-modal">
+  <div id="export-route-card">
+    <div class="batch-hdr">
+      <span>Export Route</span>
+      <button class="batch-close" onclick="closeExportRouteModal()">&#10005;</button>
+    </div>
+    <div id="export-route-form">
+      <p id="export-route-desc">Copies .kmz and homes KML for all route jobs to a folder on disk.</p>
+      <label>Destination folder</label>
+      <input type="text" id="export-route-dest" placeholder="~/Desktop/route" autocomplete="off">
+      <div id="export-route-error" style="display:none;color:#f87171;font-size:11px;margin-top:4px"></div>
+      <button id="export-route-submit" onclick="submitExportRoute()">Export</button>
     </div>
   </div>
 </div>
@@ -305,6 +342,7 @@
   <div id="about-card">
     <div id="about-name">dkk-jobmaker</div>
     <div id="about-version">v—</div>
+    <div id="about-stats"></div>
     <button onclick="closeAbout()">Close</button>
   </div>
 </div>
@@ -317,6 +355,33 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
-<script>{% include "ui.js" %}</script>
+<script>
+{% include "js/utils.js" %}
+{% include "js/state.js" %}
+{% include "js/map-init.js" %}
+{% include "js/form-controls.js" %}
+{% include "js/legend.js" %}
+{% include "js/preview-runner.js" %}
+{% include "js/map-layers.js" %}
+{% include "js/takeoff.js" %}
+{% include "js/status-panel.js" %}
+{% include "js/polygon-bridge.js" %}
+{% include "js/polygon-edit.js" %}
+{% include "js/dirty-tracking.js" %}
+{% include "js/jobs-panel.js" %}
+{% include "js/card-menu.js" %}
+{% include "js/map-view.js" %}
+{% include "js/battery-timeline.js" %}
+{% include "js/job-ops.js" %}
+{% include "js/drag-reorder.js" %}
+{% include "js/multi-select.js" %}
+{% include "js/bulk-ops.js" %}
+{% include "js/batch-modal.js" %}
+{% include "js/route-planner.js" %}
+{% include "js/measurement.js" %}
+{% include "js/settings-panel.js" %}
+{% include "js/event-stream.js" %}
+{% include "js/main.js" %}
+</script>
 </body>
 </html>

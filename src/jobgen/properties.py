@@ -24,6 +24,7 @@ from shapely.ops import unary_union
 from shapely.geometry.base import BaseGeometry
 from shapely.wkt import dumps as wkt_dumps, loads as wkt_loads
 
+import jobgen.net_stats as _ns
 from jobgen.config import CacheConfig
 from jobgen.crs import require_3067
 
@@ -93,6 +94,7 @@ def fetch_properties(
                     area_ha=record.area_ha,
                     geometry=geom,
                 )
+                _ns.record_hit("properties")
                 log.debug("Property cache hit: %s", numeric_id)
                 continue
         missing[numeric_id] = original
@@ -179,6 +181,7 @@ def _fetch_one(
             params["offset"] = offset
         resp = sess.get(_BASE_URL, params=params, timeout=timeout_s)
         resp.raise_for_status()
+        _ns.record_download("properties", len(resp.content))
         data = resp.json()
 
         page = data.get("features") or []

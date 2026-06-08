@@ -65,6 +65,7 @@ def run_job(
     refresh: bool = False,
     progress_cb: Callable[[str, str, int], None] | None = None,
     custom_polygon_4326: Any | None = None,
+    folder: str | None = None,
 ) -> dict:
     """Run one mapping job and return the manifest dict.
 
@@ -77,10 +78,11 @@ def run_job(
     Raises on hard errors (missing tiles in offline mode, invalid config, etc.).
     Review flags are recorded in the manifest rather than raising.
     """
-    job_dir = Path(config.output.output_dir) / job_name
+    base = Path(config.output.output_dir)
+    job_dir = base / folder / job_name if folder else base / job_name
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    setup_logging(job_name, config.output.output_dir)
+    setup_logging(job_name, job_dir.parent)
     log.info("=== Job %s starting (dry_run=%s) ===", job_name, dry_run)
 
     _cb(progress_cb, "start", "Starting job…", 0)
@@ -437,6 +439,43 @@ def run_preview(
     except Exception:
         takeoff_point_4326 = None
 
+    # Route estimate: actual strip intersections for flight-time/photo preview.
+    from jobgen import route as _route
+    _home_3067 = None
+    if takeoff_point_4326:
+        from shapely.geometry import Point as _HPt
+        _hp = reproject_to_3067(_HPt(*takeoff_point_4326))
+        _home_3067 = (_hp.x, _hp.y)
+    _drone_cfg = drone_cfg  # already resolved above
+    _H   = flight_height_m
+    _p_m = _drone_cfg.pixel_pitch_um * 1e-6
+    _f_m = _drone_cfg.focal_length_mm * 1e-3
+    _sm  = _H * _drone_cfg.image_width_px  * _p_m / _f_m * (1 - config.flight.overlap_side_pct  / 100)
+    _pm  = _H * _drone_cfg.image_height_px * _p_m / _f_m * (1 - config.flight.overlap_front_pct / 100)
+    try:
+        _angle_auto = _route.compute_auto_angle(survey_geom.survey_3067)
+        _rr = _route.compute_route(survey_geom.survey_3067, _angle_auto, _sm, _pm,
+                                   home_3067=_home_3067)
+        _ft = _route.estimate_flight_time(
+            _rr,
+            flight_height_m=_H,
+            auto_speed_ms=config.flight.auto_flight_speed_ms,
+            transit_speed_ms=config.flight.transitional_speed_ms,
+            takeoff_security_height_m=config.flight.takeoff_security_height_m,
+            home_3067=_home_3067,
+        )
+        _route_stats = {
+            "route_angle_deg_auto": round(_angle_auto, 1),
+            "route_strip_count":    _rr.strip_count,
+            "route_photo_count":    _rr.photo_count,
+            "route_flight_time_min": round(_ft, 1),
+        }
+    except Exception as _re:
+        log.warning("Preview: route estimate failed — %s", _re)
+        _angle_auto = 0.0
+        _route_stats = {"route_angle_deg_auto": None, "route_strip_count": None,
+                        "route_photo_count": None, "route_flight_time_min": None}
+
     result = {
         "survey": dict(mapping(survey_geom.survey_4326)),
         "original_areas": [dict(mapping(reproject_to_4326(p.geometry))) for p in inp.input_geoms],
@@ -465,6 +504,7 @@ def run_preview(
             "home_buffer_m": buf,
             "has_parcels": any(hasattr(g, "parcel_id") for g in inp.input_geoms),
             "has_properties": any(hasattr(g, "property_id") for g in inp.input_geoms),
+            **_route_stats,
         },
     }
     return result
@@ -520,8 +560,8 @@ def _synth_survey_geom(poly_4326: Any, offset_m: float) -> SurveyGeometry:
         min_dist_to_home_m=None,
         offset_applied=offset_m != 0.0,
         survey_vertex_count=vc,
-        needs_review=True,
-        review_reasons=["Survey polygon was manually edited — verify boundaries before flying."],
+        needs_review=False,
+        review_reasons=[],
     )
 
 

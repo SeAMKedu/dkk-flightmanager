@@ -164,6 +164,14 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
 
     g = manifest.get("geometry", {})
     f = manifest.get("flight", {})
+    bat = manifest.get("battery") or {}
+    if "estimated_flight_time_min" in bat:
+        flight_time_min: float | None = bat["estimated_flight_time_min"]
+    elif "pieces" in bat:
+        flight_time_min = sum(p.get("estimated_flight_time_min", 0) for p in bat["pieces"])
+    else:
+        flight_time_min = None
+
     return {
         "name": name,
         "folder": folder,
@@ -175,12 +183,39 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "vertex_count": g.get("survey_vertex_count"),
         "drone": f.get("drone"),
         "drone_label": f.get("drone_label"),
+        "flight_time_min": flight_time_min,
         "flight_ready": manifest.get("flight_ready"),
         "needs_review": manifest.get("needs_review"),
         "untouched": untouched,
         "color": params.get("color"),
         "thumbnail_svg": thumbnail_svg,
+        "sort_order": params.get("sort_order"),
+        "takeoff_point_4326": params.get("takeoff_point_4326"),
+        "skipped": params.get("skipped", False),
     }
+
+
+def _tier_sort_key(j: dict) -> tuple:
+    """Four-tier sort key for job lists.
+
+    Tier 0 — ready, explicit sort_order (numbered, drag-ordered)
+    Tier 1 — ready, no sort_order (has takeoff point, awaiting ordering)
+    Tier 2 — exported (has run_at or flight_ready field), no takeoff point
+    Tier 3 — untouched batch skeletons
+    Within each tier: saved_at / modified_at ascending (oldest first keeps list stable).
+    """
+    has_takeoff = j.get("takeoff_point_4326") is not None
+    so = j.get("sort_order")
+    untouched = j.get("untouched", False)
+    ts = j.get("saved_at") or j.get("run_at") or j.get("modified_at") or ""
+
+    if has_takeoff and so is not None:
+        return (0, so, ts)
+    if has_takeoff:
+        return (1, 0, ts)
+    if not untouched:
+        return (2, 0, ts)
+    return (3, 0, ts)
 
 
 def scan_jobs(output_dir: Path) -> list[dict]:
@@ -202,22 +237,14 @@ def scan_jobs(output_dir: Path) -> list[dict]:
                         folder_jobs.append(read_job_card(sub, folder=entry.name))
             except PermissionError:
                 pass
-            folder_jobs.sort(
-                key=lambda j: j.get("saved_at") or j.get("modified_at") or "",
-                reverse=True,
-            )
+            folder_jobs.sort(key=_tier_sort_key)
             folder_groups.append({"name": entry.name, "jobs": folder_jobs})
         else:
             root_jobs.append(read_job_card(entry, folder=None))
 
-    root_jobs.sort(
-        key=lambda j: j.get("saved_at") or j.get("modified_at") or "",
-        reverse=True,
-    )
+    root_jobs.sort(key=_tier_sort_key)
 
-    groups: list[dict] = []
-    if root_jobs:
-        groups.append({"name": None, "jobs": root_jobs})
+    groups: list[dict] = [{"name": None, "jobs": root_jobs}]
     groups.extend(folder_groups)
     return groups
 
