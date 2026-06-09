@@ -89,8 +89,12 @@ document.addEventListener('keydown', function(e) {
     if (_bridgeMode) exitBridgeMode();
     else if (editMode) saveEdit();
     else if (!_mvMode) {
-      if (_activeJob) confirmIfDirty(function(){ openMapView(_activeJobFolder); });
-      else openMapView(null);
+      // Blur any focused input so its pending change event fires and marks dirty
+      // before we check the flag — pressing Escape doesn't blur inputs natively.
+      if (document.activeElement && document.activeElement.tagName !== 'BODY') {
+        document.activeElement.blur();
+      }
+      confirmIfDirty(function(){ openMapView(_activeJobFolder || null); });
     }
   }
 });

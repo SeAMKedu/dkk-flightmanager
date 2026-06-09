@@ -232,6 +232,7 @@ _SKIP_FIELDS: dict[str, set[str]] = {
     "home_safety": {"residential_kohdeluokka", "a3_additional_kohdeluokka"},
     "zones":       {"api_url"},
     "cache":       {"tile_size_m", "cache_dir"},
+    "output":      {"color_palette"},
 }
 
 

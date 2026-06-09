@@ -150,11 +150,11 @@ In edit mode:
 
 - **Base layer** — the layer switcher (top-left, next to zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires `MML_API_KEY` in `.env`. MML's ortho tiles are natively available up to zoom 15; zooming in further upscales those tiles so the imagery stays visible for boundary editing rather than going blank.
 - **Measure** — hold **Ctrl** and right-click-drag to draw a dimensioning line with a distance label. Hold **Ctrl+Shift** to draw a radius circle instead. Click **✕** in the map controls to clear all measurements.
-- **Job color** — the color swatch next to the **Name** field sets the per-job display color used in map view. Saved immediately.
+- **Job color** — the color swatch next to the **Name** field sets the per-job display color used in map view. Clicking the swatch opens a popup with a palette of preset colours (configurable via `color_palette` in `config.toml`) and an inline HSV picker (saturation/value canvas, hue slider, RGB inputs, hex field). Colour changes are saved immediately without requiring a full export.
 
 ### Save and settings
 
-- **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs.
+- **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs, pressing **Esc**, or clicking the **←** back arrow.
 - **⚙ Settings** — opens the in-browser config editor (all sections: Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties). Changed fields highlight in amber; a search box filters across all sections. Saving hot-reloads the server and writes directly to `config.toml`. Drone profiles must be edited in `config.toml` directly; `config.example.toml` is the reference for all options.
 - **ⓘ About** — the `⋯` button in the header opens the About dialog, which shows the software version and a **session statistics** table: how many tiles, parcel geometries, and zone records were fetched from the network vs. served from the local cache, and the total bytes downloaded.
 

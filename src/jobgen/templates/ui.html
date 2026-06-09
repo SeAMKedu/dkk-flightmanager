@@ -64,79 +64,114 @@
     <div id="ext-modified-notice"></div>
 
     <div class="sec">
-      <h3>Job</h3>
-      <button id="xb" onclick="startExport()" disabled style="margin-top:3px">Save</button>
+      <div class="job-btn-row">
+        <button id="back-btn" onclick="goBackToMap()" title="Back to map view">&#8592;</button>
+        <button id="xb" onclick="startExport()" disabled>Save</button>
+      </div>
       <div id="pgwrap">
         <div id="pgtrack"><div id="pgfill"></div></div>
         <div id="pgmsg"></div>
       </div>
       <div id="errdiv"></div>
+      <h3 style="margin-bottom:2px">Job</h3>
+      <div id="job-folder-hint"></div>
       <div class="jname-row">
         <label>Name</label>
-        <div class="color-pick-wrap" title="Map view color">
-          <input type="color" id="job-color" value="#3b82f6">
+        <div class="color-pick-wrap">
+          <span class="map-color-label">Color</span>
+          <div id="color-btn-wrap">
+            <button id="color-btn" onclick="toggleColorPopup(event)" title="Map view color" disabled></button>
+            <div id="color-popup">
+              <div id="color-palette"></div>
+              <div class="cp-sep"></div>
+              <canvas id="cp-sv" width="102" height="76"></canvas>
+              <canvas id="cp-hue" width="102" height="11"></canvas>
+              <div id="cp-rgb-row">
+                <label>R<input type="number" id="cp-r" min="0" max="255"></label>
+                <label>G<input type="number" id="cp-g" min="0" max="255"></label>
+                <label>B<input type="number" id="cp-b" min="0" max="255"></label>
+                <div id="color-preview"></div>
+              </div>
+              <input type="text" id="job-color-hex" maxlength="7" placeholder="#3b82f6" spellcheck="false">
+            </div>
+            <input type="color" id="job-color" value="#3b82f6" style="display:none">
+          </div>
         </div>
       </div>
       <input type="text" id="jname" placeholder="job-20260602-1423">
-      <div class="path-hint" id="pathint">Output: —</div>
     </div>
 
-    <div class="sec" id="area-sec">
-      <h3>Area</h3>
-      <label>Parcel IDs (peruslohkotunnus)</label>
-      <textarea id="pids" rows="2" placeholder="5241087453&#10;5241087453, 5241087454"></textarea>
-      <label>Property IDs (kiinteistötunnus)</label>
-      <textarea id="kids" rows="2" placeholder="214-407-3-22"></textarea>
-    </div>
-
-    <div class="sec">
-      <h3>Flight</h3>
-      <label>Subcategory</label>
-      <div class="pill-row">
-        <button class="pill active" id="sub-a3" onclick="setSub('A3')">A3</button>
-        <button class="pill"        id="sub-a2" onclick="setSub('A2')">A2</button>
+    <div class="sec is-coll" id="area-sec">
+      <div class="sec-hdr" onclick="toggleSec('area')">
+        <h3>Area</h3>
+        <span class="sec-chev">&#9660;</span>
       </div>
-      <label>Drone</label>
-      <select id="dsel"></select>
-      <label>Height (m AGL)</label>
-      <input type="number" id="hgt" min="20" max="120" step="1" value="60">
-      <div class="gsd-row">GSD: <span id="gsdv">—</span> cm/px</div>
-      <label>Warning radius (m) <span id="warn-radius-hint" style="font-weight:400;color:#94a3b8;cursor:default" title="3× flight height">3:1</span></label>
-      <input type="number" id="warn-radius" min="0" max="2000" step="10" value="180">
-      <label>Route angle (°)</label>
-      <div class="simp-row">
-        <button class="simp-pill active" id="route-auto-btn" onclick="routeAngleAuto()">Auto</button>
-        <button class="simp-step" id="route-minus">&#8722;</button>
-        <span class="simp-val" id="route-angle-val">—</span>
-        <button class="simp-step" id="route-plus">&#43;</button>
-      </div>
-      <label>Survey speed (m/s)</label>
-      <div class="simp-row">
-        <button class="simp-pill active" id="speed-auto-btn" onclick="speedAuto()">Auto</button>
-        <button class="simp-step" id="speed-minus">&#8722;</button>
-        <span class="simp-val" id="speed-val">—</span>
-        <button class="simp-step" id="speed-plus">&#43;</button>
+      <div class="sec-body" id="area-body">
+        <label>Parcel IDs (peruslohkotunnus)</label>
+        <textarea id="pids" rows="2" placeholder="5241087453&#10;5241087453, 5241087454"></textarea>
+        <label>Property IDs (kiinteistötunnus)</label>
+        <textarea id="kids" rows="2" placeholder="214-407-3-22"></textarea>
       </div>
     </div>
 
-    <div class="sec">
-      <h3>Polygon</h3>
-      <label>Offset (m)</label>
-      <input type="number" id="offset" value="0" step="1">
-      <label>Simplify</label>
-      <div class="simp-row">
-        <button class="simp-pill active" id="simp-auto" onclick="setSimpAuto()">Auto</button>
-        <button class="simp-step" id="simp-minus" onclick="simpStep(-1)" disabled>&#8722;</button>
-        <span class="simp-val" id="simp-val">—</span>
-        <button class="simp-step" id="simp-plus"  onclick="simpStep(+1)" disabled>&#43;</button>
+    <div class="sec is-coll" id="flight-sec">
+      <div class="sec-hdr" onclick="toggleSec('flight')">
+        <h3>Flight</h3>
+        <span class="sec-chev">&#9660;</span>
       </div>
-      <label class="ck-row">
-        <input type="checkbox" id="kochk" checked>
-        Keep-out subtraction
-      </label>
-      <div id="modbadge">&#9888; Polygon manually edited</div>
-      <button class="rst-btn" id="takeoff-recalc-btn" onclick="recalcTakeoff()" disabled style="margin-top:6px">&#8635; Reset takeoff position</button>
-      <button class="rst-btn" id="rstbtn" onclick="resetPoly()" disabled style="margin-top:4px">&#8635; Reset polygon</button>
+      <div class="sec-body" id="flight-body">
+        <label>Subcategory</label>
+        <div class="pill-row">
+          <button class="pill active" id="sub-a3" onclick="setSub('A3')">A3</button>
+          <button class="pill"        id="sub-a2" onclick="setSub('A2')">A2</button>
+        </div>
+        <label>Drone</label>
+        <select id="dsel"></select>
+        <label>Height (m AGL)</label>
+        <input type="number" id="hgt" min="20" max="120" step="1" value="60">
+        <div class="gsd-row">GSD: <span id="gsdv">—</span> cm/px</div>
+        <label>Warning radius (m) <span id="warn-radius-hint" style="font-weight:400;color:#94a3b8;cursor:default" title="3× flight height">3:1</span></label>
+        <input type="number" id="warn-radius" min="0" max="2000" step="10" value="180">
+        <label>Route angle (°)</label>
+        <div class="simp-row">
+          <button class="simp-pill active" id="route-auto-btn" onclick="routeAngleAuto()">Auto</button>
+          <button class="simp-step" id="route-minus">&#8722;</button>
+          <span class="simp-val" id="route-angle-val">—</span>
+          <button class="simp-step" id="route-plus">&#43;</button>
+        </div>
+        <label>Survey speed (m/s)</label>
+        <div class="simp-row">
+          <button class="simp-pill active" id="speed-auto-btn" onclick="speedAuto()">Auto</button>
+          <button class="simp-step" id="speed-minus">&#8722;</button>
+          <span class="simp-val" id="speed-val">—</span>
+          <button class="simp-step" id="speed-plus">&#43;</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec is-coll" id="poly-sec">
+      <div class="sec-hdr" onclick="toggleSec('poly')">
+        <h3>Polygon</h3>
+        <span class="sec-chev">&#9660;</span>
+      </div>
+      <div class="sec-body" id="poly-body">
+        <label>Offset (m)</label>
+        <input type="number" id="offset" value="0" step="1">
+        <label>Simplify</label>
+        <div class="simp-row">
+          <button class="simp-pill active" id="simp-auto" onclick="setSimpAuto()">Auto</button>
+          <button class="simp-step" id="simp-minus" onclick="simpStep(-1)" disabled>&#8722;</button>
+          <span class="simp-val" id="simp-val">—</span>
+          <button class="simp-step" id="simp-plus"  onclick="simpStep(+1)" disabled>&#43;</button>
+        </div>
+        <label class="ck-row">
+          <input type="checkbox" id="kochk" checked>
+          Keep-out subtraction
+        </label>
+        <div id="modbadge">&#9888; Polygon manually edited</div>
+        <button class="rst-btn" id="takeoff-recalc-btn" onclick="recalcTakeoff()" disabled style="margin-top:6px">&#8635; Reset takeoff position</button>
+        <button class="rst-btn" id="rstbtn" onclick="resetPoly()" disabled style="margin-top:4px">&#8635; Reset polygon</button>
+      </div>
     </div>
 
 
@@ -415,6 +450,7 @@
 {% include "js/map-view.js" %}
 {% include "js/battery-timeline.js" %}
 {% include "js/job-ops.js" %}
+{% include "js/color-picker.js" %}
 {% include "js/drag-reorder.js" %}
 {% include "js/multi-select.js" %}
 {% include "js/bulk-ops.js" %}

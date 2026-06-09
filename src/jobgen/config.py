@@ -205,6 +205,18 @@ class CacheConfig(BaseModel):
 
 class OutputConfig(BaseModel):
     output_dir: str = "output"
+    color_palette: list[str] = Field(default=[
+        "#3b82f6",  # blue
+        "#16a34a",  # green
+        "#dc2626",  # red
+        "#d97706",  # amber
+        "#7c3aed",  # violet
+        "#0891b2",  # cyan
+        "#db2777",  # pink
+        "#65a30d",  # lime
+        "#ea580c",  # orange
+        "#475569",  # slate
+    ])
 
 
 class ZonesConfig(BaseModel):
