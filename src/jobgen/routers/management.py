@@ -626,10 +626,27 @@ async def merge_jobs(req: MergeRequest):
         if merged.is_empty:
             raise HTTPException(400, detail="Union produced empty geometry")
 
+        all_parcel_ids: list[str] = []
+        all_property_ids: list[str] = []
+        seen2: set[str] = set()
+        for _, p in all_params:
+            inp = p.get("inputs", {})
+            for pid in inp.get("parcel_ids") or []:
+                if pid not in seen2:
+                    seen2.add(pid)
+                    all_parcel_ids.append(pid)
+        seen2.clear()
+        for _, p in all_params:
+            inp = p.get("inputs", {})
+            for pid in inp.get("property_ids") or []:
+                if pid not in seen2:
+                    seen2.add(pid)
+                    all_property_ids.append(pid)
+
         merged_params = {
             "job_name": new_name,
             "saved_at": None,
-            "inputs":  {"parcel_ids": [], "property_ids": []},
+            "inputs":  {"parcel_ids": all_parcel_ids, "property_ids": all_property_ids},
             "flight":  all_params[0][1].get("flight", {}),
             "polygon": all_params[0][1].get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
             "safety":  all_params[0][1].get("safety",  {"preview_radius_m": None}),
