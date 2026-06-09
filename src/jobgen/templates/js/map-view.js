@@ -233,11 +233,29 @@ function _mvOpenHoverPopup(latlng, p) {
     : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
     : p.untouched ? '<span style="color:#64748b">New</span>' : '<span>—</span>';
   var area = p.area_ha != null ? p.area_ha.toFixed(1) + ' ha' : '';
+  var areaLost = '';
+  if (p.area_lost_pct != null && Math.abs(p.area_lost_pct) >= 0.05) {
+    var sign = p.area_lost_pct > 0 ? '−' : '+';
+    var col  = p.area_lost_pct > 0 ? '#fb923c' : '#4ade80';
+    areaLost = ' <span style="color:' + col + '">' + sign + Math.abs(p.area_lost_pct).toFixed(1) + '%</span>';
+  }
+  var _ic = function(id, col) {
+    return '<svg class="mv-ic"' + (col ? ' style="color:' + col + ';opacity:1"' : '') + '><use href="#' + id + '"/></svg>';
+  };
+  var flightParts = [];
+  if (p.height_m != null)      flightParts.push(_ic('ic-altitude') + ' ' + p.height_m.toFixed(0) + ' m');
+  if (p.strip_speed_ms != null) flightParts.push(_ic('ic-gauge') + ' ' + (p.strip_speed_ms * 3.6).toFixed(1) + ' km/h');
+  if (p.flight_time_min != null) flightParts.push(_ic('ic-timer') + ' ' + Math.round(p.flight_time_min) + ' min');
+  if (p.over_one_battery)       flightParts.push(_ic('ic-battery-warn', '#fb923c') + ' <span style="color:#fb923c">2+ bat</span>');
+  var flightInfo = flightParts.join('<span style="color:#475569"> · </span>');
+  var photoInfo = p.photo_count != null ? _ic('ic-camera') + ' ' + p.photo_count + ' photos' : '';
   var skipLabel = p.skipped ? '⊘ Unskip' : '⊘ Skip';
   var html = '<div class="mv-tt-inner">'
     + '<div class="mv-tt-name">' + (p.skipped ? '⊘ ' : '') + escHtml(p.name)
     + (p.folder ? ' <span class="mv-tt-folder">(' + escHtml(p.folder) + ')</span>' : '') + '</div>'
-    + '<div class="mv-tt-meta">' + statusChip + (area ? ' · ' + area : '') + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
+    + '<div class="mv-tt-meta">' + statusChip + (area ? ' · ' + area : '') + areaLost + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
+    + (flightInfo ? '<div class="mv-tt-flight">' + flightInfo + '</div>' : '')
+    + (photoInfo ? '<div class="mv-tt-flight">' + photoInfo + '</div>' : '')
     + '<div class="mv-tt-actions">'
     + '<button onclick="mvToggleSkip(\'' + escHtml(p.path) + '\',' + !!p.skipped + ')">' + skipLabel + '</button>'
     + '<button class="mv-tt-del" onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')">✕ Delete</button>'

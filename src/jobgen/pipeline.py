@@ -248,6 +248,7 @@ def run_job(
         pieces_count=pieces_count,
         drone_cfg=drone_cfg,
         flight_height_m=flight_height_m,
+        strip_speed_ms=resolve_strip_speed(config.flight, drone_cfg, flight_height_m),
         kmz_results=kmz_results,
         dsm_stats=dsm_stats,
         dem_prov=dem_prov,

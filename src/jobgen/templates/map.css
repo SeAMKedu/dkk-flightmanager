@@ -20,7 +20,10 @@
 .mv-tt-inner{min-width:140px}
 .mv-tt-name{font-size:13px;font-weight:600;margin-bottom:1px}
 .mv-tt-folder{font-size:10px;color:#94a3b8;font-weight:400}
-.mv-tt-meta{font-size:11px;margin-bottom:6px}
+.mv-tt-meta{font-size:11px;margin-bottom:2px}
+.mv-tt-flight{font-size:11px;color:#94a3b8;margin-bottom:4px;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.mv-tt-flight:last-of-type{margin-bottom:6px}
+.mv-ic{width:11px;height:11px;flex-shrink:0;vertical-align:-1px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
 .mv-tt-actions{display:flex;gap:5px}
 .mv-tt-actions button{flex:1;padding:4px 0;font-size:11px;background:#475569;color:#fff;border:none;border-radius:3px;cursor:pointer;white-space:nowrap}
 .mv-tt-actions button:hover{background:#64748b}
