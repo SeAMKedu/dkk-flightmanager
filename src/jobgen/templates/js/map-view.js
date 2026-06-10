@@ -12,6 +12,7 @@ var _mvCurrentFolder = null;
 var _DEFAULT_COLOR = '#3b82f6';
 var _mvRouteLayer = null;    // L.layerGroup for route polyline + numbered markers
 var _mvRouteVisible = true; // toggled by the Route button; on by default
+var _mvDimLayer = null;     // full-world dim overlay shown in non-normal stat modes
 
 function showFolderOnMap(e, folderName) {
   e.stopPropagation();
@@ -64,6 +65,7 @@ function closeMapView() {
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
   destroyBatteryTimeline();
   _mvClearLayers();
+  _mvHideDim();
   if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
   _mvSelected.forEach(function(path) {
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
@@ -177,9 +179,10 @@ function _mvApplyFilter(folderFilter, skipFit) {
     _mvLayers.forEach(function(item) {
       if (_mvSelected.has(item.path)) return;
       var c = getMvStatColor(item.feature.properties);
-      item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.18});
+      item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.30});
     });
   }
+  _mvUpdateDim();
 }
 
 function _mvClearLayers() {
@@ -203,7 +206,7 @@ function _mvMakeLayer(feature) {
     } else { return null; }
 
     var layer = L.polygon(coords, {
-      color: color, weight: 2.5, fillColor: color, fillOpacity: 0.18, dashArray: dashArray,
+      color: color, weight: 2.5, fillColor: color, fillOpacity: 0.30, dashArray: dashArray,
     });
 
     if (p.skipped) { layer.setStyle({opacity: 0.35, fillOpacity: 0.07}); }
@@ -342,6 +345,25 @@ async function mvDeleteJob(path, name) {
     if (_activeJob === path) { _activeJob = null; _activeJobFolder = null; }
     loadJobsList();
   } catch(e) { showError('Delete failed: ' + e.message); }
+}
+
+// ── Dim overlay ───────────────────────────────────────────────────────────────
+function _mvUpdateDim() {
+  if (_mvStatMode !== 'normal' && _mvMode) { _mvShowDim(); } else { _mvHideDim(); }
+}
+
+function _mvShowDim() {
+  if (_mvDimLayer) return;
+  if (!map.getPane('mvDimPane')) {
+    map.createPane('mvDimPane').style.zIndex = 300;
+  }
+  _mvDimLayer = L.rectangle([[-90, -180], [90, 180]], {
+    pane: 'mvDimPane', stroke: false, fillColor: '#000', fillOpacity: 0.30, interactive: false,
+  }).addTo(map);
+}
+
+function _mvHideDim() {
+  if (_mvDimLayer) { map.removeLayer(_mvDimLayer); _mvDimLayer = null; }
 }
 
 // ── Map view multi-select ──────────────────────────────────────────────────────

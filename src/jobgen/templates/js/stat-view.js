@@ -4,10 +4,10 @@ var _mvStatMode = localStorage.getItem('mv-stat-mode') || 'normal';
 var _statBinMap = {};   // path → color, assigned for ALL visible features
 
 // Palettes: index 0 = lowest/least, last = highest/most
-var _ALT_PAL  = ['#1e3a8a','#2563eb','#60a5fa','#bfdbfe'];          // low→high alt: dark→light blue
-var _AREA_PAL = ['#fef9c3','#fde047','#fb923c','#dc2626','#7f1d1d']; // small→large: light→dark
+var _ALT_PAL  = ['#2563eb','#60a5fa','#93c5fd','#dbeafe'];           // low→high alt: dark→light blue
+var _AREA_PAL = ['#fef9c3','#fde047','#fb923c','#f97316','#ef4444']; // small→large: light→dark
 var _LOST_PAL = ['#4ade80','#a3e635','#fde047','#fb923c','#ef4444']; // 0%→max: green→red
-var _TIME_PAL = ['#f0fdf4','#86efac','#4ade80','#16a34a','#14532d']; // short→long: light→dark
+var _TIME_PAL = ['#f0fdf4','#86efac','#4ade80','#22c55e','#16a34a']; // short→long: light→dark
 var _SUB_PAL  = {A1:'#10b981', A2:'#f59e0b', A3:'#3b82f6'};
 var _ND_COL   = '#94a3b8';
 
@@ -23,8 +23,9 @@ function onStatModeChange() {
   _mvLayers.forEach(function(item) {
     if (_mvSelected.has(item.path)) return;
     var c = getMvStatColor(item.feature.properties);
-    item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.18});
+    item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.30});
   });
+  _mvUpdateDim();
 }
 
 // Called after map layers render or selection changes.
