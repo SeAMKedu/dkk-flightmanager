@@ -7,19 +7,23 @@ function onPreviewDone(payload) {
   clearAreaFocus();
   document.getElementById('xb').disabled = false;
   document.getElementById('rstbtn').disabled = false;
-  // Compute the lowest zone floor across all zone hits.
+  // Compute the lowest zone floor across zones that directly intersect the survey area.
+  // Buffer-only and context-only zones are excluded — they don't constrain the flight altitude.
   _altCap = null;
   (payload.zone_hits||[]).forEach(function(z) {
+    if (z.context_only || z.buffer_only) return;
     if (z.lower_ref === 'AGL' && z.lower_limit != null && z.lower_limit > 0) {
       var m = z.lower_uom === 'FT' ? z.lower_limit * 0.3048 : parseFloat(z.lower_limit);
       if (!isNaN(m) && (_altCap === null || m < _altCap)) _altCap = m;
     }
   });
   if (_altCap !== null) {
-    var suggested = Math.floor(_altCap * 0.75);
-    document.getElementById('hgt').value = suggested;
-    updateGsd();
-    if (_radiusLinked) setRadiusLinked(true);
+    var currentH = parseFloat(document.getElementById('hgt').value);
+    if (isNaN(currentH) || currentH > _altCap) {
+      document.getElementById('hgt').value = _altCap;
+      updateGsd();
+      if (_radiusLinked) setRadiusLinked(true);
+    }
   }
   try {
     // Auto-enable zones/areas on first appearance (when not yet in user prefs)

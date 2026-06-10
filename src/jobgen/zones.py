@@ -137,6 +137,7 @@ class ZoneHit:
     altitude: AltitudeLimits
     properties: dict
     geom: BaseGeometry | None = None  # zone geometry in EPSG:4326, for nesting detection
+    buffer_only: bool = False         # True when zone only hits the search buffer, not the actual survey polygon
 
 
 @dataclass
@@ -202,6 +203,10 @@ def check_zones(
         log.info("Zone check passed — no intersecting UAS restrictions found")
         return ZoneCheckResult(checked=True, fetched_date=fetched_date, attribution=attribution)
 
+    # Mark each hit as buffer_only when it doesn't touch the actual survey polygon.
+    for h in hits:
+        h.buffer_only = h.geom is None or not survey_4326.intersects(h.geom)
+
     # Second pass: find zones whose centroid lies inside any hit zone.
     # These are the inner concentric zones of an airfield (e.g. vyöhyke C/D
     # inside a larger outer zone) that may not intersect the survey buffer but
@@ -213,8 +218,9 @@ def check_zones(
     reasons = []
     for h in hits:
         alt_note = h.altitude.ceiling_note(flight_height_m)
+        proximity = "is within {:.0f} m of".format(config.check_buffer_m) if h.buffer_only else "intersects"
         reason = (
-            f"Survey area intersects UAS zone '{h.name}' [{h.identifier}] "
+            f"Survey area {proximity} UAS zone '{h.name}' [{h.identifier}] "
             f"restriction={h.restriction} reason={h.reason} — {alt_note}"
         )
         reasons.append(reason)

@@ -444,6 +444,7 @@ def run_preview(
             "lower_ref":    h.altitude.lower_ref,
             "contained_by": contained_by,
             "context_only": context_only,
+            "buffer_only":  h.buffer_only if not context_only else False,
         })
 
     all_review_reasons = list(survey_geom.review_reasons) + list(zone_result.reasons)
