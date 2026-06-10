@@ -146,6 +146,8 @@ class TestRunJob:
             patch("jobgen.pipeline.fetch_parcels", return_value=[_PARCEL]),
             patch("jobgen.pipeline.get_tiles", side_effect=[
                 [bldg_rec],   # buildings call
+                [],           # powerlines call
+                [],           # pylons call
                 [dem_rec],    # DEM call
             ]),
             patch("jobgen.pipeline.load_tile", return_value=[_BUILDING]),

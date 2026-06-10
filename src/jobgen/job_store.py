@@ -255,7 +255,9 @@ def scan_jobs(output_dir: Path) -> list[dict]:
 
     root_jobs.sort(key=_tier_sort_key)
 
-    groups: list[dict] = [{"name": None, "jobs": root_jobs}]
+    groups: list[dict] = []
+    if root_jobs:
+        groups.append({"name": None, "jobs": root_jobs})
     groups.extend(folder_groups)
     return groups
 
