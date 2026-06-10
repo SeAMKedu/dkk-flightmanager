@@ -103,6 +103,20 @@ The panel updates live — changes made by the CLI, MCP server, or another tab a
 
 A toolbar floats at the top of the map whenever map view is active. **Export Route** copies the `.kmz` and homes KML for every route job in the current folder to a local directory you specify — a quick way to collect all mission files before heading to the field. Route jobs are those with a computed takeoff point that have not been marked as skipped; `homes.kml` files are renamed `<job_name>_homes.kml` to avoid collisions. The remaining toolbar buttons (**Merge**, **Export KML**, **Google Maps**, **Route rename**, **Move**, **Delete**) become active when one or more jobs are selected.
 
+**Statistics panel:** a card below the status legend (top-right) shows summary statistics for the current folder. Use the dropdown to switch between seven modes:
+
+| Mode | What it shows |
+|---|---|
+| **Jobs** (default) | Total job count, total area, combined flight time, and battery count — job colors unchanged |
+| **Subcategory** | A1 / A2 / A3 color-coded polygons (green / amber / blue) |
+| **Altitude** | Four-bin blue palette (dark = low, light = high); lists 5 lowest-altitude jobs |
+| **Area** | Five-bin yellow-to-red palette (light = small, dark = large); lists 5 largest and 5 smallest |
+| **Lost area %** | Green-to-red palette; 0 % loss shown as a separate green bucket; lists 10 jobs with most lost area |
+| **Lost area ha** | Same palette as Lost %, but in absolute hectares |
+| **Flight time** | Five-bin light-to-dark green palette; lists 5 longest and 5 shortest jobs |
+
+Jobs without data for the selected stat are shown in grey. In any mode other than Jobs, a dim overlay is added between the base map tiles and the job polygons to improve color contrast. If jobs are selected (Ctrl+click), the stats reflect only the selected set. Click a job name in any list to pan and zoom the map to that polygon and add it to the selection. The selected stat mode is remembered across sessions.
+
 **Battery / flight-time timeline:** a proportional bar appears near the bottom centre of the map whenever there is at least one routable job (a job with a computed route and a flight-time estimate in its manifest). Each segment represents one job, scaled by its estimated flight time. Route index numbers appear below each segment in the same amber circles used on the map. Battery boundaries are shown as outline battery icons above the bar: a new battery starts whenever the remaining charge (85 % of the drone's rated battery duration) is insufficient to cover the next job. The total flight time for the displayed route is shown to the right. Click any segment to pan and zoom the map to that job's polygon. When jobs are multi-selected, only the selected jobs appear on the timeline; otherwise all routable jobs in the folder are shown.
 
 ### Defining the survey area
