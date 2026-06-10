@@ -26,9 +26,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 from jobgen.buildings import Building, dedup_buildings, load_tile, tile_fetcher as buildings_fetcher
+from jobgen.powerlines import (
+    PowerLine, dedup_power_lines, load_tile as load_pl_tile, tile_fetcher as powerlines_fetcher,
+    Pylon, dedup_pylons, load_pylon_tile, pylon_tile_fetcher, correct_overhead_from_pylons,
+)
 from jobgen.cache import FetcherFn, TileRecord, get_tiles, tile_provenance
 from jobgen.config import AppConfig
 from jobgen.elevation import tile_fetcher as dem_fetcher, validate_tile
+from shapely import make_valid
+from shapely.ops import unary_union
 from jobgen.geometry import (
     SurveyGeometry, apply_survey_offset, build_keepout, process_survey,
     reproject_to_4326, reproject_to_3067, vertex_count, suggest_takeoff_point,
@@ -39,7 +45,7 @@ from jobgen.parcels import fetch_parcels
 from jobgen.properties import fetch_properties
 from jobgen.raster import build_site_dsm
 from jobgen.preview import build_map_preview, build_preview_dsm_thumbnail
-from jobgen.wpml import build_homes_kml, build_kmz
+from jobgen.wpml import build_homes_kml, build_kmz, resolve_strip_speed
 from jobgen.zones import ZoneHit, check_zones
 
 log = logging.getLogger(__name__)
@@ -105,12 +111,23 @@ def run_job(
     include_buf = config.home_safety.resolved_include_buffer_m
     _preview_radius_cfg = config.home_safety.preview_radius_m
 
+    _pl_geoms_job = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+    _pl_buf_job = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
+    _baseline_3067 = (
+        make_valid(unary_union([g.geometry for g in inp.input_geoms]))
+        if inp.input_geoms else None
+    )
     if custom_polygon_4326 is not None:
-        survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
+        survey_geom = _synth_survey_geom(
+            custom_polygon_4326, config.polygon.survey_offset_m,
+            inp.buildings, config.home_safety, _pl_geoms_job, _pl_buf_job,
+            baseline_geom_3067=_baseline_3067,
+        )
     else:
         _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
         survey_geom = process_survey(
-            inp.input_geoms, inp.buildings, config.home_safety, config.polygon
+            inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
+            _pl_geoms_job, _pl_buf_job,
         )
     pieces_count = len(survey_geom.pieces_3067)
 
@@ -241,6 +258,7 @@ def run_job(
         pieces_count=pieces_count,
         drone_cfg=drone_cfg,
         flight_height_m=flight_height_m,
+        strip_speed_ms=resolve_strip_speed(config.flight, drone_cfg, flight_height_m),
         kmz_results=kmz_results,
         dsm_stats=dsm_stats,
         dem_prov=dem_prov,
@@ -329,16 +347,38 @@ def run_preview(
 
     # 3. Survey polygon
     _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
+    _pl_geoms_prev = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+    _pl_buf_prev = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
+    _baseline_3067_prev = (
+        make_valid(unary_union([g.geometry for g in inp.input_geoms]))
+        if inp.input_geoms else None
+    )
     if custom_polygon_4326 is not None:
         log.info("Preview: using custom polygon (bridge/cut applied)")
-        survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
+        survey_geom = _synth_survey_geom(
+            custom_polygon_4326, config.polygon.survey_offset_m,
+            inp.buildings, config.home_safety, _pl_geoms_prev, _pl_buf_prev,
+            baseline_geom_3067=_baseline_3067_prev,
+        )
     else:
         log.info("Preview: computing survey geometry …")
-        survey_geom = process_survey(inp.input_geoms, inp.buildings, config.home_safety, config.polygon)
+        survey_geom = process_survey(
+            inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
+            _pl_geoms_prev, _pl_buf_prev,
+        )
 
-    # 4. Keep-out zone geometry for visualisation
-    keepout_3067 = build_keepout(inp.buildings, config.home_safety)
+    # 4. Keep-out zone geometry for visualisation (overhead lines only for buffer)
+    _pl_buf = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
+    _overhead_geoms = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+    keepout_3067 = build_keepout(inp.buildings, config.home_safety, _overhead_geoms, _pl_buf)
     keepout_4326 = reproject_to_4326(keepout_3067) if keepout_3067 else None
+
+    # Power line keepout buffer for map display (overhead only)
+    _pl_keepout_4326 = None
+    if _overhead_geoms and _pl_buf > 0:
+        _uu = unary_union
+        _pl_ko_3067 = _uu([g.buffer(_pl_buf) for g in _overhead_geoms])
+        _pl_keepout_4326 = reproject_to_4326(_pl_ko_3067)
 
     # 5. Zone check
     drone_cfg = config.active_drone()
@@ -422,6 +462,7 @@ def run_preview(
             "lower_ref":    h.altitude.lower_ref,
             "contained_by": contained_by,
             "context_only": context_only,
+            "buffer_only":  h.buffer_only if not context_only else False,
         })
 
     all_review_reasons = list(survey_geom.review_reasons) + list(zone_result.reasons)
@@ -450,16 +491,17 @@ def run_preview(
     _H   = flight_height_m
     _p_m = _drone_cfg.pixel_pitch_um * 1e-6
     _f_m = _drone_cfg.focal_length_mm * 1e-3
-    _sm  = _H * _drone_cfg.image_width_px  * _p_m / _f_m * (1 - config.flight.overlap_side_pct  / 100)
+    _fp  = _H * _drone_cfg.image_width_px  * _p_m / _f_m
+    _sm  = _fp * (1 - config.flight.overlap_side_pct  / 100)
     _pm  = _H * _drone_cfg.image_height_px * _p_m / _f_m * (1 - config.flight.overlap_front_pct / 100)
     try:
         _angle_auto = _route.compute_auto_angle(survey_geom.survey_3067)
         _rr = _route.compute_route(survey_geom.survey_3067, _angle_auto, _sm, _pm,
-                                   home_3067=_home_3067)
+                                   footprint_width_m=_fp, home_3067=_home_3067)
         _ft = _route.estimate_flight_time(
             _rr,
             flight_height_m=_H,
-            auto_speed_ms=config.flight.auto_flight_speed_ms,
+            auto_speed_ms=resolve_strip_speed(config.flight, _drone_cfg, _H),
             transit_speed_ms=config.flight.transitional_speed_ms,
             takeoff_security_height_m=config.flight.takeoff_security_height_m,
             home_3067=_home_3067,
@@ -476,11 +518,19 @@ def run_preview(
         _route_stats = {"route_angle_deg_auto": None, "route_strip_count": None,
                         "route_photo_count": None, "route_flight_time_min": None}
 
+    # Power lines for map display (both overhead and underground)
+    power_lines_data = []
+    for pl in inp.power_lines:
+        pl_4326 = reproject_to_4326(pl.geometry)
+        power_lines_data.append({"geojson": dict(mapping(pl_4326)), "is_overhead": pl.is_overhead})
+
     result = {
         "survey": dict(mapping(survey_geom.survey_4326)),
         "original_areas": [dict(mapping(reproject_to_4326(p.geometry))) for p in inp.input_geoms],
         "buildings": buildings_data,
         "keepout_zone": dict(mapping(keepout_4326)) if keepout_4326 else None,
+        "power_lines": power_lines_data,
+        "powerlines_keepout": dict(mapping(_pl_keepout_4326)) if _pl_keepout_4326 else None,
         "zone_hits": zone_hits_data,
         "takeoff_point_4326": takeoff_point_4326,
         "dsm_b64": dsm_b64,
@@ -528,6 +578,8 @@ class _InputResult:
     input_geoms: list
     buildings: list[Building]
     b_records: list[TileRecord]
+    power_lines: list[PowerLine]
+    pl_records: list[TileRecord]
     # Manifest provenance — populated for every run; empty when no IDs were fetched
     parcel_ids_used: list[str]
     parcel_fetch_ts: str
@@ -536,32 +588,65 @@ class _InputResult:
     property_fetch_ts: str | None
 
 
-def _synth_survey_geom(poly_4326: Any, offset_m: float) -> SurveyGeometry:
+def _synth_survey_geom(
+    poly_4326: Any,
+    offset_m: float,
+    buildings: list,
+    home_safety: Any,
+    power_line_geoms: list | None = None,
+    pl_buf_m: float = 0.0,
+    baseline_geom_3067: Any | None = None,
+) -> SurveyGeometry:
     """Build a synthetic SurveyGeometry from a user-supplied polygon.
 
     Used when the user has drawn or edited the polygon directly, bypassing
-    ``process_survey()``.  The offset is applied immediately; the result is
-    flagged ``needs_review=True`` so the pilot must verify boundaries.
+    ``process_survey()``.  Keepout is still applied so area_lost_pct reflects
+    how much of the drawn polygon is blocked by buildings / power lines.
+
+    ``baseline_geom_3067`` is the original parcel/property union in EPSG:3067.
+    When supplied, area_lost_pct is computed relative to it — so editing a
+    vertex doesn't change the reference area.  Falls back to the custom polygon
+    itself when no parcel/property geometry is available.
     """
-    survey_3067 = reproject_to_3067(poly_4326)
-    survey_3067_off = apply_survey_offset(survey_3067, offset_m)
-    survey_4326_off = reproject_to_4326(survey_3067_off)
-    area_ha = survey_3067_off.area / 10_000
-    vc = vertex_count(survey_4326_off)
+    original_3067 = reproject_to_3067(poly_4326)
+    survey_3067 = apply_survey_offset(original_3067, offset_m)
+    baseline_3067 = baseline_geom_3067 if baseline_geom_3067 is not None else original_3067
+
+    review_reasons: list[str] = []
+    keepout = build_keepout(buildings, home_safety, power_line_geoms, pl_buf_m)
+    if keepout is not None and home_safety.offset_enabled:
+        clipped = survey_3067.difference(keepout)
+        if clipped.is_empty:
+            log.error("Keep-out completely covers the custom polygon — flagging for review")
+            review_reasons.append("Keep-out removed 100.0% of survey area")
+        else:
+            survey_3067 = clipped
+
+    covered = survey_3067.intersection(baseline_3067)
+    area_lost_pct = max(0.0, (1.0 - covered.area / baseline_3067.area) * 100) if baseline_3067.area > 0 else 0.0
+    if area_lost_pct > home_safety.max_area_loss_pct:
+        review_reasons.append(
+            f"Keep-out removed {area_lost_pct:.1f}% of survey area "
+            f"(threshold {home_safety.max_area_loss_pct}%)"
+        )
+
+    survey_4326 = reproject_to_4326(survey_3067)
+    area_ha = survey_3067.area / 10_000
+    vc = vertex_count(survey_4326)
     return SurveyGeometry(
-        survey_3067=survey_3067_off,
-        survey_4326=survey_4326_off,
-        pieces_3067=[survey_3067_off],
-        pieces_4326=[survey_4326_off],
-        bbox_3067=survey_3067_off.bounds,
-        original_area_ha=area_ha,
+        survey_3067=survey_3067,
+        survey_4326=survey_4326,
+        pieces_3067=[survey_3067],
+        pieces_4326=[survey_4326],
+        bbox_3067=survey_3067.bounds,
+        original_area_ha=original_3067.area / 10_000,
         final_area_ha=area_ha,
-        area_lost_pct=0.0,
+        area_lost_pct=area_lost_pct,
         min_dist_to_home_m=None,
         offset_applied=offset_m != 0.0,
         survey_vertex_count=vc,
-        needs_review=False,
-        review_reasons=[],
+        needs_review=bool(review_reasons),
+        review_reasons=review_reasons,
     )
 
 
@@ -580,6 +665,40 @@ def _load_buildings(
     buildings = dedup_buildings(raw)
     log.info("%d building(s) loaded after dedup", len(buildings))
     return buildings, b_records
+
+
+def _load_powerlines(
+    bbox: tuple,
+    api_key: str,
+    cache_config,
+    refresh: bool,
+) -> tuple[list[PowerLine], list[TileRecord]]:
+    """Fetch power line tiles from cache and return ``(lines, tile_records)``."""
+    pl_fetcher = powerlines_fetcher(api_key)
+    pl_records = get_tiles("powerlines", bbox, pl_fetcher, cache_config, refresh=refresh)
+    raw: list[PowerLine] = []
+    for rec in pl_records:
+        raw.extend(load_pl_tile(rec.path))
+    lines = dedup_power_lines(raw)
+    log.info("%d power line(s) loaded after dedup", len(lines))
+    return lines, pl_records
+
+
+def _load_pylons(
+    bbox: tuple,
+    api_key: str,
+    cache_config,
+    refresh: bool,
+) -> list[Pylon]:
+    """Fetch HV pylon tower tiles from cache and return pylon list."""
+    py_fetcher = pylon_tile_fetcher(api_key)
+    py_records = get_tiles("pylons", bbox, py_fetcher, cache_config, refresh=refresh)
+    raw: list[Pylon] = []
+    for rec in py_records:
+        raw.extend(load_pylon_tile(rec.path))
+    pylons = dedup_pylons(raw)
+    log.info("%d pylon(s) loaded after dedup", len(pylons))
+    return pylons
 
 
 def _fetch_survey_inputs(
@@ -601,8 +720,6 @@ def _fetch_survey_inputs(
     ``custom_polygon_4326`` takes precedence over ``input_geoms`` for the
     building-fetch bounding box when both are provided.
     """
-    from shapely import make_valid
-    from shapely.ops import unary_union
 
     input_geoms: list = []
     parcel_ids_used: list[str] = []
@@ -657,10 +774,22 @@ def _fetch_survey_inputs(
     _cb(progress_cb, "buildings", "Fetching building tiles…", 30)
     buildings, b_records = _load_buildings(buildings_bbox, api_key, config.cache, refresh)
 
+    power_lines: list[PowerLine] = []
+    pl_records: list[TileRecord] = []
+    if config.powerlines.enabled:
+        try:
+            power_lines, pl_records = _load_powerlines(buildings_bbox, api_key, config.cache, refresh)
+            pylons = _load_pylons(buildings_bbox, api_key, config.cache, refresh)
+            power_lines = correct_overhead_from_pylons(power_lines, pylons)
+        except Exception as _pl_exc:
+            log.warning("Power lines fetch failed — skipping: %s", _pl_exc)
+
     return _InputResult(
         input_geoms=input_geoms,
         buildings=buildings,
         b_records=b_records,
+        power_lines=power_lines,
+        pl_records=pl_records,
         parcel_ids_used=parcel_ids_used,
         parcel_fetch_ts=parcel_fetch_ts,
         property_ids_used=property_ids_used,

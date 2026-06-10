@@ -52,7 +52,7 @@ map.on(L.Draw.Event.EDITED, function(e) {
   if (lrs.survey) lrs.survey.addTo(map);
 });
 
-var lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+var lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
 var _altCap = null;         // minimum AGL ceiling (metres) from current zone hits; null if none
 var _dataAttribution = '';  // attribution string currently added to the map control
 

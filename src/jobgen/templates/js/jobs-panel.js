@@ -176,6 +176,9 @@ function buildJobCard(j, group, folderKey) {
     : j.flight_ready === true  ? '<span class="jbadge ok">&#10003;</span>'
     : j.needs_review === true  ? '<span class="jbadge wrn">!</span>'
     : '';
+  var koLine = (j.area_lost_pct != null && j.area_lost_pct >= _cfgMaxAreaLossPct)
+    ? '<div class="jcard-ko">−' + j.area_lost_pct.toFixed(0) + '% keepout</div>'
+    : '';
   var dragHandle = isReady
     ? '<span class="jcard-drag" title="Drag to reorder">&#8942;&#8942;</span>'
     : '<span class="jcard-drag" style="visibility:hidden" aria-hidden="true">&#8942;&#8942;</span>';
@@ -187,6 +190,7 @@ function buildJobCard(j, group, folderKey) {
     + '<div class="jcard-body">'
     +   '<div class="jcard-name">' + escHtml(j.name) + '</div>'
     +   '<div class="jcard-meta">' + escHtml(meta) + '</div>'
+    +   koLine
     + '</div>'
     + '<div class="jcard-right">' + priorityBadge + badge
     +   '<button class="jcard-menu-btn" title="Actions">&#8942;</button>'

@@ -331,7 +331,7 @@ def run_job_cmd(
             typer.echo(f"Warning: map file not found at {map_path}", err=True)
 
     from jobgen.net_stats import print_summary as _print_net_stats
-    _print_net_stats()
+    _print_net_stats(cfg.cache.cache_dir)
 
     if manifest.get("needs_review") or not manifest.get("flight_ready"):
         raise typer.Exit(2)   # non-zero so scripts can detect review-needed
@@ -379,7 +379,7 @@ def cache_warm(
 
     typer.echo("Cache warm complete.")
     from jobgen.net_stats import print_summary as _print_net_stats
-    _print_net_stats()
+    _print_net_stats(cfg.cache.cache_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -410,12 +410,18 @@ def cache_status(
             GROUP BY dataset
             ORDER BY dataset
         """).fetchall()
+        grand_total = conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()[0] or 0
 
     if not rows:
         typer.echo("Cache index exists but is empty.")
         return
 
-    typer.echo(f"\nCache: {db_path}\n")
+    max_mb = cfg.cache.max_cache_size_mb
+    limit_str = f" / {_human_size(max_mb * 1024 * 1024)}" if max_mb > 0 else " (unlimited)"
+    pct_str = f"  ({100 * grand_total // (max_mb * 1024 * 1024)}% full)" if max_mb > 0 else ""
+
+    typer.echo(f"\nCache: {db_path}")
+    typer.echo(f"Total: {_human_size(grand_total)}{limit_str}{pct_str}\n")
     typer.echo(f"{'Dataset':<12} {'Tiles':>6} {'Size':>10}  {'Oldest fetch':<26} {'Newest fetch'}")
     typer.echo("-" * 80)
     for dataset, tiles, total_bytes, oldest, newest in rows:
@@ -713,7 +719,7 @@ def batch_cmd(
     typer.echo()
     typer.echo(f"Created: {ok}  Skipped: {skipped}  Failed: {failed}")
     from jobgen.net_stats import print_summary as _print_net_stats
-    _print_net_stats()
+    _print_net_stats(cfg.cache.cache_dir)
     if failed:
         raise typer.Exit(1)
 

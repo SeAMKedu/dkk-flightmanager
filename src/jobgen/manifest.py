@@ -56,6 +56,7 @@ def build_manifest(
     pieces_count: int,
     drone_cfg: Any,
     flight_height_m: float,
+    strip_speed_ms: float | None = None,
     # pipeline outputs
     kmz_results: list,
     dsm_stats: dict,
@@ -122,6 +123,7 @@ def build_manifest(
         "flight": {
             "target_gsd_cm":     config.flight.target_gsd_cm,
             "derived_height_m":  round(flight_height_m, 2),
+            "strip_speed_ms":    round(strip_speed_ms, 2) if strip_speed_ms is not None else None,
             "overlap_front_pct": config.flight.overlap_front_pct,
             "overlap_side_pct":  config.flight.overlap_side_pct,
             "terrain_follow":    True,

@@ -91,6 +91,8 @@ def process_survey(
     buildings: list[Building],
     home_safety: HomeSafetyConfig,
     polygon_cfg: PolygonConfig,
+    power_line_geoms: list[BaseGeometry] | None = None,
+    power_line_buffer_m: float = 0.0,
 ) -> SurveyGeometry:
     """Run the full geometry pipeline and return a SurveyGeometry.
 
@@ -119,12 +121,15 @@ def process_survey(
     survey = apply_survey_offset(survey, polygon_cfg.survey_offset_m)
 
     # 5. Build keep-out zone
-    keepout = build_keepout(buildings, home_safety)
+    keepout = build_keepout(buildings, home_safety, power_line_geoms, power_line_buffer_m)
 
     # 6. Apply keep-out (or measure distance)
-    survey, area_lost_pct, min_dist, offset_applied = _apply_keepout(
-        survey, keepout, home_safety, original_area_ha
-    )
+    survey, min_dist, offset_applied = _apply_keepout(survey, keepout, home_safety)
+
+    # Fraction of original parcel covered by the flight polygon
+    covered = survey.intersection(merged)
+    area_lost_pct = max(0.0, (1.0 - covered.area / merged.area) * 100) if merged.area > 0 else 0.0
+    log.info("Keep-out: %.1f%% of original parcel area unreachable", area_lost_pct)
 
     if area_lost_pct > home_safety.max_area_loss_pct:
         reason = (
@@ -246,68 +251,67 @@ def apply_survey_offset(geom: BaseGeometry, offset_m: float) -> BaseGeometry:
 def build_keepout(
     buildings: list[Building],
     home_safety: HomeSafetyConfig,
+    power_line_geoms: list[BaseGeometry] | None = None,
+    power_line_buffer_m: float = 0.0,
 ) -> BaseGeometry | None:
-    """Buffer relevant buildings by home_buffer_m and union into a keep-out zone."""
-    if not buildings:
-        return None
+    """Buffer buildings and overhead power lines and union into a keep-out zone."""
+    zones: list[BaseGeometry] = []
 
     res_codes = set(home_safety.residential_kohdeluokka)
     a3_codes = set(home_safety.a3_additional_kohdeluokka)
-
-    if home_safety.operating_subcategory == "A3":
-        relevant_codes = res_codes | a3_codes
-    else:
-        relevant_codes = res_codes
-
+    relevant_codes = res_codes | a3_codes if home_safety.operating_subcategory == "A3" else res_codes
     relevant = [b for b in buildings if b.kohdeluokka in relevant_codes]
-    if not relevant:
+
+    if relevant:
+        buf = home_safety.home_buffer_m
+        zones.extend(b.geometry.buffer(buf) for b in relevant)
+        log.info(
+            "Keep-out: buffered %d building(s) by %.1f m (subcategory %s)",
+            len(relevant), buf, home_safety.operating_subcategory,
+        )
+    else:
         log.debug("No relevant buildings for keep-out in subcategory %s",
                   home_safety.operating_subcategory)
-        return None
 
-    buf = home_safety.home_buffer_m
-    buffered = [b.geometry.buffer(buf) for b in relevant]
-    keepout = unary_union(buffered)
-    log.info(
-        "Keep-out: buffered %d building(s) by %.1f m (subcategory %s)",
-        len(relevant), buf, home_safety.operating_subcategory,
-    )
-    return keepout
+    if power_line_geoms and power_line_buffer_m > 0:
+        zones.extend(g.buffer(power_line_buffer_m) for g in power_line_geoms)
+        log.info(
+            "Keep-out: buffered %d overhead power line(s) by %.1f m",
+            len(power_line_geoms), power_line_buffer_m,
+        )
+
+    if not zones:
+        return None
+    return unary_union(zones)
 
 
 def _apply_keepout(
     survey: BaseGeometry,
     keepout: BaseGeometry | None,
     home_safety: HomeSafetyConfig,
-    original_area_ha: float,
-) -> tuple[BaseGeometry, float, float | None, bool]:
+) -> tuple[BaseGeometry, float | None, bool]:
     """Apply keep-out to survey polygon.
 
-    Returns (survey, area_lost_pct, min_dist_to_home_m, offset_applied).
+    Returns (survey, min_dist_to_home_m, offset_applied).
+    Area-lost percentage is computed by the caller via intersection with the original parcel.
     """
     if keepout is None:
-        return survey, 0.0, None, False
+        return survey, None, False
 
     if home_safety.offset_enabled:
         result = survey.difference(keepout)
         if result.is_empty:
             log.error("Keep-out completely covers the survey area — flagging for review")
             result = survey  # return original so pipeline can flag and surface it
-            area_lost_pct = 100.0
-        else:
-            area_lost_pct = max(
-                0.0,
-                (original_area_ha - result.area * _M2_TO_HA) / original_area_ha * 100
-            )
-        log.info("Keep-out applied: %.1f%% area lost", area_lost_pct)
-        return result, area_lost_pct, None, True
+        log.info("Keep-out applied")
+        return result, None, True
     else:
         # No offset: measure minimum distance to nearest building instead
         min_dist = survey.distance(keepout)
         log.info(
             "offset_enabled=false — minimum distance to keep-out zone: %.1f m", min_dist
         )
-        return survey, 0.0, min_dist, False
+        return survey, min_dist, False
 
 
 def _enforce_policy(

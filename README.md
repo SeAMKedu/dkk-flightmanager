@@ -2,9 +2,9 @@
 
 DJI terrain-following mapping job generator for Finnish agricultural field parcels.
 
-`dkk-jobgen` is a planning tool for drone mapping surveys over Finnish farmland. Identify the survey area by pasting *peruslohkotunnus* field parcel IDs (Ruokavirasto), *kiinteistötunnus* cadastral property IDs, a bounding box, or a polygon drawn directly on the map — the tool fetches field boundaries, 2 m terrain elevation, and building footprints from National Land Survey of Finland (MML) open data APIs, checks Traficom UAS restriction zones, and writes a ready-to-fly DJI Pilot 2 mapping job. A built-in browser UI handles everything from parcel lookup and polygon editing to flight parameter tuning and batch job creation for large parcel sets.
+`dkk-jobgen` is a planning tool for drone mapping surveys over Finnish farmland. Identify the survey area by pasting *peruslohkotunnus* field parcel IDs (Ruokavirasto), *kiinteistötunnus* cadastral property IDs, a bounding box, or a polygon drawn directly on the map — the tool fetches field boundaries, 2 m terrain elevation, building footprints, and high-voltage power line geometry from National Land Survey of Finland (MML) open data APIs, checks Traficom UAS restriction zones, and writes a ready-to-fly DJI Pilot 2 mapping job. A built-in browser UI handles everything from parcel lookup and polygon editing to flight parameter tuning and batch job creation for large parcel sets.
 
-All underlying data — field boundaries (Ruokavirasto *Peltolohkorekisteri*), terrain elevation and buildings (MML *Maastotietokanta*), cadastral geometry (MML *Kiinteistötietojärjestelmä*), and UAS restriction zones (Traficom) — is sourced from free Finnish open data APIs, with attribution recorded in every manifest. Only an MML API key (free) is required.
+All underlying data — field boundaries (Ruokavirasto *Peltolohkorekisteri*), terrain elevation, buildings, and high-voltage power lines (MML *Maastotietokanta*), cadastral geometry (MML *Kiinteistötietojärjestelmä*), and UAS restriction zones (Traficom) — is sourced from free Finnish open data APIs, with attribution recorded in every manifest. Only an MML API key (free) is required.
 
 Output files written per job:
 
@@ -118,7 +118,7 @@ A toolbar floats at the top of the map whenever map view is active. **Export Rou
 | Drone & height | dropdown + number field (live GSD shown) |
 | Warning radius | linked to 3× height by default; click "3:1" to restore the link |
 | Route angle | Auto pill picks the MBR longest-axis bearing; −/+ step buttons (hold for continuous rotation) override it by 1° increments |
-| Survey speed | optional per-job override of the configured default flight speed |
+| Survey speed | **Auto** pill recomputes from altitude and drone profile; −/+ buttons (hold for continuous change, 0.1 m/s steps) override it — see below |
 | Offset | expand (+) or contract (−) the survey polygon in metres |
 | Simplify | Auto pill + −/+ step buttons |
 | Keep-out | toggle to disable building buffer subtraction |
@@ -127,6 +127,7 @@ A toolbar floats at the top of the map whenever map view is active. **Export Rou
 
 Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, DSM elevation overlay, and the flight route overlay — all layers are toggleable from the legend.
 
+- **Power lines** — high-voltage lines (110 kV+) from MML *Maastotietokanta* (`sahkolinja`) are fetched for the same area as buildings. Overhead spans (solid amber on the map) automatically subtract a configurable keep-out buffer from the survey polygon. Underground cables (dashed amber) are shown for situational awareness only — no keep-out buffer applied. MTK misclassification is corrected automatically: any 22311-coded segment whose endpoints match pylon tower locations in `suurjannitelinjanpylvas` is re-classified as overhead before the keep-out is computed. Disable or adjust the buffer under **⚙ Settings → Power Lines**.
 - **UAS zones** are clickable: see altitude floor/ceiling and all overlapping zones at a point. Inner concentric zones of an airfield are shown with a dashed border for context. The zones legend layer auto-enables when zones first appear.
 - **Zone altitude cap** — when a zone hit carries an altitude floor, flight height is automatically set to 75 % of that floor and the warning radius re-syncs. An orange warning appears if you raise height above the floor. The cap is advisory; override freely.
 - **Takeoff marker** — a white ✕ on the polygon boundary marks the auto-suggested takeoff/landing point (the boundary point that minimises worst-case VLOS distance). Drag it to a more convenient spot. Click **↺ Reset takeoff position** to revert. Saved with the job.
@@ -137,22 +138,23 @@ Click **↻ Update** (or change any parameter) to run a preview. The map shows t
 Double-click the survey polygon to enter vertex-drag edit mode; double-click the map background to exit and save. On exit, buildings and UAS zones refresh automatically for the new shape.
 
 In edit mode:
-- White squares = vertices; smaller white diamonds = midpoints. Drag a midpoint to add a vertex. Click a vertex to delete it.
+- White squares = vertices; smaller white diamonds = midpoints. Drag a midpoint to add a vertex. Click a vertex to delete it. A polygon can be reduced to a triangle (3 vertices); to remove it entirely, right-click any of its remaining vertices.
 - **Bridge / Split** — right-click any vertex to start (turns orange), then left-click more vertices:
   - 2 vertices on the **same polygon** → a split line appears and a **Split job** button shows in the hint bar. Click it to divide the job into two sibling jobs, each containing one half of the polygon with all other parameters (IDs, flight settings, color) copied across.
   - 2 vertices on each of **two polygons** (4 total) → **bridge** (joins them with a quadrilateral corridor)
   - Press **Esc** or right-click to cancel.
+- When a keep-out buffer (e.g. power line) splits the parcel into multiple polygons, each piece is independently editable. Unwanted fragments can be removed by reducing them to a triangle and right-clicking a vertex.
 - Click **↻ Reset polygon** to revert all edits.
 
 ### Map tools
 
 - **Base layer** — the layer switcher (top-left, next to zoom buttons) toggles between OpenStreetMap and MML Ortokuva aerial imagery. The ortho layer requires `MML_API_KEY` in `.env`. MML's ortho tiles are natively available up to zoom 15; zooming in further upscales those tiles so the imagery stays visible for boundary editing rather than going blank.
 - **Measure** — hold **Ctrl** and right-click-drag to draw a dimensioning line with a distance label. Hold **Ctrl+Shift** to draw a radius circle instead. Click **✕** in the map controls to clear all measurements.
-- **Job color** — the color swatch next to the **Name** field sets the per-job display color used in map view. Saved immediately.
+- **Job color** — the color swatch next to the **Name** field sets the per-job display color used in map view. Clicking the swatch opens a popup with a palette of preset colours (configurable via `color_palette` in `config.toml`) and an inline HSV picker (saturation/value canvas, hue slider, RGB inputs, hex field). Colour changes are saved immediately without requiring a full export.
 
 ### Save and settings
 
-- **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs.
+- **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs, pressing **Esc**, or clicking the **←** back arrow.
 - **⚙ Settings** — opens the in-browser config editor (all sections: Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties). Changed fields highlight in amber; a search box filters across all sections. Saving hot-reloads the server and writes directly to `config.toml`. Drone profiles must be edited in `config.toml` directly; `config.example.toml` is the reference for all options.
 - **ⓘ About** — the `⋯` button in the header opens the About dialog, which shows the software version and a **session statistics** table: how many tiles, parcel geometries, and zone records were fetched from the network vs. served from the local cache, and the total bytes downloaded.
 
@@ -392,6 +394,7 @@ jobgen drones
 Name               GSD@50m   GSD@100m  Label
 m3m                  1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB channel
 m3m-ms               2.14 cm    4.28 cm  DJI Mavic 3 Multispectral — MS-limited GSD
+m3m-rgb              1.34 cm    2.68 cm  DJI Mavic 3 Multispectral — RGB only
 m3e                  1.34 cm    2.68 cm  DJI Mavic 3 Enterprise — RGB camera
 m300-p1-24           0.92 cm    1.83 cm  DJI Matrice 300 RTK + Zenmuse P1 (24 mm)
 m300-p1-35           0.63 cm    1.26 cm  DJI Matrice 300 RTK + Zenmuse P1 (35 mm)
@@ -422,6 +425,36 @@ the built-in list entirely, so copy across any profiles you still want to use.
 > Before flying a job generated for an M350 RTK, verify the value by exporting a
 > test mission from DJI Pilot 2 on the aircraft and checking `wpml:droneEnumValue`
 > in the KMZ.
+
+### Strip speed (auto mode)
+
+The KMZ `autoFlightSpeed` value written into every mission is calculated automatically from the drone's SD card write throughput, the flight altitude, and the front overlap setting. This matches how DJI Pilot 2 computes its own "auto speed" and prevents the drone from triggering captures faster than the card can write — which causes buffer overflow and mid-flight image loss at low altitudes.
+
+The formula is:
+
+```
+strip_speed = (1 − front_overlap) × altitude × (sensor_height / focal_length) / capture_interval
+```
+
+`capture_interval` is the minimum time between consecutive shutter triggers, limited by how fast the SD card can flush one burst of files. Each drone profile in `drones.toml` carries a calibrated `min_capture_interval_s` value:
+
+| Profile | Capture mode | Interval | Calibrated from |
+|---|---|---|---|
+| `m3m` | RGB + MS simultaneously (5 files ≈ 49 MB/capture) | 2.38 s | DJI Pilot 2: 8.9 m/s at 100 m AGL, 80% front overlap |
+| `m3m-ms` | RGB + MS simultaneously, GSD planned for MS sensor | 1.868 s | Back-calculated from DJI's 8.9 m/s using the MS sensor footprint |
+| `m3m-rgb`, `m3e` | RGB only (1 file ≈ 9 MB/capture) | 1.41 s | DJI Pilot 2: 15 m/s at 100 m AGL, 80% front overlap |
+| P1 profiles | — | 2.0 s | Estimate — calibrate from DJI Pilot 2 at a known altitude |
+
+Example speeds for the M3M (RGB+MS) at 80% front overlap:
+
+| Altitude | Strip speed |
+|---|---|
+| 30 m | ~2.7 m/s |
+| 50 m | ~4.5 m/s |
+| 80 m | ~7.1 m/s |
+| 100 m | ~8.9 m/s |
+
+To override with a fixed speed for all jobs, set `auto_flight_speed_ms` under `[flight]` in `config.toml`. In the browser UI the **Survey speed** control defaults to **Auto** (recomputes from altitude and drone profile); use the −/+ buttons to set a per-job override, or click **Auto** to return to computed mode. To calibrate a new drone or capture mode, read the auto-speed value from DJI Pilot 2 at a known altitude and back-calculate: `interval = (1 − overlap) × altitude × (sensor_height / focal_length) / speed`.
 
 ### Batch skeleton job creation (`jobgen batch`)
 
@@ -488,10 +521,12 @@ After `jobgen run`, `jobgen batch`, and `jobgen cache warm` complete, a session 
 ──────────────────────────────────────────────────────
   DEM tiles   3 fetched  (2.3 MB),  61 cached,  95% cache rate
   Buildings   3 fetched  (56.3 KB),  57 cached,  95% cache rate
+  Power lines 3 fetched  (12.1 KB),  57 cached,  95% cache rate
+  Pylons      3 fetched  (4.2 KB),   57 cached,  95% cache rate
   Parcels     18 cached,  100% cache rate
   UAS zones   18 cached,  100% cache rate
 ──────────────────────────────────────────────────────
-  Total       6 fetched,  154 cached,  2.3 MB downloaded
+  Total       12 fetched,  268 cached,  2.4 MB downloaded
 ──────────────────────────────────────────────────────
 ```
 
@@ -528,6 +563,27 @@ The same table appears on `jobgen serve` shutdown and in the **ⓘ About** dialo
 |---|---|---|
 | **A2** (C2-labelled drone + A2 certificate) | ≥ flight height from people | Derived from `--height` or config |
 | **A3** (no C-label / C3 / C4) | ≥ 150 m from residential/commercial/industrial/recreational areas | 150 m fixed |
+
+### Power line keep-out (`overhead_buffer_m`)
+
+High-voltage power lines are a significant hazard for low-altitude drone operations. The tool fetches MML *Maastotietokanta* `sahkolinja` features (110 kV+ lines only) for the same bounding box used for buildings.
+
+| Feature type | MTK kohdeluokka | Treatment |
+|---|---|---|
+| Ilmajohto (overhead span) | 22312 | Keep-out buffer subtracted from survey polygon |
+| Kaapeli (underground cable) | 22311 | Shown on map only — no keep-out |
+
+Because MML data contains known misclassifications (some overhead spans between pylon towers are coded as 22311), the tool cross-references line endpoints against `suurjannitelinjanpylvas` pylon tower locations. Any 22311 segment whose both endpoints sit within 2 m of a pylon tower is treated as overhead for keep-out purposes.
+
+Configure under `[powerlines]` in `config.toml` (or **⚙ Settings → Power Lines** in the browser UI):
+
+```toml
+[powerlines]
+enabled = true
+overhead_buffer_m = 30.0   # metres; Finnish aviation guidance recommends staying well clear
+```
+
+Set `overhead_buffer_m = 0` to show lines on the map without subtracting a buffer.
 
 The `operating_subcategory` in `config.toml` (or **⚙ Settings → Safety**) sets the default; override per-job with `--subcategory`.
 
@@ -608,6 +664,7 @@ All data sources require attribution. The manifest records the exact strings wit
 |---|---|
 | Elevation (DEM 2 m) | Contains data from the National Land Survey of Finland, Elevation model 2 m, retrieved \<date\>. |
 | Buildings (Maastotietokanta) | Contains data from the National Land Survey of Finland, Topographic Database, retrieved \<date\>. |
+| Power lines (Maastotietokanta) | Contains data from the National Land Survey of Finland, Topographic Database, retrieved \<date\>. |
 | Parcels (Ruokavirasto) | Contains data from Ruokavirasto (Finnish Food Authority), Peltolohkorekisteri, retrieved \<date\>. |
 | Properties (Kiinteistötietojärjestelmä) | Contains data from the National Land Survey of Finland, Cadastral Index Map, retrieved \<date\>. |
 | UAS zones | Contains data from Traficom, UAS Geographical Zones, retrieved \<date\>. |

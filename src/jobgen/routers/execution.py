@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from jobgen._server_state import SSEResponse
+from jobgen.wpml import resolve_strip_speed
 from pydantic import BaseModel
 
 import jobgen._server_state as _st
@@ -351,11 +352,12 @@ async def route_estimate(req: RouteEstimateRequest):
         drone = cfg.active_drone()
 
     H = req.height_m if req.height_m else drone.height_from_gsd(cfg.flight.target_gsd_cm)
-    speed_ms = req.speed_ms if req.speed_ms else cfg.flight.auto_flight_speed_ms
+    speed_ms = req.speed_ms if req.speed_ms else resolve_strip_speed(cfg.flight, drone, H)
 
     p_m = drone.pixel_pitch_um * 1e-6
     f_m = drone.focal_length_mm * 1e-3
-    strip_m = H * drone.image_width_px  * p_m / f_m * (1 - cfg.flight.overlap_side_pct  / 100)
+    footprint_m = H * drone.image_width_px * p_m / f_m
+    strip_m = footprint_m * (1 - cfg.flight.overlap_side_pct  / 100)
     photo_m = H * drone.image_height_px * p_m / f_m * (1 - cfg.flight.overlap_front_pct / 100)
 
     poly_4326 = _shape(req.polygon_4326)
@@ -370,7 +372,8 @@ async def route_estimate(req: RouteEstimateRequest):
         hp = reproject_to_3067(Point(req.takeoff_point_4326))
         home_3067 = (hp.x, hp.y)
 
-    result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
+    result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m,
+                                  footprint_width_m=footprint_m, home_3067=home_3067)
     flight_time = _route.estimate_flight_time(
         result,
         flight_height_m=H,
@@ -384,8 +387,12 @@ async def route_estimate(req: RouteEstimateRequest):
         line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
         return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
 
+    def _path_to_feature(pts: list) -> dict:
+        line_4326 = reproject_to_4326(LineString(pts))
+        return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
+
     strips_features  = [_seg_to_feature(*s) for s in result.strips_3067]
-    transit_features = [_seg_to_feature(*s) for s in result.transit_segs_3067]
+    transit_features = [_path_to_feature(s) for s in result.transit_segs_3067]
 
     return {
         "strip_count":       result.strip_count,

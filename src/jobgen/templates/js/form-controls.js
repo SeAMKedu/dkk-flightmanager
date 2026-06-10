@@ -10,12 +10,15 @@ function defaultJobName() {
     + String(n.getMinutes()).padStart(2,'0');
 }
 
-function updatePathHint() {
-  var jn = document.getElementById('jname').value.trim() || '(name)';
-  var rel = _activeJobFolder ? _activeJobFolder + '/' + jn : jn;
-  document.getElementById('pathint').textContent = 'Output: ' + outputDir + '/' + rel;
+function updateFolderHint() {
+  var el = document.getElementById('job-folder-hint');
+  if (_activeJobFolder) {
+    el.textContent = _activeJobFolder;
+    el.classList.add('has-folder');
+  } else {
+    el.classList.remove('has-folder');
+  }
 }
-document.getElementById('jname').addEventListener('input', updatePathHint);
 
 // ── GSD ───────────────────────────────────────────────────────────────────────
 function updateGsd() {
@@ -24,6 +27,7 @@ function updateGsd() {
   var el = document.getElementById('gsdv');
   if (!d || isNaN(h)) { el.textContent = '—'; return; }
   el.textContent = (h * d.pixel_pitch_um / (d.focal_length_mm * 10)).toFixed(2);
+  if (_speedMsOverride === null) _renderSpeedControl();
 }
 var _radiusLinked = true;
 
@@ -161,6 +165,8 @@ document.getElementById('hgt').addEventListener('change', scheduleAutoUpdate);
 document.getElementById('offset').addEventListener('change', scheduleAutoUpdate);
 
 function onIdBlur() {
+  var key = idsKey();
+  if (key.replace('||', '').trim() && key !== _lastPreviewedIds) markDirty();
   setTimeout(function() {
     var active = document.activeElement;
     if (active === document.getElementById('pids') || active === document.getElementById('kids')) return;
@@ -169,6 +175,7 @@ function onIdBlur() {
     if (key === _lastPreviewedIds) return;
     _fitBoundsOnNextRender = true;
     scheduleAutoUpdate(true);
+    _setSec('area', true);
   }, 150);
 }
 document.getElementById('pids').addEventListener('blur', onIdBlur);
@@ -185,9 +192,9 @@ function _doNewJob() {
   document.getElementById('jname').value = defaultJobName();
   document.getElementById('pids').value = '';
   document.getElementById('kids').value = '';
-  updatePathHint();
+  updateFolderHint();
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
   editLayers.clearLayers();
   editMode = false;
   _detachEditListeners();
@@ -200,7 +207,7 @@ function _doNewJob() {
   clearError();
   hideExtModifiedNotice();
   document.getElementById('offset').value = 0;
-  document.getElementById('speed-ms').value = '';
+  setSpeedSilent(null);
   setRouteAngleSilent(null);
   _routeAngleAuto = null;
   _clearRouteLayer();
@@ -217,8 +224,35 @@ function _doNewJob() {
   resetMapToUserLocation();
 }
 
+// ── Section collapse ──────────────────────────────────────────────────────────
+function toggleSec(id) {
+  var sec = document.getElementById(id + '-sec');
+  if (!sec) return;
+  var collapsed = sec.classList.toggle('collapsed');
+  if (id !== 'area') localStorage.setItem('sec-' + id + '-collapsed', collapsed ? '1' : '0');
+}
+
+function _setSec(id, collapsed) {
+  var sec = document.getElementById(id + '-sec');
+  if (sec) sec.classList.toggle('collapsed', collapsed);
+}
+
+function _initSecState() {
+  ['flight', 'poly'].forEach(function(id) {
+    if (localStorage.getItem('sec-' + id + '-collapsed') === '1') {
+      var sec = document.getElementById(id + '-sec');
+      var body = sec && sec.querySelector('.sec-body');
+      if (body) body.style.transition = 'none';
+      if (sec) sec.classList.add('collapsed');
+      if (body) requestAnimationFrame(function() { body.style.transition = ''; });
+    }
+  });
+}
+_initSecState();
+
 // ── Area section focus hint ───────────────────────────────────────────────────
 function focusArea() {
+  _setSec('area', false);
   var el = document.getElementById('area-sec');
   el.classList.remove('area-focus');
   void el.offsetWidth;
@@ -247,7 +281,7 @@ function getParams() {
     keepout: document.getElementById('kochk').checked,
     preview_radius_m: parseFloat(document.getElementById('warn-radius').value) || null,
     route_angle_deg: _routeAngleDeg,
-    speed_ms: parseFloat(document.getElementById('speed-ms').value) || null,
+    speed_ms: _speedMsOverride,
   };
 }
 

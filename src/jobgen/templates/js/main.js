@@ -19,7 +19,7 @@ async function init() {
     var cfg = await cr.json();
 
     outputDir = cfg.output_dir || '';
-    updatePathHint();
+    updateFolderHint();
 
     if (cfg.default_drone) sel.value = cfg.default_drone;
     if (cfg.subcategory) setSub(cfg.subcategory, true);
@@ -38,11 +38,12 @@ async function init() {
     if (cfg.overlap_side_pct)  _cfgOverlapSide  = cfg.overlap_side_pct;
     if (cfg.auto_flight_speed_ms) {
       _cfgDefaultSpeedMs = cfg.auto_flight_speed_ms;
-      document.getElementById('speed-ms').placeholder = cfg.auto_flight_speed_ms.toFixed(1) + ' (default)';
     }
     updateGsd();
     _mmlApiKey = cfg.mml_api_key || '';
     if (_mmlApiKey) _initBaseLayers(_mmlApiKey);
+    if (cfg.color_palette) initColorPalette(cfg.color_palette);
+    if (cfg.max_area_loss_pct != null) _cfgMaxAreaLossPct = cfg.max_area_loss_pct;
     console.log('[init] config loaded, outputDir='+outputDir+', drone='+cfg.default_drone);
   } catch(e) {
     console.error('[init] failed:', e);

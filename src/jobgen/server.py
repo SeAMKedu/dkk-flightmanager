@@ -104,7 +104,7 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
         except asyncio.CancelledError:
             pass
         from jobgen.net_stats import print_summary as _print_net_stats
-        _print_net_stats()
+        _print_net_stats(_st.config.cache.cache_dir)
 
     app = FastAPI(title="dkk-jobmaker", docs_url=None, redoc_url=None, lifespan=lifespan)
 
@@ -122,7 +122,8 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
                 "pixel_pitch_um":  d.pixel_pitch_um,
                 "image_width_px":  d.image_width_px,
                 "image_height_px": d.image_height_px,
-                "battery_minutes": d.battery_minutes,
+                "battery_minutes":       d.battery_minutes,
+                "min_capture_interval_s": d.min_capture_interval_s,
             }
             for d in _st.config.drones
         ]
@@ -135,7 +136,22 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     @app.get("/api/stats")
     async def get_stats():
         from jobgen.net_stats import get as _get_stats
-        return _get_stats()
+        from jobgen.cache import query_disk_size
+        data = _get_stats()
+        data["cache_disk_bytes"] = query_disk_size(_st.config.cache.cache_dir)
+        return data
+
+    def _compute_default_speed() -> float:
+        """Return the strip speed that will be used for the current config/drone.
+
+        When auto_flight_speed_ms is None the speed is altitude-dependent; we
+        compute it at the current default altitude so the UI can show a sensible
+        placeholder.  The actual KMZ value is re-computed at export time.
+        """
+        from jobgen.wpml import resolve_strip_speed
+        drone = _st.config.active_drone()
+        H = drone.height_from_gsd(_st.config.flight.target_gsd_cm)
+        return resolve_strip_speed(_st.config.flight, drone, H)
 
     @app.get("/api/config")
     async def get_config():
@@ -156,8 +172,10 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             "mml_api_key": os.environ.get("MML_API_KEY", ""),
             "overlap_front_pct": _st.config.flight.overlap_front_pct,
             "overlap_side_pct":  _st.config.flight.overlap_side_pct,
-            "auto_flight_speed_ms": _st.config.flight.auto_flight_speed_ms,
+            "auto_flight_speed_ms": _compute_default_speed(),
             "takeoff_security_height_m": _st.config.flight.takeoff_security_height_m,
+            "color_palette": _st.config.output.color_palette,
+            "max_area_loss_pct": _st.config.home_safety.max_area_loss_pct,
         }
 
     app.include_router(execution.router)

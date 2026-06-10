@@ -129,7 +129,12 @@ async def jobs_geojson(folder: str | None = None):
                     "flight_ready":      card.get("flight_ready"),
                     "needs_review":      card.get("needs_review"),
                     "area_ha":           card.get("area_ha"),
+                    "area_lost_pct":     card.get("area_lost_pct"),
+                    "height_m":          card.get("height_m"),
+                    "strip_speed_ms":    card.get("strip_speed_ms"),
                     "flight_time_min":   card.get("flight_time_min"),
+                    "photo_count":       card.get("photo_count"),
+                    "over_one_battery":  card.get("over_one_battery"),
                     "drone":             card.get("drone"),
                     "status":            card.get("status", "ok"),
                     "sort_order":        card.get("sort_order"),
@@ -621,10 +626,27 @@ async def merge_jobs(req: MergeRequest):
         if merged.is_empty:
             raise HTTPException(400, detail="Union produced empty geometry")
 
+        all_parcel_ids: list[str] = []
+        all_property_ids: list[str] = []
+        seen2: set[str] = set()
+        for _, p in all_params:
+            inp = p.get("inputs", {})
+            for pid in inp.get("parcel_ids") or []:
+                if pid not in seen2:
+                    seen2.add(pid)
+                    all_parcel_ids.append(pid)
+        seen2.clear()
+        for _, p in all_params:
+            inp = p.get("inputs", {})
+            for pid in inp.get("property_ids") or []:
+                if pid not in seen2:
+                    seen2.add(pid)
+                    all_property_ids.append(pid)
+
         merged_params = {
             "job_name": new_name,
             "saved_at": None,
-            "inputs":  {"parcel_ids": [], "property_ids": []},
+            "inputs":  {"parcel_ids": all_parcel_ids, "property_ids": all_property_ids},
             "flight":  all_params[0][1].get("flight", {}),
             "polygon": all_params[0][1].get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
             "safety":  all_params[0][1].get("safety",  {"preview_radius_m": None}),

@@ -13,8 +13,11 @@ takeoff_security_height_m = 50
 transitional_speed_ms = 15    # m/s transit between waylines
 overlap_front_pct = 80
 overlap_side_pct = 70
-# Speed along mapping strips (m/s). Default matches the reference fixture (8.9 m/s).
-auto_flight_speed_ms = 8.9
+# Speed along mapping strips (m/s).
+# Omit (or comment out) to use auto mode: speed is calculated per flight from the
+# drone's min_capture_interval_s, altitude, and front overlap — matching DJI Pilot 2.
+# Set a fixed value here only to override (e.g. to slow down in strong winds).
+# auto_flight_speed_ms = 8.9
 # Extra margin around the survey polygon in the terrain-follow DSM (metres).
 # Covers the RTH path and takeoff/landing area outside the survey polygon.
 dsm_margin_m = 300
@@ -104,12 +107,29 @@ cache_dir = "cache"
 tile_size_m = 1000            # grid tile side length in EPSG:3067 metres
 dem_ttl_days = 365            # korkeusmalli_2m: near-static, long TTL
 buildings_ttl_days = 180      # maastotietokanta: slower-changing, shorter TTL
+powerlines_ttl_days = 180     # sahkolinja: high-voltage line geometry
+pylons_ttl_days = 180         # suurjannitelinjanpylvas: HV pylon towers (for overhead correction)
 parcels_ttl_days = 400        # Ruokavirasto parcel geometries
 properties_ttl_days = 400     # MML kiinteistö geometries
 offline = false               # true = cache-only; fail cleanly on cache miss
+max_cache_size_mb = 0         # 0 = unlimited; set e.g. 2000 to cap tile cache at ~2 GB (LRU eviction)
 
 [output]
 output_dir = "output"
+# Colour palette shown in the job editor for quick colour selection.
+# Provide any number of CSS hex colours; 8–10 is a good range.
+color_palette = [
+  "#3b82f6", "#16a34a", "#dc2626", "#d97706",
+  "#7c3aed", "#0891b2", "#db2777", "#65a30d",
+  "#ea580c", "#475569",
+]
+
+[powerlines]
+# MML Maastotietokanta sahkolinja: overhead high-voltage lines (110 kV+, kohdeluokka 22312).
+# No voltage attribute in the data — all overhead lines get the same buffer.
+# Set enabled = false to skip fetching and keep-out entirely.
+enabled = true
+overhead_buffer_m = 30.0    # keep-out distance around each overhead line (metres)
 
 [zones]
 # Traficom publishes Finnish UAS zones at a confirmed open endpoint (no auth).

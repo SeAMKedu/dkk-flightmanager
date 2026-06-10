@@ -15,7 +15,7 @@ async function _doOpenJob(path) {
     var name = path.includes('/') ? path.split('/').pop() : path;
     if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
     Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-    lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+    lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
     editLayers.clearLayers();
     editMode = false; _detachEditListeners();
     _clearTakeoff();
@@ -26,9 +26,9 @@ async function _doOpenJob(path) {
     }
     _restoreFormFromParams(p);
     document.getElementById('jname').value = name;
-    updatePathHint();
     _activeJob = path;
     _activeJobFolder = data.folder || null;
+    updateFolderHint();
     _setColorPicker(p && p.color);
     _dirty = false;
     clearError();
@@ -96,7 +96,7 @@ function _restoreFormFromParams(p) {
     }
     if (p.flight.subcategory) setSub(p.flight.subcategory, true);
     setRouteAngleSilent(p.flight.route_angle_deg != null ? p.flight.route_angle_deg : null);
-    document.getElementById('speed-ms').value = p.flight.speed_ms != null ? p.flight.speed_ms : '';
+    setSpeedSilent(p.flight.speed_ms != null ? p.flight.speed_ms : null);
   }
   if (p.polygon) {
     if (p.polygon.offset_m != null) document.getElementById('offset').value = p.polygon.offset_m;
@@ -116,6 +116,13 @@ function _restoreFormFromParams(p) {
     editedPoly = null; polyModified = false;
     document.getElementById('modbadge').style.display = 'none';
   }
+  var hasIds = !!(p.inputs && ((p.inputs.parcel_ids||[]).length || (p.inputs.property_ids||[]).length));
+  _setSec('area', hasIds);
+}
+
+// ── Back to map view ──────────────────────────────────────────────────────────
+function goBackToMap() {
+  confirmIfDirty(function() { openMapView(_activeJobFolder || null); });
 }
 
 // ── Reveal in file manager ────────────────────────────────────────────────────
@@ -206,7 +213,7 @@ async function doRename(j, newName) {
     if (_activeJob === j.path) {
       _activeJob = data.path;
       document.getElementById('jname').value = newName;
-      updatePathHint();
+      updateFolderHint();
     }
     await loadJobsList();
   } catch(e) { showError('Rename failed: ' + e.message); await loadJobsList(); }
@@ -227,18 +234,66 @@ function hideStaleNotice() {
 var _DEFAULT_JOB_COLOR = '#3b82f6';
 
 function _setColorPicker(color) {
-  var el = document.getElementById('job-color');
-  el.value = color || _DEFAULT_JOB_COLOR;
-  el.disabled = !_activeJob;
+  var hex = color || _DEFAULT_JOB_COLOR;
+  document.getElementById('job-color').value = hex;
+  document.getElementById('color-btn').disabled = !_activeJob;
+  _cpSetFromHex(hex);
+}
+
+function _syncPaletteActive(hex) {
+  var norm = (hex || '').toLowerCase();
+  document.querySelectorAll('.color-swatch').forEach(function(s) {
+    s.classList.toggle('active', s.dataset.color === norm);
+  });
+}
+
+function _closeColorPopup() {
+  document.getElementById('color-popup').classList.remove('open');
+}
+
+function toggleColorPopup(e) {
+  e.stopPropagation();
+  var popup = document.getElementById('color-popup');
+  if (popup.classList.toggle('open')) {
+    _cpSetFromHex(document.getElementById('job-color').value || _DEFAULT_JOB_COLOR);
+    setTimeout(function() {
+      document.addEventListener('click', function handler(ev) {
+        if (!popup.contains(ev.target)) { _closeColorPopup(); }
+        else { document.addEventListener('click', handler, {once: true}); }
+      }, {once: true});
+    }, 0);
+  }
+}
+
+function _applyColor(hex) {
+  _cpSetFromHex(hex);
+  document.getElementById('job-color').value = hex;
+  document.getElementById('job-color').dispatchEvent(new Event('change'));
+  _closeColorPopup();
+}
+
+function initColorPalette(colors) {
+  var palette = document.getElementById('color-palette');
+  if (!palette || !colors || !colors.length) return;
+  palette.innerHTML = '';
+  colors.forEach(function(hex) {
+    var s = document.createElement('div');
+    s.className = 'color-swatch';
+    s.dataset.color = hex.toLowerCase();
+    s.style.background = hex;
+    s.title = hex;
+    s.addEventListener('click', function(e) { e.stopPropagation(); _applyColor(hex); });
+    palette.appendChild(s);
+  });
 }
 
 document.getElementById('job-color').addEventListener('change', async function() {
   if (!_activeJob) return;
-  var color = this.value;
   try {
+    _ownSavedJob = _activeJob;
     await fetch(jobApiUrl(_activeJob), {
       method: 'PATCH', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({color: color})
+      body: JSON.stringify({color: this.value})
     });
   } catch(e) { console.warn('[color patch]', e); }
 });

@@ -55,8 +55,9 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "description": "Lateral overlap between adjacent flight strips.",
     },
     "flight.auto_flight_speed_ms": {
-        "label": "Strip flight speed", "unit": "m/s",
-        "description": "Speed along mapping strips. DJI Pilot 2 derives shutter timing from this — match to your sensor's max shutter speed at the target GSD.",
+        "label": "Strip flight speed override", "unit": "m/s",
+        "description": "Speed along mapping strips. Leave blank for auto mode (calculated per flight from altitude, overlap, and drone capture interval). Set a fixed value only to override — e.g. to slow down in strong winds.",
+        "nullable": True,
     },
     "flight.dsm_margin_m": {
         "label": "DSM margin", "unit": "m",
@@ -197,6 +198,15 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "label": "Request timeout", "unit": "s",
         "description": "HTTP timeout for MML property (kiinteistö) requests.",
     },
+    # ── Power Lines ───────────────────────────────────────────────────────────
+    "powerlines.enabled": {
+        "label": "Enable power line keep-out",
+        "description": "Fetch overhead high-voltage lines from MML Maastotietokanta and show them on the map. Overhead lines are kept out of the survey area by the safe distance below.",
+    },
+    "powerlines.overhead_buffer_m": {
+        "label": "Power line safe distance", "unit": "m",
+        "description": "Keep-out buffer around each overhead high-voltage line (110 kV+). The survey polygon is contracted away from lines by this distance. Finnish aviation guidance recommends staying well clear of high-voltage lines.",
+    },
     # ── Top-level ─────────────────────────────────────────────────────────────
     "default_drone": {
         "label": "Default drone",
@@ -209,6 +219,7 @@ _SECTIONS_DEF: list[tuple[str, str]] = [
     ("flight",      "Flight"),
     ("home_safety", "Safety"),
     ("polygon",     "Polygon"),
+    ("powerlines",  "Power Lines"),
     ("zones",       "UAS Zones"),
     ("cache",       "Cache"),
     ("output",      "Output"),
@@ -221,6 +232,7 @@ _SKIP_FIELDS: dict[str, set[str]] = {
     "home_safety": {"residential_kohdeluokka", "a3_additional_kohdeluokka"},
     "zones":       {"api_url"},
     "cache":       {"tile_size_m", "cache_dir"},
+    "output":      {"color_palette"},
 }
 
 
@@ -271,12 +283,13 @@ def _extract_type_info(fschema: dict) -> dict:
 def _build_sections(config: Any) -> list[dict]:
     from jobgen.config import (
         CacheConfig, FlightConfig, HomeSafetyConfig, OutputConfig,
-        ParcelsConfig, PolygonConfig, PropertiesConfig, ZonesConfig,
+        ParcelsConfig, PolygonConfig, PowerLinesConfig, PropertiesConfig, ZonesConfig,
     )
     model_map: dict[str, type] = {
         "flight":      FlightConfig,
         "home_safety": HomeSafetyConfig,
         "polygon":     PolygonConfig,
+        "powerlines":  PowerLinesConfig,
         "zones":       ZonesConfig,
         "cache":       CacheConfig,
         "output":      OutputConfig,

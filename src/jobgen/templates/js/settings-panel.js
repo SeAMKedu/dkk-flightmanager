@@ -375,6 +375,10 @@ function _renderStats(data) {
     html += '<tr><td>' + row[0] + '</td><td>' + row[1] + '</td></tr>';
   }
   html += '<tr class="about-stats-total"><td>Total</td><td>' + summary + '</td></tr>';
+  var diskB = _fmtBytes(data.cache_disk_bytes || 0);
+  if (diskB) {
+    html += '<tr class="about-stats-total"><td>Cache on disk</td><td>' + diskB + '</td></tr>';
+  }
   html += '</table>';
   el.innerHTML = html;
 }

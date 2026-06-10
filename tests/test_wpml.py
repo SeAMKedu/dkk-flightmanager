@@ -446,7 +446,9 @@ class TestBatteryBudget:
         assert result.over_one_battery
 
     def test_estimate_budget_returns_expected_keys(self):
-        budget = _estimate_budget(_SURVEY, _FLIGHT)
+        from jobgen.wpml import resolve_strip_speed
+        _speed = resolve_strip_speed(_FLIGHT, None, _FLIGHT.derived_flight_height_m)
+        budget = _estimate_budget(_SURVEY, _FLIGHT, speed_ms=_speed)
         assert "photo_count"      in budget
         assert "flight_time_min"  in budget
         assert "over_one_battery" in budget

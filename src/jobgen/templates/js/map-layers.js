@@ -7,19 +7,23 @@ function onPreviewDone(payload) {
   clearAreaFocus();
   document.getElementById('xb').disabled = false;
   document.getElementById('rstbtn').disabled = false;
-  // Compute the lowest zone floor across all zone hits.
+  // Compute the lowest zone floor across zones that directly intersect the survey area.
+  // Buffer-only and context-only zones are excluded — they don't constrain the flight altitude.
   _altCap = null;
   (payload.zone_hits||[]).forEach(function(z) {
+    if (z.context_only || z.buffer_only) return;
     if (z.lower_ref === 'AGL' && z.lower_limit != null && z.lower_limit > 0) {
       var m = z.lower_uom === 'FT' ? z.lower_limit * 0.3048 : parseFloat(z.lower_limit);
       if (!isNaN(m) && (_altCap === null || m < _altCap)) _altCap = m;
     }
   });
   if (_altCap !== null) {
-    var suggested = Math.floor(_altCap * 0.75);
-    document.getElementById('hgt').value = suggested;
-    updateGsd();
-    if (_radiusLinked) setRadiusLinked(true);
+    var currentH = parseFloat(document.getElementById('hgt').value);
+    if (isNaN(currentH) || currentH > _altCap) {
+      document.getElementById('hgt').value = _altCap;
+      updateGsd();
+      if (_radiusLinked) setRadiusLinked(true);
+    }
   }
   try {
     // Auto-enable zones/areas on first appearance (when not yet in user prefs)
@@ -76,7 +80,7 @@ function geomToPolys(geom, style) {
 function renderMap(data) {
   exitBridgeMode();
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null};
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, plines:null, plko:null, zones:null, route:null, coverage:null};
   editLayers.clearLayers();
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
 
@@ -181,6 +185,37 @@ function renderMap(data) {
     }).addTo(map);
   }
 
+  // Power line keepout buffer (amber semi-transparent zone)
+  if (data.powerlines_keepout) {
+    var plkg = L.layerGroup();
+    geomToPolys(data.powerlines_keepout, {
+      color: '#b45309', weight: 1, dashArray: '4 3',
+      fillColor: '#fde68a', fillOpacity: 0.30, interactive: false
+    }).forEach(function(p){ p.addTo(plkg); });
+    if (plkg.getLayers().length) lrs.plko = plkg.addTo(map);
+  }
+
+  // Power lines — solid amber = overhead (22312), dashed = underground cable (22311)
+  if (data.power_lines && data.power_lines.length) {
+    var plg = L.layerGroup();
+    data.power_lines.forEach(function(pl) {
+      var g = pl.geojson;
+      if (!g) return;
+      var coords;
+      if (g.type === 'LineString') coords = [g.coordinates];
+      else if (g.type === 'MultiLineString') coords = g.coordinates;
+      else return;
+      var style = pl.is_overhead
+        ? {color:'#d97706', weight:2.5, opacity:0.9, interactive:false}
+        : {color:'#d97706', weight:2, opacity:0.7, dashArray:'6 4', interactive:false};
+      coords.forEach(function(seg) {
+        var lls = seg.map(function(c){ return [c[1], c[0]]; });
+        L.polyline(lls, style).addTo(plg);
+      });
+    });
+    if (plg.getLayers().length) lrs.plines = plg.addTo(map);
+  }
+
   // Buildings (red = keepout, yellow = info)
   if (data.buildings && data.buildings.length) {
     var bg = L.layerGroup();
@@ -214,7 +249,7 @@ function renderMap(data) {
   var s = data.stats || {};
   if (s.has_parcels) attrs.push('Parcels &copy; <a href="https://ruokavirasto.fi" target="_blank">Ruokavirasto</a>');
   if (s.has_properties) attrs.push('Properties &copy; <a href="https://maanmittauslaitos.fi" target="_blank">MML</a>');
-  if (data.buildings && data.buildings.length) attrs.push('Topographic DB &amp; DEM &copy; <a href="https://maanmittauslaitos.fi" target="_blank">MML</a>');
+  if (data.buildings && data.buildings.length || data.power_lines && data.power_lines.length) attrs.push('Topographic DB &amp; DEM &copy; <a href="https://maanmittauslaitos.fi" target="_blank">MML</a>');
   if (data.zone_hits) attrs.push('UAS zones &copy; <a href="https://traficom.fi" target="_blank">Traficom</a>');
   if (attrs.length) { _dataAttribution = attrs.join(' | '); map.attributionControl.addAttribution(_dataAttribution); }
 }
