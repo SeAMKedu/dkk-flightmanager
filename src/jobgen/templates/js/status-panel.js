@@ -25,6 +25,8 @@ function renderStatus(s) {
   }
   document.getElementById('spcontent').innerHTML =
     sh
+   +'<div class="sp-body">'
+   +'<div class="sp-metrics">'
    +'<div class="sgrid">'
    +'<div class="sbox"><div class="slbl">Area</div><div class="sval">'+fmt1(s&&s.final_area_ha)+' '+(s?'ha':'')+' </div></div>'
    +'<div class="sbox"><div class="slbl">Height</div><div class="sval">'+fmt0(s&&s.flight_height_m)+' '+(s?'m':'')+' </div></div>'
@@ -38,5 +40,7 @@ function renderStatus(s) {
    +'<div class="sbox"><div class="slbl">Photos</div><div class="sval" id="rstat-photos">—</div></div>'
    +'<div class="sbox"><div class="slbl">Flight time</div><div class="sval" id="rstat-time">—</div></div>'
    +'</div>'
-   +(rh ? '<div class="rlist">'+rh+'</div>' : '');
+   +'</div>'
+   +(rh ? '<div class="rlist">'+rh+'</div>' : '')
+   +'</div>';
 }
