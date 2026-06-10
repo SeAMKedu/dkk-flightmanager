@@ -16,13 +16,13 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 import jobgen._server_state as _st
 from jobgen.config import AppConfig
 from jobgen.routers import execution, management, settings
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
-_ui_html_cache: str | None = None
 
 _WATCHER_TRIGGERS = frozenset({"job_params.json", "manifest.json", ".dkk-folder"})
 
@@ -68,15 +68,12 @@ log = logging.getLogger(__name__)
 
 
 def _load_ui() -> str:
-    global _ui_html_cache
-    if _ui_html_cache is None:
-        import jinja2
-        env = jinja2.Environment(
-            loader=jinja2.FileSystemLoader(_TEMPLATES_DIR),
-            autoescape=False,
-        )
-        _ui_html_cache = env.get_template("ui.html").render()
-    return _ui_html_cache
+    import jinja2
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(_TEMPLATES_DIR),
+        autoescape=False,
+    )
+    return env.get_template("ui.html").render()
 
 
 def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
@@ -181,6 +178,8 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     app.include_router(execution.router)
     app.include_router(management.router)
     app.include_router(settings.router)
+
+    app.mount("/static", StaticFiles(directory=_TEMPLATES_DIR), name="static")
 
     from jobgen.mcp_server import mcp as _mcp
     app.mount("/mcp", _mcp.sse_app())
