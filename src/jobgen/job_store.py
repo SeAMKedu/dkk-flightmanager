@@ -191,7 +191,7 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "area_ha": g.get("final_area_ha"),
         "original_area_ha": g.get("original_area_ha"),
         "area_lost_pct": g.get("area_lost_pct"),
-        "subcategory": params.get("subcategory"),
+        "subcategory": params.get("subcategory") or manifest.get("home_safety", {}).get("operating_subcategory"),
         "vertex_count": g.get("survey_vertex_count"),
         "drone": f.get("drone"),
         "drone_label": f.get("drone_label"),

@@ -173,6 +173,13 @@ function _mvApplyFilter(folderFilter, skipFit) {
   _mvDrawRoute();
   showBatteryTimeline();
   renderStatPanel(_mvLayers.map(function(item) { return item.feature; }));
+  if (_mvStatMode !== 'normal') {
+    _mvLayers.forEach(function(item) {
+      if (_mvSelected.has(item.path)) return;
+      var c = getMvStatColor(item.feature.properties);
+      item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.18});
+    });
+  }
 }
 
 function _mvClearLayers() {
