@@ -124,9 +124,12 @@ def process_survey(
     keepout = build_keepout(buildings, home_safety, power_line_geoms, power_line_buffer_m)
 
     # 6. Apply keep-out (or measure distance)
-    survey, area_lost_pct, min_dist, offset_applied = _apply_keepout(
-        survey, keepout, home_safety, original_area_ha
-    )
+    survey, min_dist, offset_applied = _apply_keepout(survey, keepout, home_safety)
+
+    # Fraction of original parcel covered by the flight polygon
+    covered = survey.intersection(merged)
+    area_lost_pct = max(0.0, (1.0 - covered.area / merged.area) * 100) if merged.area > 0 else 0.0
+    log.info("Keep-out: %.1f%% of original parcel area unreachable", area_lost_pct)
 
     if area_lost_pct > home_safety.max_area_loss_pct:
         reason = (
@@ -286,35 +289,29 @@ def _apply_keepout(
     survey: BaseGeometry,
     keepout: BaseGeometry | None,
     home_safety: HomeSafetyConfig,
-    original_area_ha: float,
-) -> tuple[BaseGeometry, float, float | None, bool]:
+) -> tuple[BaseGeometry, float | None, bool]:
     """Apply keep-out to survey polygon.
 
-    Returns (survey, area_lost_pct, min_dist_to_home_m, offset_applied).
+    Returns (survey, min_dist_to_home_m, offset_applied).
+    Area-lost percentage is computed by the caller via intersection with the original parcel.
     """
     if keepout is None:
-        return survey, 0.0, None, False
+        return survey, None, False
 
     if home_safety.offset_enabled:
         result = survey.difference(keepout)
         if result.is_empty:
             log.error("Keep-out completely covers the survey area — flagging for review")
             result = survey  # return original so pipeline can flag and surface it
-            area_lost_pct = 100.0
-        else:
-            area_lost_pct = max(
-                0.0,
-                (original_area_ha - result.area * _M2_TO_HA) / original_area_ha * 100
-            )
-        log.info("Keep-out applied: %.1f%% area lost", area_lost_pct)
-        return result, area_lost_pct, None, True
+        log.info("Keep-out applied")
+        return result, None, True
     else:
         # No offset: measure minimum distance to nearest building instead
         min_dist = survey.distance(keepout)
         log.info(
             "offset_enabled=false — minimum distance to keep-out zone: %.1f m", min_dist
         )
-        return survey, 0.0, min_dist, False
+        return survey, min_dist, False
 
 
 def _enforce_policy(

@@ -215,21 +215,16 @@ class TestApplyKeeput:
         b = make_building(x=300_480, y=6_900_250, kohdeluokka=42211)
         cfg = HomeSafetyConfig(home_buffer_m=50, offset_enabled=True)
         keepout = build_keepout([b], cfg)
-        result, area_lost, dist, applied = _apply_keepout(
-            survey, keepout, cfg, survey.area / 10_000
-        )
+        result, dist, applied = _apply_keepout(survey, keepout, cfg)
         assert applied
         assert result.area < survey.area
-        assert area_lost > 0
 
     def test_offset_disabled_measures_distance(self):
         survey = make_parcel(w=500, h=500).geometry
         b = make_building(x=301_000, y=6_900_250, kohdeluokka=42211)
         cfg = HomeSafetyConfig(home_buffer_m=150, offset_enabled=False)
         keepout = build_keepout([b], cfg)
-        result, area_lost, dist, applied = _apply_keepout(
-            survey, keepout, cfg, survey.area / 10_000
-        )
+        result, dist, applied = _apply_keepout(survey, keepout, cfg)
         assert not applied
         assert result.area == survey.area  # unchanged
         assert dist is not None
@@ -237,11 +232,8 @@ class TestApplyKeeput:
 
     def test_offset_enabled_but_no_keepout(self):
         survey = make_parcel().geometry
-        result, area_lost, dist, applied = _apply_keepout(
-            survey, None, _DEFAULT_HOME_SAFETY, survey.area / 10_000
-        )
+        result, dist, applied = _apply_keepout(survey, None, _DEFAULT_HOME_SAFETY)
         assert not applied
-        assert area_lost == 0.0
         assert dist is None
 
     def test_offset_clears_home_buffer(self):
@@ -251,7 +243,7 @@ class TestApplyKeeput:
         b = make_building(x=300_100, y=6_900_100, w=30, h=30, kohdeluokka=42211)
         cfg = HomeSafetyConfig(home_buffer_m=150, offset_enabled=True)
         keepout = build_keepout([b], cfg)
-        result, _, _, _ = _apply_keepout(parcel.geometry, keepout, cfg, parcel.area_ha)
+        result, _, _ = _apply_keepout(parcel.geometry, keepout, cfg)
         if not result.is_empty:
             # Buffer is approximated with line segments so the measured distance is
             # slightly less than the nominal 150 m; allow 1% tolerance.

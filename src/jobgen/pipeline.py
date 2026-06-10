@@ -33,6 +33,8 @@ from jobgen.powerlines import (
 from jobgen.cache import FetcherFn, TileRecord, get_tiles, tile_provenance
 from jobgen.config import AppConfig
 from jobgen.elevation import tile_fetcher as dem_fetcher, validate_tile
+from shapely import make_valid
+from shapely.ops import unary_union
 from jobgen.geometry import (
     SurveyGeometry, apply_survey_offset, build_keepout, process_survey,
     reproject_to_4326, reproject_to_3067, vertex_count, suggest_takeoff_point,
@@ -109,12 +111,20 @@ def run_job(
     include_buf = config.home_safety.resolved_include_buffer_m
     _preview_radius_cfg = config.home_safety.preview_radius_m
 
+    _pl_geoms_job = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+    _pl_buf_job = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
+    _baseline_3067 = (
+        make_valid(unary_union([g.geometry for g in inp.input_geoms]))
+        if inp.input_geoms else None
+    )
     if custom_polygon_4326 is not None:
-        survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
+        survey_geom = _synth_survey_geom(
+            custom_polygon_4326, config.polygon.survey_offset_m,
+            inp.buildings, config.home_safety, _pl_geoms_job, _pl_buf_job,
+            baseline_geom_3067=_baseline_3067,
+        )
     else:
         _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
-        _pl_geoms_job = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
-        _pl_buf_job = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
         survey_geom = process_survey(
             inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
             _pl_geoms_job, _pl_buf_job,
@@ -337,13 +347,21 @@ def run_preview(
 
     # 3. Survey polygon
     _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
+    _pl_geoms_prev = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+    _pl_buf_prev = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
+    _baseline_3067_prev = (
+        make_valid(unary_union([g.geometry for g in inp.input_geoms]))
+        if inp.input_geoms else None
+    )
     if custom_polygon_4326 is not None:
         log.info("Preview: using custom polygon (bridge/cut applied)")
-        survey_geom = _synth_survey_geom(custom_polygon_4326, config.polygon.survey_offset_m)
+        survey_geom = _synth_survey_geom(
+            custom_polygon_4326, config.polygon.survey_offset_m,
+            inp.buildings, config.home_safety, _pl_geoms_prev, _pl_buf_prev,
+            baseline_geom_3067=_baseline_3067_prev,
+        )
     else:
         log.info("Preview: computing survey geometry …")
-        _pl_geoms_prev = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
-        _pl_buf_prev = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
         survey_geom = process_survey(
             inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
             _pl_geoms_prev, _pl_buf_prev,
@@ -358,7 +376,7 @@ def run_preview(
     # Power line keepout buffer for map display (overhead only)
     _pl_keepout_4326 = None
     if _overhead_geoms and _pl_buf > 0:
-        from shapely.ops import unary_union as _uu
+        _uu = unary_union
         _pl_ko_3067 = _uu([g.buffer(_pl_buf) for g in _overhead_geoms])
         _pl_keepout_4326 = reproject_to_4326(_pl_ko_3067)
 
@@ -569,32 +587,65 @@ class _InputResult:
     property_fetch_ts: str | None
 
 
-def _synth_survey_geom(poly_4326: Any, offset_m: float) -> SurveyGeometry:
+def _synth_survey_geom(
+    poly_4326: Any,
+    offset_m: float,
+    buildings: list,
+    home_safety: Any,
+    power_line_geoms: list | None = None,
+    pl_buf_m: float = 0.0,
+    baseline_geom_3067: Any | None = None,
+) -> SurveyGeometry:
     """Build a synthetic SurveyGeometry from a user-supplied polygon.
 
     Used when the user has drawn or edited the polygon directly, bypassing
-    ``process_survey()``.  The offset is applied immediately; the result is
-    flagged ``needs_review=True`` so the pilot must verify boundaries.
+    ``process_survey()``.  Keepout is still applied so area_lost_pct reflects
+    how much of the drawn polygon is blocked by buildings / power lines.
+
+    ``baseline_geom_3067`` is the original parcel/property union in EPSG:3067.
+    When supplied, area_lost_pct is computed relative to it — so editing a
+    vertex doesn't change the reference area.  Falls back to the custom polygon
+    itself when no parcel/property geometry is available.
     """
-    survey_3067 = reproject_to_3067(poly_4326)
-    survey_3067_off = apply_survey_offset(survey_3067, offset_m)
-    survey_4326_off = reproject_to_4326(survey_3067_off)
-    area_ha = survey_3067_off.area / 10_000
-    vc = vertex_count(survey_4326_off)
+    original_3067 = reproject_to_3067(poly_4326)
+    survey_3067 = apply_survey_offset(original_3067, offset_m)
+    baseline_3067 = baseline_geom_3067 if baseline_geom_3067 is not None else original_3067
+
+    review_reasons: list[str] = []
+    keepout = build_keepout(buildings, home_safety, power_line_geoms, pl_buf_m)
+    if keepout is not None and home_safety.offset_enabled:
+        clipped = survey_3067.difference(keepout)
+        if clipped.is_empty:
+            log.error("Keep-out completely covers the custom polygon — flagging for review")
+            review_reasons.append("Keep-out removed 100.0% of survey area")
+        else:
+            survey_3067 = clipped
+
+    covered = survey_3067.intersection(baseline_3067)
+    area_lost_pct = max(0.0, (1.0 - covered.area / baseline_3067.area) * 100) if baseline_3067.area > 0 else 0.0
+    if area_lost_pct > home_safety.max_area_loss_pct:
+        review_reasons.append(
+            f"Keep-out removed {area_lost_pct:.1f}% of survey area "
+            f"(threshold {home_safety.max_area_loss_pct}%)"
+        )
+
+    survey_4326 = reproject_to_4326(survey_3067)
+    area_ha = survey_3067.area / 10_000
+    vc = vertex_count(survey_4326)
     return SurveyGeometry(
-        survey_3067=survey_3067_off,
-        survey_4326=survey_4326_off,
-        pieces_3067=[survey_3067_off],
-        pieces_4326=[survey_4326_off],
-        bbox_3067=survey_3067_off.bounds,
-        original_area_ha=area_ha,
+        survey_3067=survey_3067,
+        survey_4326=survey_4326,
+        pieces_3067=[survey_3067],
+        pieces_4326=[survey_4326],
+        bbox_3067=survey_3067.bounds,
+        original_area_ha=original_3067.area / 10_000,
         final_area_ha=area_ha,
-        area_lost_pct=0.0,
+        area_lost_pct=area_lost_pct,
         min_dist_to_home_m=None,
         offset_applied=offset_m != 0.0,
         survey_vertex_count=vc,
-        needs_review=False,
-        review_reasons=[],
+        needs_review=bool(review_reasons),
+        review_reasons=review_reasons,
     )
 
 
@@ -668,8 +719,6 @@ def _fetch_survey_inputs(
     ``custom_polygon_4326`` takes precedence over ``input_geoms`` for the
     building-fetch bounding box when both are provided.
     """
-    from shapely import make_valid
-    from shapely.ops import unary_union
 
     input_geoms: list = []
     parcel_ids_used: list[str] = []
