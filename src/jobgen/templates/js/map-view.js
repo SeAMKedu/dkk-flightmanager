@@ -40,6 +40,7 @@ function openMapView(folderFilter) {
   document.getElementById('legend').classList.add('mv-hidden');
   document.getElementById('sp').classList.add('mv-hidden');
   document.getElementById('mv-right-panel').classList.add('visible');
+  map.invalidateSize();
   var sel = document.getElementById('mv-stat-mode');
   if (sel) sel.value = _mvStatMode;
   document.querySelectorAll('.jfolder-map-btn').forEach(function(btn) {
