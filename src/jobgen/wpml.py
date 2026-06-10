@@ -364,13 +364,14 @@ def _estimate_budget(
     bat_min =  drone.battery_minutes if drone else ONE_BATTERY_MINUTES
     H       =  drone.height_from_gsd(cfg.target_gsd_cm) if drone else cfg.derived_flight_height_m
 
-    strip_m = H * (w_px * pitch_m) / focal_m * (1 - cfg.overlap_side_pct  / 100)
+    footprint_m = H * (w_px * pitch_m) / focal_m
+    strip_m = footprint_m * (1 - cfg.overlap_side_pct  / 100)
     photo_m = H * (h_px * pitch_m) / focal_m * (1 - cfg.overlap_front_pct / 100)
 
     survey_3067 = reproject_to_3067(survey_4326)
     angle_deg = _route.compute_auto_angle(survey_3067)
     result = _route.compute_route(survey_3067, angle_deg, strip_m, photo_m,
-                                  home_3067=home_3067)
+                                  footprint_width_m=footprint_m, home_3067=home_3067)
     flight_time_min = _route.estimate_flight_time(
         result,
         flight_height_m=H,

@@ -23,7 +23,7 @@ class RouteResult:
     turn_dist_m: float             # inter-strip transition distances
     angle_deg: float               # the angle that was used
     strips_3067: list[tuple]       # (x1,y1,x2,y2) per strip in EPSG:3067
-    transit_segs_3067: list[tuple] # (x1,y1,x2,y2) home→first, inter-strip, last→home
+    transit_segs_3067: list[list[tuple[float, float]]]  # each transit: ordered (x,y) waypoints
     first_wp_3067: tuple | None    # (x,y) start of first strip
     last_wp_3067: tuple | None     # (x,y) end of last strip
 
@@ -46,19 +46,78 @@ def compute_auto_angle(polygon_3067) -> float:
     return math.degrees(math.atan2(dx, dy)) % 180
 
 
+def _boundary_route(
+    polygon,
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """Return waypoints from p1 to p2 that stay inside polygon.
+
+    Falls back to [p1, p2] when the direct path is already contained.
+    Otherwise walks the exterior ring in the shorter direction.
+    Both points are expected to lie on or very near the polygon boundary
+    (scanline intersection endpoints).
+    """
+    from shapely.geometry import LineString
+
+    if polygon.buffer(0.5).contains(LineString([p1, p2])):
+        return [p1, p2]
+
+    ring = list(polygon.exterior.coords[:-1])  # open ring, no repeated first vertex
+    n = len(ring)
+
+    def seg_idx(pt: tuple[float, float]) -> int:
+        best_d, best = float("inf"), 0
+        for i in range(n):
+            ax, ay = ring[i]
+            bx, by = ring[(i + 1) % n]
+            dx, dy = bx - ax, by - ay
+            l2 = dx * dx + dy * dy
+            t = max(0.0, min(1.0, ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / l2)) if l2 > 1e-10 else 0.0
+            d = math.hypot(pt[0] - (ax + t * dx), pt[1] - (ay + t * dy))
+            if d < best_d:
+                best_d, best = d, i
+        return best
+
+    i1, i2 = seg_idx(p1), seg_idx(p2)
+
+    # Number of ring vertices traversed in each direction
+    steps_cw  = (i2 - i1) % n   # clockwise: ring[i1+1 .. i2]
+    steps_ccw = (i1 - i2) % n   # counterclockwise: ring[i1 .. i2+1]
+
+    path_cw  = [p1] + [ring[(i1 + 1 + k) % n] for k in range(steps_cw)]  + [p2]
+    path_ccw = [p1] + [ring[(i1 - k) % n]     for k in range(steps_ccw)] + [p2]
+
+    def plen(pts: list) -> float:
+        return sum(
+            math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1])
+            for k in range(len(pts) - 1)
+        )
+
+    return path_cw if plen(path_cw) <= plen(path_ccw) else path_ccw
+
+
 def compute_route(
     polygon_3067,
     angle_deg: float,
     strip_spacing_m: float,
     photo_spacing_m: float,
     *,
+    footprint_width_m: float | None = None,
     home_3067: tuple[float, float] | None = None,
 ) -> RouteResult:
     """Compute lawnmower strip pattern clipped to *polygon_3067*.
 
-    *angle_deg* — flight heading in degrees from North, CW (0=N, 90=E).
-                  Strips are parallel to this heading; spacing is perpendicular.
-    *home_3067* — optional (x, y) takeoff point for nearest-corner-first ordering.
+    *angle_deg*       — flight heading in degrees from North, CW (0=N, 90=E).
+    *footprint_width_m* — camera footprint width perpendicular to strips.
+                          When supplied the first/last strips are placed at
+                          footprint_width_m/2 from the boundary (matching DJI
+                          Pilot 2's margin=0 behaviour).  Falls back to
+                          strip_spacing_m/2 when None (legacy).
+    *home_3067*       — optional (x, y) takeoff point for nearest-corner-first ordering.
+
+    Inter-strip transitions that would exit the polygon are automatically rerouted
+    along the exterior ring (shorter direction).
     """
     if polygon_3067.geom_type == "MultiPolygon":
         polygon_3067 = max(polygon_3067.geoms, key=lambda g: g.area)
@@ -76,9 +135,13 @@ def compute_route(
     n_ring = len(ring)
     _, miny, _, maxy = rotated.bounds
 
-    # Scanline intersection at each strip y
+    # First/last strip centres at half-footprint from the boundary (DJI margin=0 convention).
+    # With overlap_side > 50 % the footprint/2 offset guarantees edge coverage even when
+    # the last strip lands up to strip_spacing before maxy.
+    first_offset_m = (footprint_width_m / 2.0) if footprint_width_m is not None else (strip_spacing_m / 2.0)
+
     strips_y: list[float] = []
-    y = miny + strip_spacing_m / 2.0
+    y = miny + first_offset_m
     while y <= maxy + 1e-6:
         strips_y.append(y)
         y += strip_spacing_m
@@ -101,7 +164,7 @@ def compute_route(
         return RouteResult(
             strip_count=0, photo_count=0, strip_dist_m=0.0,
             turn_dist_m=0.0, angle_deg=angle_deg,
-            strips_3067=[], transit_segs_3067=[],
+            strips_3067=[], transit_segs_3067=[],  # type: ignore[arg-type]
             first_wp_3067=None, last_wp_3067=None,
         )
 
@@ -138,30 +201,29 @@ def compute_route(
 
     strip_dist_m = sum(math.hypot(x2 - x1, y2 - y1) for x1, y1, x2, y2 in strips_3067)
 
-    # Transition distance: end of strip i → start of strip i+1
-    turn_dist_m = sum(
-        math.hypot(strips_3067[i+1][0] - strips_3067[i][2],
-                   strips_3067[i+1][1] - strips_3067[i][3])
-        for i in range(len(strips_3067) - 1)
-    )
-
     photo_count = sum(
         max(1, math.ceil(math.hypot(x2-x1, y2-y1) / photo_spacing_m) + 1)
         for x1, y1, x2, y2 in strips_3067
     )
 
-    # Build transit segment list: home→first, inter-strip hops, last→home
-    transit_segs: list[tuple] = []
+    # Build transit segments with boundary routing for concave polygons.
+    # Home↔route legs travel outside the survey area, so they keep the direct path.
+    transit_segs: list[list[tuple[float, float]]] = []
+    turn_dist_m = 0.0
     if strips_3067:
         if home_3067 is not None:
-            transit_segs.append((home_3067[0], home_3067[1],
-                                 strips_3067[0][0], strips_3067[0][1]))
+            transit_segs.append([home_3067, (strips_3067[0][0], strips_3067[0][1])])
         for i in range(len(strips_3067) - 1):
-            transit_segs.append((strips_3067[i][2], strips_3067[i][3],
-                                 strips_3067[i+1][0], strips_3067[i+1][1]))
+            p1 = (strips_3067[i][2],    strips_3067[i][3])
+            p2 = (strips_3067[i + 1][0], strips_3067[i + 1][1])
+            path = _boundary_route(polygon_3067, p1, p2)
+            transit_segs.append(path)
+            turn_dist_m += sum(
+                math.hypot(path[k + 1][0] - path[k][0], path[k + 1][1] - path[k][1])
+                for k in range(len(path) - 1)
+            )
         if home_3067 is not None:
-            transit_segs.append((strips_3067[-1][2], strips_3067[-1][3],
-                                 home_3067[0], home_3067[1]))
+            transit_segs.append([(strips_3067[-1][2], strips_3067[-1][3]), home_3067])
 
     return RouteResult(
         strip_count=len(strips_3067),

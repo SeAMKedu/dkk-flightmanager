@@ -47,6 +47,7 @@ var _legendUserVis = {};
     {btnId:'leg-plko',     lrKey:'plko',     rowId:'leg-plko-row'},
     {btnId:'leg-zones',    lrKey:'zones',    rowId:'leg-zones-row'},
     {btnId:'leg-route',    lrKey:'route',    rowId:'leg-route-row'},
+    {btnId:'leg-coverage', lrKey:'coverage', rowId:'leg-coverage-row', startOff:true},
   ];
   rows.forEach(function(r) {
     document.getElementById(r.btnId).addEventListener('click', function() {

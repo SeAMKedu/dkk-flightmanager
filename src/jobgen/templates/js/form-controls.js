@@ -194,7 +194,7 @@ function _doNewJob() {
   document.getElementById('kids').value = '';
   updateFolderHint();
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
   editLayers.clearLayers();
   editMode = false;
   _detachEditListeners();

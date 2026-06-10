@@ -491,12 +491,13 @@ def run_preview(
     _H   = flight_height_m
     _p_m = _drone_cfg.pixel_pitch_um * 1e-6
     _f_m = _drone_cfg.focal_length_mm * 1e-3
-    _sm  = _H * _drone_cfg.image_width_px  * _p_m / _f_m * (1 - config.flight.overlap_side_pct  / 100)
+    _fp  = _H * _drone_cfg.image_width_px  * _p_m / _f_m
+    _sm  = _fp * (1 - config.flight.overlap_side_pct  / 100)
     _pm  = _H * _drone_cfg.image_height_px * _p_m / _f_m * (1 - config.flight.overlap_front_pct / 100)
     try:
         _angle_auto = _route.compute_auto_angle(survey_geom.survey_3067)
         _rr = _route.compute_route(survey_geom.survey_3067, _angle_auto, _sm, _pm,
-                                   home_3067=_home_3067)
+                                   footprint_width_m=_fp, home_3067=_home_3067)
         _ft = _route.estimate_flight_time(
             _rr,
             flight_height_m=_H,

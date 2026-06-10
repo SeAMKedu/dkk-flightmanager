@@ -80,7 +80,7 @@ function geomToPolys(geom, style) {
 function renderMap(data) {
   exitBridgeMode();
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, plines:null, plko:null, zones:null, route:null};
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, plines:null, plko:null, zones:null, route:null, coverage:null};
   editLayers.clearLayers();
   if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
 

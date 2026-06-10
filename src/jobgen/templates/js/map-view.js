@@ -30,7 +30,7 @@ function openMapView(folderFilter) {
   if (editMode) saveEdit();
 
   Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
   editLayers.clearLayers();
   if (_takeoffMarker) map.removeLayer(_takeoffMarker);
   _hideVlos();

@@ -5,8 +5,10 @@
 
 var _routeDebounceTimer = null;
 var _routeLayer = null;
+var _coverageLayer = null;
 var _routeAngleAdjusting = false; // true while +/- is held; suppresses home transit legs
 var _lastRouteStats = null;       // last non-null stats; re-applied after renderStatus rebuilds DOM
+var _lastFpAcross = null;         // last known camera footprint width (m), used by _drawRouteGeoJSON
 
 // ── Parameter helpers ─────────────────────────────────────────────────────────
 
@@ -26,6 +28,7 @@ function _getRouteParams() {
     angle:  _effectiveRouteAngle(),
     stripM: fpAcross * (1 - _cfgOverlapSide  / 100),
     photoM: fpAlong  * (1 - _cfgOverlapFront / 100),
+    fpAcross: fpAcross,
   };
 }
 
@@ -33,7 +36,7 @@ function _getRouteParams() {
 // Scanline intersection in a local metric frame rotated by (angle-90)°.
 // Handles exterior ring only; holes from keep-out are excluded (DJI handles them).
 
-function _computeStripsJS(polygon4326, angleDeg, stripM, photoM) {
+function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
   var ring = polygon4326.type === 'Polygon' ? polygon4326.coordinates[0]
            : (polygon4326.coordinates[0] ? polygon4326.coordinates[0][0] : null);
   if (!ring || ring.length < 3) return { lines: [], photoCount: 0 };
@@ -67,8 +70,10 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM) {
     homeRotY = hx * sinR + hy * cosR;
   }
 
+  // First strip at half-footprint from boundary (matches DJI Pilot 2 margin=0).
+  var firstOffset = (fpAcross != null ? fpAcross : stripM) / 2;
   var stripsY = [];
-  for (var y = minY + stripM / 2; y <= maxY + 1e-6; y += stripM) stripsY.push(y);
+  for (var y = minY + firstOffset; y <= maxY + 1e-6; y += stripM) stripsY.push(y);
   if (Math.abs(homeRotY - maxY) < Math.abs(homeRotY - minY)) stripsY.reverse();
 
   var firstFromLeft = homeRotX <= midX;
@@ -99,13 +104,76 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM) {
     }
   });
 
+  // Boundary-routing helpers (all in the rotated metric frame).
+  var rpOpen = rp.slice(0, rp.length - 1); // open ring (no repeated first vertex)
+  var nRing   = rpOpen.length;
+
+  // Convert geographic [lat,lon] → rotated metric frame
+  function geoToRot(ll) {
+    var px = (ll[1] - lon0) * mLon, py = (ll[0] - lat0) * mLat;
+    return [px * cosR - py * sinR, px * sinR + py * cosR];
+  }
+  // Convert rotated metric [rx,ry] → geographic [lat,lon]
+  function rotToGeo(rxy) {
+    var lx = rxy[0] * backCos - rxy[1] * backSin;
+    var ly = rxy[0] * backSin + rxy[1] * backCos;
+    return [lat0 + ly / mLat, lon0 + lx / mLon];
+  }
+  // Ray-casting point-in-ring test (rotated frame)
+  function inRing(rx, ry) {
+    var inside = false;
+    for (var i = 0, j = nRing - 1; i < nRing; j = i++) {
+      var xi = rpOpen[i][0], yi = rpOpen[i][1], xj = rpOpen[j][0], yj = rpOpen[j][1];
+      if (((yi > ry) !== (yj > ry)) && (rx < (xj - xi) * (ry - yi) / (yj - yi) + xi))
+        inside = !inside;
+    }
+    return inside;
+  }
+  // Nearest ring-segment index for a point in the rotated frame
+  function nearestSegIdx(rx, ry) {
+    var bestD = Infinity, best = 0;
+    for (var i = 0; i < nRing; i++) {
+      var ax = rpOpen[i][0], ay = rpOpen[i][1];
+      var bx = rpOpen[(i + 1) % nRing][0], by = rpOpen[(i + 1) % nRing][1];
+      var dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      var t = l2 < 1e-10 ? 0 : Math.max(0, Math.min(1, ((rx - ax) * dx + (ry - ay) * dy) / l2));
+      var d = Math.hypot(rx - (ax + t * dx), ry - (ay + t * dy));
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }
+  // Route from p1geo to p2geo, following boundary when direct path exits polygon.
+  // Returns an array of geographic [lat,lon] waypoints.
+  function boundaryTransit(p1geo, p2geo) {
+    var p1r = geoToRot(p1geo), p2r = geoToRot(p2geo);
+    var mx = (p1r[0] + p2r[0]) / 2, my = (p1r[1] + p2r[1]) / 2;
+    if (inRing(mx, my)) return [p1geo, p2geo]; // midpoint inside → direct is fine
+    var i1 = nearestSegIdx(p1r[0], p1r[1]);
+    var i2 = nearestSegIdx(p2r[0], p2r[1]);
+    if (i1 === i2) return [p1geo, p2geo];
+    var stepsCW  = ((i2 - i1) % nRing + nRing) % nRing;
+    var stepsCCW = ((i1 - i2) % nRing + nRing) % nRing;
+    var cwMid  = [], ccwMid = [];
+    for (var s = 0; s < stepsCW;  s++) cwMid.push(rotToGeo(rpOpen[(i1 + 1 + s) % nRing]));
+    for (var s = 0; s < stepsCCW; s++) ccwMid.push(rotToGeo(rpOpen[(i1 - s + nRing) % nRing]));
+    function plenGeo(pts) {
+      var d = 0;
+      for (var k = 0; k + 1 < pts.length; k++)
+        d += Math.hypot((pts[k+1][1]-pts[k][1])*mLon, (pts[k+1][0]-pts[k][0])*mLat);
+      return d;
+    }
+    var cwPath  = [p1geo].concat(cwMid,  [p2geo]);
+    var ccwPath = [p1geo].concat(ccwMid, [p2geo]);
+    return plenGeo(cwPath) <= plenGeo(ccwPath) ? cwPath : ccwPath;
+  }
+
   // Build transit legs: inter-strip hops always; home legs only when not adjusting angle
   var transits = [];
   var homePt = _routeAngleAdjusting ? null : (_takeoffPt || _takeoffAuto);
   if (lines.length) {
     if (homePt) transits.push([homePt, lines[0][0]]);
     for (var ti = 0; ti < lines.length - 1; ti++) {
-      transits.push([lines[ti][1], lines[ti+1][0]]);
+      transits.push(boundaryTransit(lines[ti][1], lines[ti+1][0]));
     }
     if (homePt) transits.push([lines[lines.length-1][1], homePt]);
   }
@@ -116,24 +184,81 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM) {
 // ── Map layer ─────────────────────────────────────────────────────────────────
 
 function _clearRouteLayer() {
-  if (_routeLayer) { map.removeLayer(_routeLayer); _routeLayer = null; }
-  lrs.route = null;
+  if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
+  lrs.route = null; lrs.coverage = null;
   var row = document.getElementById('leg-route-row');
   if (row) row.style.display = 'none';
+  var crow = document.getElementById('leg-coverage-row');
+  if (crow) crow.style.display = 'none';
 }
 
-function _drawRouteLines(lines, transits) {
-  if (_routeLayer) { map.removeLayer(_routeLayer); _routeLayer = null; }
-  if (!lines || !lines.length) { lrs.route = null; return; }
+// Compute coverage rectangle corners (geographic [lat,lon]) for one strip.
+function _stripCoverageRect(ll1, ll2, fpAcross, lat0, lon0, mLat, mLon) {
+  var x1 = (ll1[1] - lon0) * mLon, y1 = (ll1[0] - lat0) * mLat;
+  var x2 = (ll2[1] - lon0) * mLon, y2 = (ll2[0] - lat0) * mLat;
+  var dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+  if (len < 0.1) return null;
+  var px = -dy / len, py = dx / len, hw = fpAcross / 2;
+  return [
+    [lat0 + (y1 + py*hw)/mLat, lon0 + (x1 + px*hw)/mLon],
+    [lat0 + (y2 + py*hw)/mLat, lon0 + (x2 + px*hw)/mLon],
+    [lat0 + (y2 - py*hw)/mLat, lon0 + (x2 - px*hw)/mLon],
+    [lat0 + (y1 - py*hw)/mLat, lon0 + (x1 - px*hw)/mLon],
+  ];
+}
+
+function _drawRouteLines(lines, transits, fpAcross) {
+  if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
+  if (!lines || !lines.length) { lrs.route = null; lrs.coverage = null; return; }
+
+  // Local metric parameters for arrow bearing and coverage rectangles
+  var lat0 = lines[0][0][0], lon0 = lines[0][0][1];
+  var mLat = 111132.0, mLon = mLat * Math.cos(lat0 * Math.PI / 180);
+
   var g = L.layerGroup();
-  var style = {color:'#f59e0b', weight:2, opacity:0.85, interactive:false};
-  lines.forEach(function(line) { L.polyline(line, style).addTo(g); });
-  (transits || []).forEach(function(seg) { L.polyline(seg, style).addTo(g); });
+  var lineStyle = {color:'#f59e0b', weight:2, opacity:0.85, interactive:false};
+  lines.forEach(function(line) {
+    L.polyline(line, lineStyle).addTo(g);
+    // Chevron at midpoint — points in direction of travel
+    var ll1 = line[0], ll2 = line[1];
+    var mid = [(ll1[0]+ll2[0])/2, (ll1[1]+ll2[1])/2];
+    var dx = (ll2[1]-ll1[1])*mLon, dy = (ll2[0]-ll1[0])*mLat;
+    var deg = Math.atan2(-dy, dx) * 180 / Math.PI; // screen coords: y flipped
+    var arrowHtml =
+      '<svg width="14" height="14" viewBox="-7 -7 14 14" xmlns="http://www.w3.org/2000/svg" ' +
+      'style="transform:rotate('+deg.toFixed(1)+'deg);display:block">' +
+      '<polyline points="-3.5,-5 4,0 -3.5,5" fill="none" stroke="#b45309" ' +
+      'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    L.marker(mid, {
+      icon: L.divIcon({html:arrowHtml, className:'', iconSize:[14,14], iconAnchor:[7,7]}),
+      interactive:false, keyboard:false,
+    }).addTo(g);
+  });
+  (transits || []).forEach(function(seg) { L.polyline(seg, lineStyle).addTo(g); });
+
   _routeLayer = g; lrs.route = g;
   var btn = document.getElementById('leg-route');
   if (btn && !btn.classList.contains('off')) g.addTo(map);
   var row = document.getElementById('leg-route-row');
   if (row) row.style.display = '';
+
+  // Coverage footprint layer
+  if (fpAcross && fpAcross > 0) {
+    var cg = L.layerGroup();
+    var covStyle = {color:'#f59e0b', weight:0.8, opacity:0.5,
+                    fillColor:'#fbbf24', fillOpacity:0.18, interactive:false};
+    lines.forEach(function(line) {
+      var corners = _stripCoverageRect(line[0], line[1], fpAcross, lat0, lon0, mLat, mLon);
+      if (corners) L.polygon(corners, covStyle).addTo(cg);
+    });
+    _coverageLayer = cg; lrs.coverage = cg;
+    var cbtn = document.getElementById('leg-coverage');
+    if (cbtn && !cbtn.classList.contains('off')) cg.addTo(map);
+    var crow = document.getElementById('leg-coverage-row');
+    if (crow) crow.style.display = '';
+  }
 }
 
 function _drawRouteGeoJSON(stripsGeojson, transitsGeojson) {
@@ -144,7 +269,7 @@ function _drawRouteGeoJSON(stripsGeojson, transitsGeojson) {
   var transits = (transitsGeojson && transitsGeojson.features || []).map(function(f) {
     return f.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
   });
-  _drawRouteLines(lines, transits);
+  _drawRouteLines(lines, transits, _lastFpAcross);
 }
 
 // ── Route stats display ───────────────────────────────────────────────────────
@@ -167,8 +292,9 @@ function updateRouteOverlay() {
   if (!previewData || !previewData.survey) { _clearRouteLayer(); updateRouteStats(null); return; }
   var p = _getRouteParams();
   if (!p) { _clearRouteLayer(); updateRouteStats(null); return; }
-  var r = _computeStripsJS(previewData.survey, p.angle, p.stripM, p.photoM);
-  _drawRouteLines(r.lines, r.transits);
+  _lastFpAcross = p.fpAcross;
+  var r = _computeStripsJS(previewData.survey, p.angle, p.stripM, p.photoM, p.fpAcross);
+  _drawRouteLines(r.lines, r.transits, p.fpAcross);
   updateRouteStats({ strip_count: r.lines.length, photo_count: r.photoCount, flight_time_min: null });
   _scheduleAccurateEstimate();
 }

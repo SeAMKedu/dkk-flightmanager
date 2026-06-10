@@ -15,7 +15,7 @@ async function _doOpenJob(path) {
     var name = path.includes('/') ? path.split('/').pop() : path;
     if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
     Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-    lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null};
+    lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
     editLayers.clearLayers();
     editMode = false; _detachEditListeners();
     _clearTakeoff();
