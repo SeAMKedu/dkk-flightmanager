@@ -169,14 +169,17 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         flight_time_min: float | None = bat["estimated_flight_time_min"]
         photo_count: int | None = bat.get("estimated_photo_count")
         over_one_battery: bool = bat.get("over_one_battery", False)
+        battery_count: int | None = 2 if over_one_battery else 1
     elif "pieces" in bat:
         flight_time_min = sum(p.get("estimated_flight_time_min", 0) for p in bat["pieces"])
         photo_count = sum(p.get("estimated_photo_count", 0) for p in bat["pieces"])
         over_one_battery = bat.get("over_any_battery", False)
+        battery_count = sum(2 if p.get("over_one_battery", False) else 1 for p in bat["pieces"])
     else:
         flight_time_min = None
         photo_count = None
         over_one_battery = False
+        battery_count = None
 
     return {
         "name": name,
@@ -186,7 +189,9 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "saved_at": params.get("saved_at"),
         "run_at": manifest.get("run_timestamp"),
         "area_ha": g.get("final_area_ha"),
+        "original_area_ha": g.get("original_area_ha"),
         "area_lost_pct": g.get("area_lost_pct"),
+        "subcategory": params.get("subcategory"),
         "vertex_count": g.get("survey_vertex_count"),
         "drone": f.get("drone"),
         "drone_label": f.get("drone_label"),
@@ -195,6 +200,7 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "flight_time_min": flight_time_min,
         "photo_count": photo_count,
         "over_one_battery": over_one_battery,
+        "battery_count": battery_count,
         "flight_ready": manifest.get("flight_ready"),
         "needs_review": manifest.get("needs_review"),
         "untouched": untouched,
