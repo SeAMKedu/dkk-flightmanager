@@ -175,6 +175,7 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             "auto_flight_speed_ms": _compute_default_speed(),
             "takeoff_security_height_m": _st.config.flight.takeoff_security_height_m,
             "color_palette": _st.config.output.color_palette,
+            "max_area_loss_pct": _st.config.home_safety.max_area_loss_pct,
         }
 
     app.include_router(execution.router)

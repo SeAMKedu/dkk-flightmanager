@@ -23,6 +23,7 @@
 .jcard-body{flex:1;min-width:0;padding:5px 4px}
 .jcard-name{font-size:11px;font-weight:600;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .jcard-meta{font-size:9px;color:#64748b;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jcard-ko{font-size:9px;color:#f97316;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .jcard-right{display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 4px 4px 0;flex-shrink:0}
 .jbadge{font-size:9px;font-weight:700;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center}
 .jbadge.ok{background:#15803d;color:#fff}
