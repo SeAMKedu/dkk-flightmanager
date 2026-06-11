@@ -181,6 +181,7 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         over_one_battery = False
         battery_count = None
 
+    inputs = params.get("inputs", {})
     return {
         "name": name,
         "folder": folder,
@@ -191,6 +192,8 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "area_ha": g.get("final_area_ha"),
         "original_area_ha": g.get("original_area_ha"),
         "area_lost_pct": g.get("area_lost_pct"),
+        "parcel_ids": inputs.get("parcel_ids") or [],
+        "property_ids": inputs.get("property_ids") or [],
         "subcategory": params.get("subcategory") or manifest.get("home_safety", {}).get("operating_subcategory"),
         "vertex_count": g.get("survey_vertex_count"),
         "drone": f.get("drone"),
@@ -238,6 +241,46 @@ def _tier_sort_key(j: dict) -> tuple:
     return (3, 0, ts)
 
 
+def _adjust_sibling_area_lost(groups: list[dict]) -> None:
+    """Fix area_lost_pct for split jobs that share the same parcel/property IDs.
+
+    Each split job retains the full original parcel but only covers a portion of
+    it, making each one look like it lost most of the area.  Group siblings by
+    (frozenset(parcel_ids), frozenset(property_ids)) and recalculate using the
+    combined flight area of the whole group against the shared original area.
+    """
+    from collections import defaultdict
+
+    all_cards: list[dict] = []
+    for group in groups:
+        all_cards.extend(group["jobs"])
+
+    key_to_cards: dict[tuple, list] = defaultdict(list)
+    for card in all_cards:
+        pids = frozenset(card.get("parcel_ids") or [])
+        prids = frozenset(card.get("property_ids") or [])
+        if not pids and not prids:
+            continue
+        key_to_cards[(pids, prids)].append(card)
+
+    for cards in key_to_cards.values():
+        if len(cards) < 2:
+            continue
+
+        originals = [c["original_area_ha"] for c in cards if c.get("original_area_ha") is not None]
+        if not originals:
+            continue
+        original_ha = max(originals)
+        if original_ha <= 0:
+            continue
+
+        combined_ha = sum(c["area_ha"] for c in cards if c.get("area_ha") is not None)
+        combined_lost_pct = round(max(0.0, (original_ha - combined_ha) / original_ha * 100), 2)
+
+        for card in cards:
+            card["area_lost_pct"] = combined_lost_pct
+
+
 def scan_jobs(output_dir: Path) -> list[dict]:
     """Scan *output_dir*; return groups ``[{name, jobs}]`` with one-level folder support."""
     if not output_dir.is_dir():
@@ -268,6 +311,8 @@ def scan_jobs(output_dir: Path) -> list[dict]:
     if root_jobs:
         groups.append({"name": None, "jobs": root_jobs})
     groups.extend(folder_groups)
+
+    _adjust_sibling_area_lost(groups)
     return groups
 
 
