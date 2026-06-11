@@ -3,8 +3,7 @@
 import { st } from './state.js';
 import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from './map-init.js';
 import { escHtml, jobApiUrl } from './utils.js';
-import { markDirty } from './dirty-tracking.js';
-import { confirmIfDirty } from './dirty-tracking.js';
+import { markDirty, confirmIfDirty, xbUpdate } from './dirty-tracking.js';
 import { showError, clearError, updateFolderHint, updateGsd, setRadiusLinked,
          setSub, setSimpAuto, setSimpManual, setAutoTimer,
          getAutoTimer, setFitBoundsFlag, setLastPreviewedIds, _setEditedPoly, _clearEditedPoly,
@@ -55,7 +54,7 @@ export async function _doOpenJob(path) {
     st._activeJobFolder = data.folder || null;
     updateFolderHint();
     _setColorPicker(p && p.color);
-    st._dirty = false;
+    st._dirty = false; xbUpdate();
     clearError();
     hideExtModifiedNotice();
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
@@ -83,7 +82,6 @@ export async function _doOpenJob(path) {
             flight_time_min: st.previewData.stats.route_flight_time_min,
           });
         }
-        document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
       } catch(ex) { console.error('[openJob] render error', ex); }
     } else {
@@ -97,10 +95,8 @@ export async function _doOpenJob(path) {
         setTimeout(function(){
           if (lrs.survey) map.fitBounds(lrs.survey.getBounds(), {padding: [40, 40]});
         }, 50);
-        document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
       } else {
-        document.getElementById('xb').disabled = true;
         document.getElementById('rstbtn').disabled = true;
         resetMapToUserLocation();
         import('./form-controls.js').then(function(m){ m.focusArea(); });

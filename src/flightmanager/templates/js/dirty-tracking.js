@@ -2,7 +2,13 @@
 
 import { st } from './state.js';
 
-export function markDirty() { st._dirty = true; }
+export function xbUpdate() {
+  var xb = document.getElementById('xb');
+  if (!xb) return;
+  xb.disabled = !(st.previewData && (st._dirty || !st._activeJob));
+}
+
+export function markDirty() { st._dirty = true; xbUpdate(); }
 
 export function confirmIfDirty(onConfirm) {
   if (!st._dirty) { onConfirm(); return; }
@@ -10,7 +16,7 @@ export function confirmIfDirty(onConfirm) {
     'You have unsaved changes. Discard them and continue?';
   document.getElementById('confirm-modal').style.display = 'flex';
   document.getElementById('confirm-discard').onclick = function() {
-    hideConfirmModal(); st._dirty = false; onConfirm();
+    hideConfirmModal(); st._dirty = false; xbUpdate(); onConfirm();
   };
 }
 export function hideConfirmModal() {

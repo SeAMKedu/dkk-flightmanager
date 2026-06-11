@@ -31,6 +31,8 @@ import { routeAngleAuto, routeAngleStep, speedAuto, speedStep, updateRouteStats 
 import { onStatModeChange, _mvStatJobClick } from './stat-view.js';
 import { _initEventStream, showExtModifiedNotice, hideExtModifiedNotice, reloadCurrentJob } from './event-stream.js';
 import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
+import { closeDeleteModal, confirmDeleteAction, closeMoveModal, submitNewFolderMove,
+         closeRouteRenameModal, confirmRouteRenameAction } from './modal-utils.js';
 import { setVlosRange } from './takeoff.js';
 import { clearMeasurements } from './measurement.js';
 import { initCesiumView, toggle3dView } from './cesium-view.js';
@@ -79,6 +81,10 @@ Object.assign(window, {
 
   // card-menu / folder ops
   closeCardMenu, createFolder, closeFolderDialog, submitFolder, showMoveMenu, doMoveJob,
+
+  // modal-utils
+  closeDeleteModal, confirmDeleteAction, closeMoveModal, submitNewFolderMove,
+  closeRouteRenameModal, confirmRouteRenameAction,
 
   // drag-reorder
   autoSortFolder, closeRouteConfirmModal,

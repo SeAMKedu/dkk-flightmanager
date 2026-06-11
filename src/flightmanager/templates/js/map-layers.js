@@ -9,6 +9,7 @@ import { getTakeoffAuto, setTakeoffAuto, getTakeoffUserMoved, _renderTakeoffMark
 import { renderStatus } from './status-panel.js';
 import { _buildVertexLayer, exitBridgeMode } from './polygon-bridge.js';
 import { updateRouteOverlay, updateRouteStats, _renderAngleControl } from './route-planner.js';
+import { xbUpdate } from './dirty-tracking.js';
 // toggleEdit — circular but runtime-safe (only called in event handlers)
 import { toggleEdit } from './polygon-edit.js';
 
@@ -17,7 +18,7 @@ export function onPreviewDone(payload) {
   st.previewData = payload;
   setLastPreviewedIds(idsKey());
   clearAreaFocus();
-  document.getElementById('xb').disabled = false;
+  xbUpdate();
   document.getElementById('rstbtn').disabled = false;
   // Compute the lowest zone floor across zones that directly intersect the survey area.
   // Buffer-only and context-only zones are excluded — they don't constrain the flight altitude.

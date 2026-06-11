@@ -4,6 +4,7 @@ import { st } from './state.js';
 import { escHtml, jobApiUrl } from './utils.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
+import { openMoveModal } from './modal-utils.js';
 // Circular — only called at runtime:
 import { openJob } from './job-ops.js';
 import { revealJob, startRename, confirmDeleteJob } from './job-ops.js';
@@ -46,35 +47,11 @@ export function closeCardMenu() {
 
 export function showMoveMenu(btn, j) {
   closeCardMenu();
-  var folderNames = [];
-  document.querySelectorAll('.jfolder-name').forEach(function(el){
-    var n = el.textContent.trim();
-    if (n) folderNames.push(n);
-  });
-
-  var sub = document.createElement('div');
-  sub.className = 'jmenu jmenu-sub';
-
-  var makeItem = function(label, fn) {
-    var mi = document.createElement('button');
-    mi.className = 'jmenu-item';
-    mi.textContent = label;
-    mi.addEventListener('click', function(ev){ ev.stopPropagation(); sub.remove(); fn(); });
-    sub.appendChild(mi);
-  };
-
-  if (j.folder) {
-    makeItem('Move to root', function(){ doMoveJob(j, null); });
-  }
-  folderNames.forEach(function(name) {
-    if (name !== j.folder) {
-      makeItem('→ ' + name, function(){ doMoveJob(j, name); });
-    }
-  });
-  makeItem('+ New folder…', function(){ promptNewFolderForJob(j); });
-
-  btn.closest('.jcard-right').appendChild(sub);
-  setTimeout(function(){ document.addEventListener('click', function(){ sub.remove(); }, {once:true}); }, 0);
+  openMoveModal(
+    'Move "' + j.name + '"',
+    [{path: j.path, name: j.name, folder: j.folder || null}],
+    function(toFolder) { doMoveJob(j, toFolder); }
+  );
 }
 
 export async function doMoveJob(j, toFolder) {
@@ -132,19 +109,3 @@ export async function submitFolder() {
   } finally { btn.disabled = false; }
 }
 
-export async function promptNewFolderForJob(j) {
-  var name = window.prompt('New folder name:');
-  if (!name || !name.trim()) return;
-  name = name.trim();
-  try {
-    var r = await fetch('/api/folders', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: name})
-    });
-    if (!r.ok) {
-      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      if (r.status !== 409) { showError(err.detail || 'Could not create folder'); return; }
-    }
-    await doMoveJob(j, name);
-  } catch(e) { showError('Failed: ' + e.message); }
-}

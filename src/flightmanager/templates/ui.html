@@ -445,6 +445,53 @@
   </div>
 </div>
 
+<div id="delete-modal">
+  <div id="delete-card">
+    <div class="batch-hdr">
+      <span>Delete</span>
+      <button class="batch-close" onclick="closeDeleteModal()">&#10005;</button>
+    </div>
+    <div id="delete-body"><p id="delete-msg"></p></div>
+    <div id="delete-footer">
+      <button id="delete-confirm-btn" onclick="confirmDeleteAction()">Delete</button>
+      <button class="cancel-btn" onclick="closeDeleteModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="move-modal">
+  <div id="move-card">
+    <div class="batch-hdr">
+      <span id="move-title">Move to Folder</span>
+      <button class="batch-close" onclick="closeMoveModal()">&#10005;</button>
+    </div>
+    <div id="move-folders"></div>
+    <div id="move-newfolder-row">
+      <input type="text" id="move-newfolder-input" placeholder="New folder name…"
+             autocomplete="off" onkeydown="if(event.key==='Enter')submitNewFolderMove()">
+      <button onclick="submitNewFolderMove()">Create &amp; Move</button>
+      <div id="move-error"></div>
+    </div>
+    <div id="move-footer">
+      <button class="cancel-btn" onclick="closeMoveModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="route-rename-modal">
+  <div id="route-rename-card">
+    <div class="batch-hdr">
+      <span>Route Rename</span>
+      <button class="batch-close" onclick="closeRouteRenameModal()">&#10005;</button>
+    </div>
+    <div id="route-rename-body"><p id="route-rename-msg"></p></div>
+    <div id="route-rename-footer">
+      <button id="route-rename-confirm-btn" onclick="confirmRouteRenameAction()">Rename</button>
+      <button class="cancel-btn" onclick="closeRouteRenameModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div id="about-modal">
   <div id="about-card">
     <div id="about-name">dkk-flightmanager</div>

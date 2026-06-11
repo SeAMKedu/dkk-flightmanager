@@ -1,6 +1,7 @@
 // ── Preview & Export runners ──────────────────────────────────────────────────
 
 import { st } from './state.js';
+import { xbUpdate } from './dirty-tracking.js';
 import { map } from './map-init.js';
 import { getParams, showError, clearError, updateFolderHint, getFitBoundsFlag } from './form-controls.js';
 import { _legendUserVis, resetLegend } from './legend.js';
@@ -117,7 +118,7 @@ function finishRun() {
 function onErr(msg) {
   console.error('[err]', msg);
   finishRun();
-  document.getElementById('xb').disabled = !st.previewData;
+  xbUpdate();
   document.getElementById('toast').style.display = 'none';
   showError(msg);
 }
@@ -125,11 +126,11 @@ function onErr(msg) {
 // ── Save completion callback ──────────────────────────────────────────────────
 async function onSaveDone(payload) {
   console.log('[save done]', payload);
-  document.getElementById('xb').disabled = false;
   st._activeJob = payload.job_name ? (payload.folder ? payload.folder + '/' + payload.job_name : payload.job_name) : null;
   st._activeJobFolder = payload.folder || null;
   st._ownSavedJob = st._activeJob;
   st._dirty = false;
+  xbUpdate();
   if (payload.stats) renderStatus(payload.stats);
   // renderStatus rebuilds the DOM — restore route stats the pipeline doesn't include
   var _lastRouteStats = (await import('./route-planner.js'))._getLastRouteStats();
