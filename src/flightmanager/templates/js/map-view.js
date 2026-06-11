@@ -39,13 +39,16 @@ export function showFolderOnMap(e, folderName) {
 }
 
 export function openMapView(folderFilter) {
-  var _comingFromEditor = _mvFromEditor && st._activeJobFolder === (folderFilter || null);
+  var folderKey = folderFilter || null;
+  var _comingFromEditor = _mvFromEditor && st._activeJobFolder === folderKey;
   var _skipFit = _comingFromEditor;
   _mvFromEditor = false;
 
+  var folderChanged = _mvMode && _mvCurrentFolder !== folderKey;
+
   _mvMode = true;
   st._mvMode = true;
-  _mvCurrentFolder = folderFilter || null;
+  _mvCurrentFolder = folderKey;
   if (st.editMode) saveEdit();
 
   Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
@@ -65,7 +68,9 @@ export function openMapView(folderFilter) {
     btn.classList.toggle('active', btn.dataset.folder === (folderFilter || ''));
   });
 
-  _mvSelected.clear();
+  if (folderChanged) {
+    _mvSelected.clear();
+  }
   _mvUpdateSelBar();
 
   if (!_comingFromEditor) _mvRouteVisible = true;
@@ -190,6 +195,20 @@ function _mvApplyFilter(folderFilter, skipFit) {
     map.fitBounds(combined, {padding: [40, 40]});
   }
   _mvDrawRoute();
+  // Re-apply selection visuals after layer rebuild
+  var stale = [];
+  _mvSelected.forEach(function(path) {
+    var item = _mvLayers.find(function(i){ return i.path === path; });
+    if (!item) { stale.push(path); return; }
+    item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
+    var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
+    if (card) {
+      card.classList.add('selected');
+      var chk = card.querySelector('.jcard-chk');
+      if (chk) chk.checked = true;
+    }
+  });
+  stale.forEach(function(p){ _mvSelected.delete(p); });
   showBatteryTimeline(_mvAllFeatures, _mvSelected, _mvCurrentFolder, _mvLayers);
   renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
   if (getMvStatMode() !== 'normal') {
@@ -365,11 +384,13 @@ export function _mvToggleSel(path) {
   var item = _mvLayers.find(function(i){ return i.path === path; });
   if (!item) return;
   var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
+  var chk = card && card.querySelector('.jcard-chk');
   if (_mvSelected.has(path)) {
     _mvSelected.delete(path);
     var origColor = getMvStatColor(item.feature.properties);
     item.layer.setStyle({weight: 2.5, opacity: 1, color: origColor, fillColor: origColor});
     if (card) card.classList.remove('selected');
+    if (chk) chk.checked = false;
   } else {
     _mvSelected.add(path);
     item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
@@ -377,6 +398,7 @@ export function _mvToggleSel(path) {
       card.classList.add('selected');
       if (_mvSelected.size === 1) card.scrollIntoView({block: 'nearest', behavior: 'smooth'});
     }
+    if (chk) chk.checked = true;
   }
   _mvUpdateSelBar();
 }
@@ -386,7 +408,11 @@ export function mvClearSel() {
     var item = _mvLayers.find(function(i){ return i.path === path; });
     if (item) { var c = getMvStatColor(item.feature.properties); item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
-    if (card) card.classList.remove('selected');
+    if (card) {
+      card.classList.remove('selected');
+      var chk = card.querySelector('.jcard-chk');
+      if (chk) chk.checked = false;
+    }
   });
   _mvSelected.clear();
   _mvUpdateSelBar();
