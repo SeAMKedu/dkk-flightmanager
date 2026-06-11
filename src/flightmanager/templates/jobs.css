@@ -12,8 +12,9 @@
 #jp-list::-webkit-scrollbar-track{background:#0f172a}
 #jp-list::-webkit-scrollbar-thumb{background:#334155;border-radius:3px}
 #jp-list::-webkit-scrollbar-thumb:hover{background:#475569}
-#jp-tog{position:absolute;right:-16px;top:50%;transform:translateY(-50%);width:16px;height:44px;background:#0f172a;border:none;border-radius:0 4px 4px 0;color:#64748b;cursor:pointer;font-size:8px;display:flex;align-items:center;justify-content:center;z-index:10;transition:color .12s}
-#jp-tog:hover{color:#f8fafc}
+#jp-tog{flex-shrink:0;margin:0;padding:0;width:26px;height:26px;background:#1e293b;border:1px solid #334155;border-radius:4px;color:#64748b;cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;transition:background .12s,color .12s}
+#jp-tog:hover{background:#334155;color:#f8fafc}
+#jp.closed #jp-tog{position:absolute;right:-14px;top:17px;width:14px;height:31.25px;background:#0f172a;border:none;border-radius:0 4px 4px 0;font-size:8px;z-index:10}
 .jcard{background:#1e293b;border:1px solid #334155;border-radius:5px;margin-bottom:5px;display:flex;align-items:center;gap:0;cursor:pointer;transition:border-color .12s,background .12s;overflow:visible;position:relative}
 .jcard:hover{border-color:#475569;background:#263548}
 .jcard.active{border-color:#3b82f6;border-left:3px solid #3b82f6;display:flex}
