@@ -139,6 +139,24 @@ Jobs without data for the selected stat are shown in grey. In any mode other tha
 | Simplify | Auto pill + −/+ step buttons |
 | Keep-out | toggle to disable building buffer subtraction |
 
+The **⚙** gear icon next to the Flight section header opens the **Template Settings** modal — a three-tab panel for DJI WPML parameters not in the main sidebar:
+
+**Capture tab**
+- **Front overlap / Side overlap** — ± steppers (default from config). Overlap affects strip spacing and the maximum slope the drone can follow in variable-altitude mode; changing these values also updates the route estimate.
+
+**Safety tab**
+- **Take-off security height** — DJI `takeOffSecurityHeight` in metres.
+- **Return-to-home altitude** — `globalRTHHeight`; independent of take-off security height.
+- **RC signal lost** — Hover / Return to home / Land immediately (`rcLostAction`).
+- **Mission finish action** — Return to home / Hover / Auto land / No action (`finishAction`).
+
+**Terrain tab (variable altitude)**
+- **Variable altitude** — checkbox; when enabled the tool generates an explicit `waylines.wpml` with per-waypoint altitudes derived from obstacle proximity (see [Variable-altitude flight path](#variable-altitude-flight-path) below). The Flight section header shows a small **ADV** badge when this mode is active.
+- **Min altitude** — floor altitude in metres AGL (default 30 m, matches the A2 1:1 rule floor).
+- **Max altitude** — ceiling over open field (blank = same as the main height field).
+- **Power line clearance** — altitude in metres AGL the drone must reach before crossing or passing near a 110 kV line (default 70 m, assumes a 45 m tower + 25 m margin).
+- **Slope tolerance F** — photogrammetry slope tolerance (default 0.20 = 20 % altitude change per photo baseline); controls how aggressively the altitude ramp follows obstacles.
+
 ### Preview
 
 Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, DSM elevation overlay, and the flight route overlay — all layers are toggleable from the legend.
@@ -149,6 +167,32 @@ Click **↻ Update** (or change any parameter) to run a preview. The map shows t
 - **Takeoff marker** — a white ✕ on the polygon boundary marks the auto-suggested takeoff/landing point (the boundary point that minimises worst-case VLOS distance). Drag it to a more convenient spot. Click **↺ Reset takeoff position** to revert. Saved with the job.
 - **Route overlay** — amber lines show the planned lawnmower survey strips and all transit legs (inter-strip turns, takeoff-to-start, and return-to-home). Each strip has a `›` direction chevron at its midpoint so you can see which end the drone departs from. For concave polygons, inter-strip transitions that would exit the survey area are automatically rerouted along the polygon boundary (shorter direction). The status panel below the map shows strip count, estimated photo count, and estimated total flight time. The route auto-computes on every parameter change; an accurate Python estimate (EPSG:3067 geometry, correct home transit distance) replaces the instant JS approximation 800 ms after input settles. Layer visibility is remembered across parameter changes and job switches. Legend eye toggles are persistent for the session.
 - **Coverage layer** (off by default, toggle in legend) — semi-transparent amber rectangles showing the exact camera footprint for every strip. Toggle on to verify edge coverage and confirm the first/last strip reach the polygon boundary (the first strip is centred at `footprint_width / 2` from the boundary, matching DJI Pilot 2's `margin=0` convention).
+- **DSM elevation overlay** — the terrain-follow DSM thumbnail is rendered using a viridis colour palette (purple = low, yellow = high).
+
+### 3D flight preview
+
+Click the **3D** button in the map controls (top-left, next to the layer switcher) to switch from the Leaflet 2D view to an interactive CesiumJS 3D globe. The button is enabled once a route estimate has been computed.
+
+In 3D view:
+- The flight path is rendered as a tube. In simple mode all strips are shown in a single colour. In **variable-altitude** mode (ADV active) strips are colour-coded by altitude using the same viridis palette as the DSM overlay (purple = low altitude near buildings, yellow = high altitude over open field) and a colour legend appears in the top-right corner of the 3D view.
+- A translucent curtain hangs below the path to visualise the ground clearance profile.
+- **Playback controls** appear at the bottom of the 3D view: ▶ play/pause, ⟳ reset, a time scrubber, and a playback-speed selector. The drone icon animates along the route in real time.
+- Click **2D** (the mirror of the toggle, shown over the Cesium view) to return to the Leaflet map.
+
+The 3D view loads CesiumJS from a CDN on first use; subsequent activations are instant.
+
+### Variable-altitude flight path
+
+Enable **Variable altitude** in the Terrain tab of the Template Settings modal (⚙ next to the Flight section header). When active:
+
+1. The server computes a per-strip altitude profile using `obstacle_heights.py`:
+   - **Near buildings** — altitude decreases toward the configured minimum (A2 1:1 rule: horizontal distance must be ≥ flight altitude, so flying lower lets the drone approach closer). The effective proximity distance is measured to the building rooftop, estimated from MML `kerrosluku` (floor count × 3 m) or a per-kohdeluokka heuristic.
+   - **Near 110 kV power lines** — altitude increases to the configured clearance height (default 70 m AGL).
+   - A forward + backward slope filter ensures the altitude profile is physically achievable given the drone's climb/descent rate (~3 m/s) and the photogrammetry overlap constraints.
+2. An explicit `waylines.wpml` is generated (instead of the `mapping2d` template stub), with `templateType=waypoint` so DJI Pilot 2 imports the pre-computed altitudes without regenerating them. Per-waypoint speed is set via `drone.auto_speed(h, overlap)` — the drone automatically slows at lower altitudes.
+3. `executeHeightMode=relativeToStartPoint` — all altitudes are relative to the actual takeoff point, so the mission stays correct even if the takeoff position differs slightly from the planned point.
+4. The route overlay in both 2D (Leaflet) and 3D (Cesium) views colour-codes strips by altitude. The status panel shows the altitude range (min – max m AGL).
+5. The map-view job popup shows the altitude range for variable-altitude jobs.
 
 ### Polygon editing
 
