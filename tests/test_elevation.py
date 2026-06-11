@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jobgen.elevation import tile_fetcher, validate_tile
+from flightmanager.elevation import tile_fetcher, validate_tile
 
 # Real tile downloaded during development — used as a fixture if present.
 _REAL_TILE = Path("/tmp/test_tile.tif")

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from shapely.geometry import mapping
 
-from jobgen.buildings import (
+from flightmanager.buildings import (
     Building,
     _to_building,
     _write_geojson,
@@ -18,7 +18,7 @@ from jobgen.buildings import (
     load_tile,
     tile_fetcher,
 )
-from jobgen.config import HomeSafetyConfig
+from flightmanager.config import HomeSafetyConfig
 
 # ---------------------------------------------------------------------------
 # Fixture features (EPSG:3067 coords, Finnish range)
@@ -249,5 +249,5 @@ def test_live_fetch_tile():
     buildings = load_tile(dest)
     assert len(buildings) >= 0  # area may be sparse; just confirm no crash
     for b in buildings:
-        from jobgen.crs import assert_crs
+        from flightmanager.crs import assert_crs
         assert_crs(b.geometry, 3067)

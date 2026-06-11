@@ -1,7 +1,7 @@
 import json
 from invoke import task
 
-SRC = "src/jobgen"
+SRC = "src/flightmanager"
 
 
 @task

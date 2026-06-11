@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dkk-jobgen"
+name = "dkk-flightmanager"
 version = "1.5.1"
-description = "DJI terrain-following mapping job generator for Finnish field parcels"
+description = "DJI terrain-following flight manager for Finnish agricultural field surveys"
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
@@ -35,13 +35,13 @@ dev = [
 ]
 
 [project.scripts]
-jobgen = "jobgen.cli:app"
+flightmanager = "flightmanager.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-jobgen = ["templates/*.html", "templates/*.css", "templates/*.js", "drones.toml"]
+flightmanager = ["templates/*.html", "templates/*.css", "templates/*.js", "drones.toml"]
 
 [tool.ruff]
 src = ["src"]
@@ -53,17 +53,17 @@ ignore = ["E501"]  # line length not enforced; focus on unused imports and compl
 
 [tool.ruff.lint.per-file-ignores]
 # load_dotenv() must run before project imports in these entry points
-"src/jobgen/_devserver.py" = ["E402"]
-"src/jobgen/cli.py" = ["E402"]
-"src/jobgen/preview.py" = ["E402"]
+"src/flightmanager/_devserver.py" = ["E402"]
+"src/flightmanager/cli.py" = ["E402"]
+"src/flightmanager/preview.py" = ["E402"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
 
 [tool.radon]
-# radon cc: cyclomatic complexity  (run: radon cc src/jobgen -s -n C)
-# radon mi: maintainability index  (run: radon mi src/jobgen -s -n B)
-# radon raw: raw line counts        (run: radon raw src/jobgen -s)
+# radon cc: cyclomatic complexity  (run: radon cc src/flightmanager -s -n C)
+# radon mi: maintainability index  (run: radon mi src/flightmanager -s -n B)
+# radon raw: raw line counts        (run: radon raw src/flightmanager -s)
 exclude = "tests/*"
 
 [tool.pytest.ini_options]

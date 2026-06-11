@@ -10,9 +10,9 @@ from unittest.mock import MagicMock
 import pytest
 from shapely.geometry import Polygon
 
-from jobgen.config import ZonesConfig
-from jobgen.crs import CRSError
-from jobgen.zones import AltitudeLimits, ZoneCheckResult, _intersect, check_zones
+from flightmanager.config import ZonesConfig
+from flightmanager.crs import CRSError
+from flightmanager.zones import AltitudeLimits, ZoneCheckResult, _intersect, check_zones
 
 # ---------------------------------------------------------------------------
 # Survey polygon in EPSG:4326 — Finnish field area

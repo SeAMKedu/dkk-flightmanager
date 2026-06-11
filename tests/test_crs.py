@@ -3,7 +3,7 @@
 import pytest
 from shapely.geometry import Point, Polygon
 
-from jobgen.crs import CRSError, assert_crs, require_3067, require_4326
+from flightmanager.crs import CRSError, assert_crs, require_3067, require_4326
 
 # A real Finnish field centroid in each CRS
 POINT_3067 = Point(305_000, 6_900_000)   # ETRS-TM35FIN, near Seinäjoki

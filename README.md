@@ -1,8 +1,8 @@
-# dkk-jobgen
+# dkk-flightmanager
 
 DJI terrain-following mapping job generator for Finnish agricultural field parcels.
 
-`dkk-jobgen` is a planning tool for drone mapping surveys over Finnish farmland. Identify the survey area by pasting *peruslohkotunnus* field parcel IDs (Ruokavirasto), *kiinteistötunnus* cadastral property IDs, a bounding box, or a polygon drawn directly on the map — the tool fetches field boundaries, 2 m terrain elevation, building footprints, and high-voltage power line geometry from National Land Survey of Finland (MML) open data APIs, checks Traficom UAS restriction zones, and writes a ready-to-fly DJI Pilot 2 mapping job. A built-in browser UI handles everything from parcel lookup and polygon editing to flight parameter tuning and batch job creation for large parcel sets.
+`dkk-flightmanager` is a planning tool for drone mapping surveys over Finnish farmland. Identify the survey area by pasting *peruslohkotunnus* field parcel IDs (Ruokavirasto), *kiinteistötunnus* cadastral property IDs, a bounding box, or a polygon drawn directly on the map — the tool fetches field boundaries, 2 m terrain elevation, building footprints, and high-voltage power line geometry from National Land Survey of Finland (MML) open data APIs, checks Traficom UAS restriction zones, and writes a ready-to-fly DJI Pilot 2 mapping job. A built-in browser UI handles everything from parcel lookup and polygon editing to flight parameter tuning and batch job creation for large parcel sets.
 
 All underlying data — field boundaries (Ruokavirasto *Peltolohkorekisteri*), terrain elevation, buildings, and high-voltage power lines (MML *Maastotietokanta*), cadastral geometry (MML *Kiinteistötietojärjestelmä*), and UAS restriction zones (Traficom) — is sourced from free Finnish open data APIs, with attribution recorded in every manifest. Only an MML API key (free) is required.
 
@@ -37,25 +37,25 @@ python -m venv .venv
 .venv\Scripts\activate
 ```
 
-> **Every time you open a new terminal** you need to activate again before using `jobgen`:
+> **Every time you open a new terminal** you need to activate again before using `flightmanager`:
 >
 > macOS / Linux: `source .venv/bin/activate`
 > Windows: `.venv\Scripts\activate`
 >
 > Alternatively, call the script directly without activating:
 >
-> macOS / Linux: `.venv/bin/jobgen run --name my-job --parcels 5241087453`
-> Windows: `.venv\Scripts\jobgen run --name my-job --parcels 5241087453`
+> macOS / Linux: `.venv/bin/flightmanager run --name my-job --parcels 5241087453`
+> Windows: `.venv\Scripts\flightmanager run --name my-job --parcels 5241087453`
 
 ### 2 — Install the tool
 
-With the virtual environment active, install `jobgen` and its dependencies:
+With the virtual environment active, install `flightmanager` and its dependencies:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-This registers the `jobgen` command so you can run it by name from anywhere inside the project.
+This registers the `flightmanager` command so you can run it by name from anywhere inside the project.
 
 ### 3 — Copy and edit the config files
 
@@ -76,15 +76,15 @@ MML_API_KEY=your_key_here
 
 The MML API key is free — obtain one at https://www.maanmittauslaitos.fi/rajapinnat/api-avaimen-ohje
 
-`jobgen` reads the `.env` file automatically on startup, so no extra steps are needed. Ruokavirasto parcel data is open and requires no key.
+`flightmanager` reads the `.env` file automatically on startup, so no extra steps are needed. Ruokavirasto parcel data is open and requires no key.
 
 ## Browser UI
 
 The recommended way to use the tool is the built-in browser UI:
 
 ```bash
-jobgen serve                         # opens http://localhost:8765 automatically
-jobgen serve --port 8080 --no-open   # custom port, no auto-open
+flightmanager serve                         # opens http://localhost:8765 automatically
+flightmanager serve --port 8080 --no-open   # custom port, no auto-open
 ```
 
 The single-page Leaflet map interface is organised around four areas: the **Jobs panel** on the left, the **editor form** in the centre, the **map** on the right, and the **⚙ Settings** gear in the header.
@@ -95,7 +95,7 @@ The panel lists all saved jobs grouped into folders. Use the header buttons to c
 
 The panel updates live — changes made by the CLI, MCP server, or another tab appear immediately. If the currently open job is modified externally, a blue notice offers **Reload** or **Dismiss**.
 
-**Batch import:** click **↓ Batch**, paste parcel/property IDs (one per line, `#` comments ignored) or load a `.txt`/`.csv` file, pick a folder and optional param overrides, then click **Create N jobs**. Each ID becomes a skeleton job (polygon stored, no KMZ yet). Equivalent CLI command: `jobgen batch`.
+**Batch import:** click **↓ Batch**, paste parcel/property IDs (one per line, `#` comments ignored) or load a `.txt`/`.csv` file, pick a folder and optional param overrides, then click **Create N jobs**. Each ID becomes a skeleton job (polygon stored, no KMZ yet). Equivalent CLI command: `flightmanager batch`.
 
 **Multi-select:** hover a card to reveal its checkbox. Select two or more to activate the toolbar: **Merge** (union polygons into a new job), **Export KML** (download selected jobs as a KML file), **Google Maps** (open navigation waypoints in Google Maps), **Route rename** (prefix each selected job with `YYYYMMDD-NN-` in route order, skipping skeleton jobs — re-running on the same selection replaces the existing prefix), **Move**, or **Delete**.
 
@@ -173,17 +173,17 @@ In edit mode:
 - **⚙ Settings** — opens the in-browser config editor (all sections: Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties). Changed fields highlight in amber; a search box filters across all sections. Saving hot-reloads the server and writes directly to `config.toml`. Drone profiles must be edited in `config.toml` directly; `config.example.toml` is the reference for all options.
 - **ⓘ About** — the `⋯` button in the header opens the About dialog, which shows the software version and a **session statistics** table: how many tiles, parcel geometries, and zone records were fetched from the network vs. served from the local cache, and the total bytes downloaded.
 
-Parcel and property geometries are cached locally (400-day TTL) so repeat previews do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL). The same statistics are also printed to the terminal when `jobgen serve` shuts down (Ctrl-C).
+Parcel and property geometries are cached locally (400-day TTL) so repeat previews do not hit the network. Building and DEM tiles are cached on a 1 km grid (configurable TTL). The same statistics are also printed to the terminal when `flightmanager serve` shuts down (Ctrl-C).
 
 ---
 
 ## AI assistant integration (MCP)
 
-`dkk-jobmaker` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so AI assistants — Claude Desktop, Claude Code, or any MCP-compatible client — can query job data and trigger pipeline operations directly.
+`dkk-flightmanager` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so AI assistants — Claude Desktop, Claude Code, or any MCP-compatible client — can query job data and trigger pipeline operations directly.
 
 ### Primary path — integrated with the web UI
 
-When `jobgen serve` is running, the MCP server is mounted at `/mcp/sse` in the same process. No separate command, no extra process, no coordination overhead.
+When `flightmanager serve` is running, the MCP server is mounted at `/mcp/sse` in the same process. No separate command, no extra process, no coordination overhead.
 
 **Claude Code:**
 ```bash
@@ -215,13 +215,13 @@ If you use a non-default port, replace `8765` accordingly.
 For headless use or automation scripts that don't need the browser UI:
 
 ```bash
-jobgen mcp                              # stdio transport, reads config.toml from cwd
-jobgen mcp --config /path/to/config.toml
+flightmanager mcp                              # stdio transport, reads config.toml from cwd
+flightmanager mcp --config /path/to/config.toml
 ```
 
 **Claude Code:**
 ```bash
-claude mcp add jobmaker -- jobgen mcp
+claude mcp add jobmaker -- flightmanager mcp
 ```
 
 **Claude Desktop** — use the config file path from the table above, with the platform-appropriate binary path:
@@ -231,7 +231,7 @@ macOS / Linux:
 {
   "mcpServers": {
     "jobmaker": {
-      "command": "/path/to/project/.venv/bin/jobgen",
+      "command": "/path/to/project/.venv/bin/flightmanager",
       "args": ["mcp"],
       "env": { "MML_API_KEY": "your-key-here" }
     }
@@ -244,7 +244,7 @@ Windows:
 {
   "mcpServers": {
     "jobmaker": {
-      "command": "C:\\path\\to\\project\\.venv\\Scripts\\jobgen.exe",
+      "command": "C:\\path\\to\\project\\.venv\\Scripts\\flightmanager.exe",
       "args": ["mcp"],
       "env": { "MML_API_KEY": "your-key-here" }
     }
@@ -297,20 +297,20 @@ Run a preview for parcel 5241087453 and tell me if there are any zone issues
 
 ```bash
 # Ruokavirasto peruslohkotunnus (comma-separated, or mixed with --properties)
-jobgen run --name pelto-2024 --parcels 5241087453,5241087454
+flightmanager run --name pelto-2024 --parcels 5241087453,5241087454
 
 # Finnish kiinteistötunnus — dash form or 14-digit numeric
-jobgen run --name pelto-2024 --properties 214-407-3-22
-jobgen run --name pelto-2024 --properties 21440700030022
+flightmanager run --name pelto-2024 --properties 214-407-3-22
+flightmanager run --name pelto-2024 --properties 21440700030022
 
 # Combine parcel and property IDs
-jobgen run --name pelto-2024 --parcels 5241087453 --properties 214-407-3-22
+flightmanager run --name pelto-2024 --parcels 5241087453 --properties 214-407-3-22
 
 # Bounding box (EPSG:3067 metres)
-jobgen run --name pelto-2024 --bbox 295000,6974000,305000,6984000
+flightmanager run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 ```
 
-### All `jobgen run` options
+### All `flightmanager run` options
 
 | Flag | Default | Description |
 |---|---|---|
@@ -341,13 +341,13 @@ dense polygons that are difficult to edit on the DJI RC touch screen.
 
 ```bash
 # Auto: find the knee of the simplification curve (recommended)
-jobgen run --name pelto-2024 --parcels 5241087453 --simplify auto
+flightmanager run --name pelto-2024 --parcels 5241087453 --simplify auto
 
 # Fixed tolerance in metres (Douglas-Peucker)
-jobgen run --name pelto-2024 --parcels 5241087453 --simplify 5
+flightmanager run --name pelto-2024 --parcels 5241087453 --simplify 5
 
 # Disable (keep every vertex from the source data)
-jobgen run --name pelto-2024 --parcels 5241087453 --simplify 0
+flightmanager run --name pelto-2024 --parcels 5241087453 --simplify 0
 ```
 
 The defaults are set under `[polygon]` in `config.toml` (or via **⚙ Settings → Polygon** in the browser UI):
@@ -369,10 +369,10 @@ Expand or contract the survey polygon relative to the parcel/property cadastral 
 
 ```bash
 # Push the survey area 10 m outside the cadastral line
-jobgen run --name pelto-2024 --parcels 5241087453 --offset 10
+flightmanager run --name pelto-2024 --parcels 5241087453 --offset 10
 
 # Pull the survey area 5 m inside the cadastral line (field-edge margin)
-jobgen run --name pelto-2024 --parcels 5241087453 --offset -5
+flightmanager run --name pelto-2024 --parcels 5241087453 --offset -5
 ```
 
 A negative offset can split the polygon or introduce holes at narrow corners — these are handled automatically by `hole_policy` / `multipart_policy` in the same way as keep-out subtraction results. If the contraction collapses the polygon entirely, the original geometry is preserved and a warning is logged.
@@ -387,7 +387,7 @@ By default the tool subtracts a buffer around buildings from the survey polygon.
 
 ```bash
 # Skip the keep-out subtraction
-jobgen run --name pelto-2024 --parcels 5241087453 --no-keepout
+flightmanager run --name pelto-2024 --parcels 5241087453 --no-keepout
 ```
 
 When `--no-keepout` is used:
@@ -402,7 +402,7 @@ Use this only when you have the landowner's permission to fly close to buildings
 List available profiles and their GSD at typical altitudes:
 
 ```bash
-jobgen drones
+flightmanager drones
 ```
 
 ```
@@ -422,7 +422,7 @@ m350-p1-50           0.44 cm    0.88 cm  DJI Matrice 350 RTK + Zenmuse P1 (50 mm
 Select a drone for a job:
 
 ```bash
-jobgen run --name pelto-2024 --parcels 5241087453 --drone m300-p1-24
+flightmanager run --name pelto-2024 --parcels 5241087453 --drone m300-p1-24
 ```
 
 Set the default in `config.toml` (or via **⚙ Settings → Drone** in the browser UI):
@@ -471,25 +471,25 @@ Example speeds for the M3M (RGB+MS) at 80% front overlap:
 
 To override with a fixed speed for all jobs, set `auto_flight_speed_ms` under `[flight]` in `config.toml`. In the browser UI the **Survey speed** control defaults to **Auto** (recomputes from altitude and drone profile); use the −/+ buttons to set a per-job override, or click **Auto** to return to computed mode. To calibrate a new drone or capture mode, read the auto-speed value from DJI Pilot 2 at a known altitude and back-calculate: `interval = (1 − overlap) × altitude × (sensor_height / focal_length) / speed`.
 
-### Batch skeleton job creation (`jobgen batch`)
+### Batch skeleton job creation (`flightmanager batch`)
 
 Creates skeleton jobs for a list of parcel or property IDs — fetches geometry for each ID and writes `job_params.json` (no KMZ or DSM). Jobs appear in the browser UI ready to open, tune, and export.
 
 ```bash
 # Inline parcel IDs
-jobgen batch --parcels 5241087453,5241087454 --folder my-group
+flightmanager batch --parcels 5241087453,5241087454 --folder my-group
 
 # Inline property IDs
-jobgen batch --properties 214-407-3-22,214-407-3-23 --folder my-group
+flightmanager batch --properties 214-407-3-22,214-407-3-23 --folder my-group
 
 # IDs from a file (one per line; # comments and blank lines ignored)
-jobgen batch --file ids.txt --folder my-group
+flightmanager batch --file ids.txt --folder my-group
 
 # Mix inline IDs and file
-jobgen batch --parcels 5241087453 --file more.txt --folder my-group
+flightmanager batch --parcels 5241087453 --file more.txt --folder my-group
 
 # Auto-detect ID type from format (all-digit → parcels; NNN-NNN-N-NN → properties)
-jobgen batch --file ids.txt --folder my-group
+flightmanager batch --file ids.txt --folder my-group
 ```
 
 The `--parcels` / `--properties` flag determines ID type. If neither is given, type is auto-detected from the first ID in the file. Each ID becomes a job named after the ID itself. Existing jobs with the same name in the target folder are skipped (not overwritten). A per-ID pass/fail table is printed on completion.
@@ -506,11 +506,11 @@ The `--parcels` / `--properties` flag determines ID type. If neither is given, t
 
 ### MCP server (standalone)
 
-See the [AI assistant integration](#ai-assistant-integration-mcp) section above for the primary (integrated) approach. The `mcp` command is for headless use without `jobgen serve`:
+See the [AI assistant integration](#ai-assistant-integration-mcp) section above for the primary (integrated) approach. The `mcp` command is for headless use without `flightmanager serve`:
 
 ```bash
-jobgen mcp                               # stdio transport, config.toml in cwd
-jobgen mcp --config /path/to/config.toml
+flightmanager mcp                               # stdio transport, config.toml in cwd
+flightmanager mcp --config /path/to/config.toml
 ```
 
 ### Cache management
@@ -519,16 +519,16 @@ Pre-fetch tiles before a field day (no network needed on-site with --offline):
 
 ```bash
 # Warm the cache for an area
-jobgen cache warm --bbox 295000,6974000,310000,6985000
+flightmanager cache warm --bbox 295000,6974000,310000,6985000
 
 # Check what's cached
-jobgen cache status
+flightmanager cache status
 
 # Refresh tiles older than 30 days
-jobgen cache refresh --older-than 30
+flightmanager cache refresh --older-than 30
 ```
 
-After `jobgen run`, `jobgen batch`, and `jobgen cache warm` complete, a session statistics table is printed showing fetches vs. cache hits per data source and total bytes downloaded:
+After `flightmanager run`, `flightmanager batch`, and `flightmanager cache warm` complete, a session statistics table is printed showing fetches vs. cache hits per data source and total bytes downloaded:
 
 ```
 ──────────────────────────────────────────────────────
@@ -545,13 +545,13 @@ After `jobgen run`, `jobgen batch`, and `jobgen cache warm` complete, a session 
 ──────────────────────────────────────────────────────
 ```
 
-The same table appears on `jobgen serve` shutdown and in the **ⓘ About** dialog in the browser UI.
+The same table appears on `flightmanager serve` shutdown and in the **ⓘ About** dialog in the browser UI.
 
 ## Operator workflow
 
 ### Planning (office / laptop)
 
-1. Run `jobgen serve` and open http://localhost:8765.
+1. Run `flightmanager serve` and open http://localhost:8765.
 2. Define the survey area — either:
    - Paste parcel or property IDs and let the polygon generate automatically, or
    - Right-click on the empty map to draw a 300×300 m scratch square, then reshape it in edit mode.
@@ -608,7 +608,7 @@ Buildings are included in `<name>_homes.kml` if their nearest point is within th
 
 ```bash
 # Include buildings up to 400 m from the polygon (A3 job)
-jobgen run --name pelto-2024 --parcels 5241087453 --subcategory A3 --homes-distance 400
+flightmanager run --name pelto-2024 --parcels 5241087453 --subcategory A3 --homes-distance 400
 ```
 
 Set `home_include_buffer_m` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to change the default permanently.
@@ -621,10 +621,10 @@ The default radius is **3× derived flight height** (the "3:1 horizontal rule" s
 
 ```bash
 # Use a fixed 200 m circle instead of the 3:1 default
-jobgen run --name pelto-2024 --parcels 5241087453 --preview-radius 200
+flightmanager run --name pelto-2024 --parcels 5241087453 --preview-radius 200
 
 # Tighten to 1:1 (same as the keep-out buffer)
-jobgen run --name pelto-2024 --parcels 5241087453 --height 80 --subcategory A2 --preview-radius 80
+flightmanager run --name pelto-2024 --parcels 5241087453 --height 80 --subcategory A2 --preview-radius 80
 ```
 
 Set `preview_radius_m` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to change the default permanently.

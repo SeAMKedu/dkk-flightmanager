@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from jobgen.cache import (
+from flightmanager.cache import (
     CacheMissError,
     TileBbox,
     TileRecord,
@@ -25,7 +25,7 @@ from jobgen.cache import (
     snap_down,
     tile_provenance,
 )
-from jobgen.config import CacheConfig
+from flightmanager.config import CacheConfig
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from jobgen.job_store import (
+from flightmanager.job_store import (
     best_polygon,
     check_cache_staleness,
     is_folder_dir,
@@ -311,8 +311,8 @@ class TestParamsFromManifest:
 class TestCheckCacheStaleness:
     def test_all_tiles_present_returns_empty(self, tmp_path):
         from datetime import datetime as _dt, timezone
-        from jobgen.config import CacheConfig
-        from jobgen.cache import TileRecord, _db_path, _init_db, _register
+        from flightmanager.config import CacheConfig
+        from flightmanager.cache import TileRecord, _db_path, _init_db, _register
 
         cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))
         manifest = {
@@ -344,7 +344,7 @@ class TestCheckCacheStaleness:
         assert stale == []
 
     def test_missing_tile_flagged(self, tmp_path):
-        from jobgen.config import CacheConfig
+        from flightmanager.config import CacheConfig
 
         cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))
         manifest = {
@@ -357,7 +357,7 @@ class TestCheckCacheStaleness:
         assert "dem/E298000_N6898000" in stale
 
     def test_empty_provenance_returns_empty(self, tmp_path):
-        from jobgen.config import CacheConfig
+        from flightmanager.config import CacheConfig
 
         cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))
         stale = check_cache_staleness({}, cfg)
