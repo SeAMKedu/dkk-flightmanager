@@ -249,6 +249,7 @@ export function _doNewJob() {
   hideStaleNotice();
   document.getElementById('xb').disabled = true;
   document.getElementById('rstbtn').disabled = true;
+  st._waypointMode = false;
   renderStatus(null);
   setRadiusLinked(true);
   document.getElementById('legend').classList.add('inactive');

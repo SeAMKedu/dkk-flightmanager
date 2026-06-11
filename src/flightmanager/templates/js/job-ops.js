@@ -49,6 +49,7 @@ export async function _doOpenJob(path) {
       setTakeoffUserMoved(true);
       _renderTakeoffMarker(p.takeoff_point_4326);
     }
+    st._waypointMode = !!(p && p.template_settings && p.template_settings.advanced_mode);
     _restoreFormFromParams(p);
     document.getElementById('jname').value = name;
     st._activeJob = path;

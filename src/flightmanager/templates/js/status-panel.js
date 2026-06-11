@@ -26,6 +26,9 @@ export function renderStatus(s) {
   if (st._altCap !== null && !isNaN(curH) && curH >= st._altCap) {
     rh += '<div class="ritem" style="color:#f97316">&#9888; Height '+curH.toFixed(0)+' m is at or above zone floor '+Math.round(st._altCap)+' m AGL — fly below '+Math.round(st._altCap)+' m or obtain authorisation</div>';
   }
+  var modeH = !s ? _dash
+    : st._waypointMode ? '<span style="color:#a78bfa;font-weight:700">Variable alt</span>'
+                       : '<span style="color:#94a3b8">Terrain follow</span>';
   document.getElementById('spcontent').innerHTML =
     sh
    +'<div class="sp-body">'
@@ -34,7 +37,7 @@ export function renderStatus(s) {
    +'<div class="sbox"><div class="slbl">Area</div><div class="sval">'+fmt1(s&&s.final_area_ha)+' '+(s?'ha':'')+' </div></div>'
    +'<div class="sbox"><div class="slbl">Height</div><div class="sval">'+fmt0(s&&s.flight_height_m)+' '+(s?'m':'')+' </div></div>'
    +'<div class="sbox"><div class="slbl">GSD</div><div class="sval">'+fmt2(s&&s.target_gsd_cm)+' '+(s?'cm':'')+' </div></div>'
-   +'<div class="sbox"><div class="slbl">Vertices</div><div class="sval">'+fmti(s&&s.survey_vertex_count)+'</div></div>'
+   +'<div class="sbox"><div class="slbl">Mode</div><div class="sval">'+modeH+'</div></div>'
    +'<div class="sbox"><div class="slbl">Lost</div><div class="sval">'+fmt1(s&&s.area_lost_pct)+' '+(s?'%':'')+' </div></div>'
    +'<div class="sbox"><div class="slbl">Zones</div><div class="sval">'+zh+'</div></div>'
    +'</div>'

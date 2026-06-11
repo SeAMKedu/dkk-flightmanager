@@ -131,7 +131,10 @@ async function onSaveDone(payload) {
   st._ownSavedJob = st._activeJob;
   st._dirty = false;
   xbUpdate();
-  if (payload.stats) renderStatus(payload.stats);
+  if (payload.stats) {
+    st._waypointMode = !!payload.stats.waypoint_mode;
+    renderStatus(payload.stats);
+  }
   // renderStatus rebuilds the DOM — restore route stats the pipeline doesn't include
   var _lastRouteStats = (await import('./route-planner.js'))._getLastRouteStats();
   if (_lastRouteStats) updateRouteStats(_lastRouteStats);

@@ -114,6 +114,7 @@ function _updateAdvancedState() {
   });
   var dot = _el('adv-dot');
   if (dot) dot.style.display = adv ? 'inline-block' : 'none';
+  import('./state.js').then(function(m){ m.st._waypointMode = adv; });
 }
 
 function _stepOvf(delta) {

@@ -551,9 +551,9 @@
     <div class="tpl-panel" id="tpl-panel-terrain" style="display:none">
       <label class="ck-row tpl-adv-toggle">
         <input type="checkbox" id="tpl-advanced">
-        Variable altitude (Phase 2)
+        Variable altitude
       </label>
-      <p class="tpl-hint tpl-adv-hint" id="tpl-adv-hint">Enable to generate explicit per-waypoint altitudes near buildings and power lines. Generation not yet implemented.</p>
+      <p class="tpl-hint tpl-adv-hint" id="tpl-adv-hint">Generate explicit per-waypoint altitudes: lower near buildings (A2 1:1 rule from rooftop), higher over power lines. Applied automatically when saving.</p>
       <div id="tpl-adv-fields" class="tpl-adv-fields">
         <label>Min altitude — A2 floor (m)</label>
         <input type="number" id="tpl-adv-min-height" min="20" max="120" step="1" value="30" disabled>
@@ -564,7 +564,6 @@
         <label>Slope tolerance F <span class="tpl-hint-inline">0.20 = 20% altitude change per photo baseline</span></label>
         <input type="number" id="tpl-adv-slope-f" min="0.05" max="0.50" step="0.01" value="0.20" disabled>
       </div>
-      <button class="tpl-adv-run-btn" id="tpl-adv-run-btn" disabled title="Variable altitude path generation coming in Phase 2">Generate 3D Path</button>
     </div>
 
     <div class="tpl-footer">

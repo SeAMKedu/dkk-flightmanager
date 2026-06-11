@@ -35,4 +35,7 @@ export const st = {
 
   // Map-view mode flag — used by polygon-edit, measurement, etc. to gate interactions
   _mvMode: false,
+
+  // Whether the current job's KMZ uses explicit per-waypoint altitudes (advanced mode)
+  _waypointMode: false,
 };

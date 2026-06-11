@@ -219,6 +219,7 @@ async def start_export(req: ExportRequest):
                 "target_gsd_cm":      f.get("target_gsd_cm", 0),
                 "drone":              f.get("drone", ""),
                 "drone_label":        f.get("drone_label", ""),
+                "waypoint_mode":      f.get("waypoint_mode", False),
                 "needs_review":       manifest.get("needs_review", False),
                 "flight_ready":       manifest.get("flight_ready", False),
                 "review_reasons":     manifest.get("review_reasons", []),
