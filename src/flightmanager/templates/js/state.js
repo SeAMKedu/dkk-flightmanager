@@ -38,4 +38,8 @@ export const st = {
 
   // Whether the current job's KMZ uses explicit per-waypoint altitudes (advanced mode)
   _waypointMode: false,
+
+  // Altitude range from last variable-altitude route estimate (null when uniform)
+  _altProfileMin: null,
+  _altProfileMax: null,
 };

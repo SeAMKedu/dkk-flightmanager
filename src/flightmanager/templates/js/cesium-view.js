@@ -213,6 +213,28 @@ function _effectiveSpeedMs() {
  *   Without home (transits.len === strips.len - 1):
  *     strip[0], transit[0], strip[1], ..., strip[N-1]
  */
+// Viridis-inspired palette for altitude coloring in Cesium
+var _C3D_STOPS = [
+  [68,  1,  84],
+  [59, 82, 139],
+  [33, 145, 140],
+  [94, 201, 98],
+  [253, 231, 37],
+];
+function _viridisCesiumColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  var seg = t * (_C3D_STOPS.length - 1);
+  var i = Math.min(Math.floor(seg), _C3D_STOPS.length - 2);
+  var f = seg - i;
+  var a = _C3D_STOPS[i], b = _C3D_STOPS[i + 1];
+  return new Cesium.Color( // eslint-disable-line no-undef
+    (a[0] + f * (b[0] - a[0])) / 255,
+    (a[1] + f * (b[1] - a[1])) / 255,
+    (a[2] + f * (b[2] - a[2])) / 255,
+    1.0
+  );
+}
+
 function _buildWaypoints(altM) {
   var strips   = _lastStripsGj.features;
   var transits = _lastTransitsGj ? _lastTransitsGj.features : [];
@@ -220,31 +242,58 @@ function _buildWaypoints(altM) {
   var hasHome  = transits.length === N + 1;
   var speed    = Math.max(0.5, _effectiveSpeedMs());
 
+  // Per-strip altitudes and speeds from GeoJSON properties (fallback to global)
+  var stripAlts = strips.map(function(f) {
+    return (f.properties && f.properties.altitude_m != null) ? f.properties.altitude_m : altM;
+  });
+  var stripSpeeds = strips.map(function(f) {
+    return (f.properties && f.properties.speed_ms != null)
+      ? Math.max(0.5, f.properties.speed_ms) : speed;
+  });
+
   var pts = [];
 
-  function addCoords(coords) {
-    coords.forEach(function(c) { pts.push({lon: c[0], lat: c[1]}); });
+  function addCoords(coords, h, spd) {
+    coords.forEach(function(c) {
+      var last = pts.length > 0 ? pts[pts.length - 1] : null;
+      if (last && Math.abs(last.lon - c[0]) < 1e-9 && Math.abs(last.lat - c[1]) < 1e-9) {
+        // Duplicate lat/lon at a boundary: update height/speed instead of creating a
+        // zero-length horizontal segment (which causes NaN in Cesium polylineVolume).
+        last.height = h;
+        last.speed = spd;
+      } else {
+        pts.push({lon: c[0], lat: c[1], height: h, speed: spd});
+      }
+    });
   }
 
   if (hasHome) {
-    addCoords(transits[0].geometry.coordinates);
+    addCoords(transits[0].geometry.coordinates, stripAlts[0], stripSpeeds[0]);
     strips.forEach(function(strip, i) {
-      addCoords(strip.geometry.coordinates);
-      if (i < N - 1) addCoords(transits[i + 1].geometry.coordinates);
+      addCoords(strip.geometry.coordinates, stripAlts[i], stripSpeeds[i]);
+      if (i < N - 1) {
+        var tAlt = (stripAlts[i] + stripAlts[i + 1]) / 2;
+        var tSpd = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
+        addCoords(transits[i + 1].geometry.coordinates, tAlt, tSpd);
+      }
     });
-    addCoords(transits[N].geometry.coordinates);
+    addCoords(transits[N].geometry.coordinates, stripAlts[N - 1], stripSpeeds[N - 1]);
   } else {
     strips.forEach(function(strip, i) {
-      addCoords(strip.geometry.coordinates);
-      if (i < N - 1) addCoords(transits[i].geometry.coordinates);
+      addCoords(strip.geometry.coordinates, stripAlts[i], stripSpeeds[i]);
+      if (i < N - 1) {
+        var tAlt = (stripAlts[i] + stripAlts[i + 1]) / 2;
+        var tSpd = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
+        addCoords(transits[i].geometry.coordinates, tAlt, tSpd);
+      }
     });
   }
 
-  // Assign cumulative times based on distance / speed
+  // Assign cumulative times using per-waypoint speed
   var t = 0;
   return pts.map(function(p, i) {
-    if (i > 0) t += _haversineM(pts[i - 1].lat, pts[i - 1].lon, p.lat, p.lon) / speed;
-    return {lon: p.lon, lat: p.lat, height: altM, time: t};
+    if (i > 0) t += _haversineM(pts[i - 1].lat, pts[i - 1].lon, p.lat, p.lon) / pts[i - 1].speed;
+    return {lon: p.lon, lat: p.lat, height: p.height, time: t};
   });
 }
 
@@ -265,6 +314,20 @@ function _renderScene() {
 
   var jobColorHex = (document.getElementById('job-color').value || '#3b82f6');
   var pathColor   = Cesium.Color.fromCssColorString(jobColorHex);
+
+  // Detect variable-altitude (advanced) mode: altitudes differ by > 1 m
+  var _altMin = waypoints[0].height, _altMax = waypoints[0].height;
+  waypoints.forEach(function(wp) {
+    if (wp.height < _altMin) _altMin = wp.height;
+    if (wp.height > _altMax) _altMax = wp.height;
+  });
+  var _altRange = _altMax - _altMin;
+  var _useAltColor = _altRange > 1.0;
+
+  function _segColor(h) {
+    if (!_useAltColor) return pathColor;
+    return _viridisCesiumColor((_altRange > 0) ? (h - _altMin) / _altRange : 0.5);
+  }
 
   // ── 0. Survey boundary polygon ──────────────────────────────────────────────
   var hasArea = !!(st.previewData && st.previewData.survey);
@@ -305,27 +368,30 @@ function _renderScene() {
   }
 
   for (var si = 0; si < positions.length - 1; si++) {
+    var midH = (waypoints[si].height + waypoints[si + 1].height) / 2;
+    var segColor = _segColor(midH);
     _addEntity('path', {
       polylineVolume: {
         positions: [positions[si], positions[si + 1]],
         shape:     tubeShape,
-        material:  pathColor,
+        material:  segColor,
       },
     });
     _addEntity('path', {
       position: positions[si],
       ellipsoid: {
         radii:    new Cesium.Cartesian3(0.8, 0.8, 0.8),
-        material: pathColor,
+        material: _segColor(waypoints[si].height),
       },
     });
   }
   if (positions.length > 0) {
+    var lastWp = waypoints[waypoints.length - 1];
     _addEntity('path', {
       position: positions[positions.length - 1],
       ellipsoid: {
         radii:    new Cesium.Cartesian3(0.8, 0.8, 0.8),
-        material: pathColor,
+        material: _segColor(lastWp.height),
       },
     });
   }
@@ -388,7 +454,7 @@ function _renderScene() {
   document.getElementById('cesium-play-btn').textContent = '▶';
 
   // Build layer legend (after entities are placed so rows match reality)
-  _buildLegend(hasArea, hasDsm, jobColorHex);
+  _buildLegend(hasArea, hasDsm, jobColorHex, _useAltColor ? {min: _altMin, max: _altMax} : null);
 }
 
 // ── Layer legend ──────────────────────────────────────────────────────────────
@@ -416,7 +482,7 @@ function _legRow(layer, iconHTML, label) {
   return row;
 }
 
-function _buildLegend(hasArea, hasDsm, colorHex) {
+function _buildLegend(hasArea, hasDsm, colorHex, altRange) {
   var leg = document.getElementById('cesium-legend');
   if (!leg) return;
   leg.innerHTML = '<h4>Layers</h4>';
@@ -433,9 +499,22 @@ function _buildLegend(hasArea, hasDsm, colorHex) {
       'Area'));
   }
 
-  leg.appendChild(_legRow('path',
-    '<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="' + colorHex + '" stroke-width="3" stroke-linecap="round"/></svg>',
-    'Flight path'));
+  if (altRange) {
+    // Variable-altitude mode: show viridis gradient with min/max labels
+    var pathRow = _legRow('path',
+      '<div class="l-swatch" style="background:linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725);border:1px solid #9ca3af;"></div>',
+      'Flight path');
+    var altLabel = document.createElement('span');
+    altLabel.className = 'leg-alt-range';
+    altLabel.textContent = Math.round(altRange.min) + '–' + Math.round(altRange.max) + ' m';
+    altLabel.style.cssText = 'font-size:10px;color:#9ca3af;margin-left:4px;';
+    pathRow.appendChild(altLabel);
+    leg.appendChild(pathRow);
+  } else {
+    leg.appendChild(_legRow('path',
+      '<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="' + colorHex + '" stroke-width="3" stroke-linecap="round"/></svg>',
+      'Flight path'));
+  }
 
   leg.appendChild(_legRow('curtain',
     '<div class="l-swatch" style="background:' + colorHex + '14;border:1px solid ' + colorHex + '44;"></div>',

@@ -35,7 +35,7 @@ export function renderStatus(s) {
    +'<div class="sp-metrics">'
    +'<div class="sgrid">'
    +'<div class="sbox"><div class="slbl">Area</div><div class="sval">'+fmt1(s&&s.final_area_ha)+' '+(s?'ha':'')+' </div></div>'
-   +'<div class="sbox"><div class="slbl">Height</div><div class="sval">'+fmt0(s&&s.flight_height_m)+' '+(s?'m':'')+' </div></div>'
+   +'<div class="sbox"><div class="slbl">Height</div><div class="sval">'+(s && st._waypointMode && st._altProfileMin != null ? Math.round(st._altProfileMin)+'–'+Math.round(st._altProfileMax)+' m' : fmt0(s&&s.flight_height_m)+' '+(s?'m':''))+' </div></div>'
    +'<div class="sbox"><div class="slbl">GSD</div><div class="sval">'+fmt2(s&&s.target_gsd_cm)+' '+(s?'cm':'')+' </div></div>'
    +'<div class="sbox"><div class="slbl">Mode</div><div class="sval">'+modeH+'</div></div>'
    +'<div class="sbox"><div class="slbl">Lost</div><div class="sval">'+fmt1(s&&s.area_lost_pct)+' '+(s?'%':'')+' </div></div>'

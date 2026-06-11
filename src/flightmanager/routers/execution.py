@@ -51,6 +51,11 @@ class RouteEstimateRequest(BaseModel):
     takeoff_point_4326: list | None = None  # [lon, lat]
     overlap_front_pct: int | None = None
     overlap_side_pct: int | None = None
+    advanced_mode: bool = False
+    adv_min_height_m: float | None = None
+    adv_max_height_m: float | None = None
+    adv_powerline_clearance_m: float | None = None
+    adv_slope_f: float | None = None
 
 
 class ExportRequest(PreviewRequest):
@@ -389,15 +394,87 @@ async def route_estimate(req: RouteEstimateRequest):
         home_3067=home_3067,
     )
 
-    def _seg_to_feature(x1, y1, x2, y2):
+    # Altitude profile — uniform unless advanced_mode is active
+    altitude_profile: list[float] = [H] * len(result.strips_3067)
+    if req.advanced_mode and result.strips_3067:
+        try:
+            from flightmanager.obstacle_heights import compute_altitude_profile
+            from flightmanager.buildings import Building
+            from flightmanager.powerlines import PowerLine
+            from shapely.geometry import shape as _shape_geom
+
+            preview = _st.last_preview_result or {}
+            buildings: list[Building] = []
+            for bd in preview.get("buildings", []):
+                try:
+                    geom_4326 = _shape_geom(bd["geojson"])
+                    geom_3067 = reproject_to_3067(geom_4326)
+                    buildings.append(Building(
+                        mtk_id=0,
+                        kohdeluokka=bd.get("kohdeluokka", 42210),
+                        kayttotarkoitus=None,
+                        geometry=geom_3067,
+                        alkupvm=None,
+                        kerrosluku=None,
+                    ))
+                except Exception:
+                    pass
+
+            power_lines: list[PowerLine] = []
+            for pl in preview.get("power_lines", []):
+                try:
+                    geom_4326 = _shape_geom(pl["geojson"])
+                    geom_3067 = reproject_to_3067(geom_4326)
+                    power_lines.append(PowerLine(
+                        mtk_id=0,
+                        kohdeluokka=22312,
+                        is_overhead=bool(pl.get("is_overhead", True)),
+                        geometry=geom_3067,
+                        alkupvm=None,
+                    ))
+                except Exception:
+                    pass
+
+            cfg_flight = _st.config.flight
+            min_h      = req.adv_min_height_m          or cfg_flight.adv_min_height_m
+            max_h      = req.adv_max_height_m           or H
+            clearance  = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
+            slope_f    = req.adv_slope_f                or cfg_flight.adv_slope_f
+
+            altitude_profile = compute_altitude_profile(
+                result,
+                buildings=buildings,
+                power_lines=power_lines,
+                flight_height_m=max_h,
+                min_h=min_h,
+                powerline_clearance_m=clearance,
+                overlap_front_pct=ovf,
+                overlap_side_pct=ovs,
+                slope_f=slope_f,
+                drone=drone,
+            )
+        except Exception as _adv_exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[route_estimate] altitude profile failed: {_adv_exc}")
+
+    def _seg_to_feature(x1, y1, x2, y2, alt: float, strip_speed: float):
         line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
-        return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
+        return {
+            "type": "Feature",
+            "geometry": dict(mapping(line_4326)),
+            "properties": {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2)},
+        }
 
     def _path_to_feature(pts: list) -> dict:
         line_4326 = reproject_to_4326(LineString(pts))
         return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
 
-    strips_features  = [_seg_to_feature(*s) for s in result.strips_3067]
+    strips_features = [
+        _seg_to_feature(*s, alt=altitude_profile[i],
+                        strip_speed=drone.auto_speed(altitude_profile[i], ovf))
+        for i, s in enumerate(result.strips_3067)
+    ]
     transit_features = [_path_to_feature(s) for s in result.transit_segs_3067]
 
     return {
@@ -410,6 +487,8 @@ async def route_estimate(req: RouteEstimateRequest):
         "battery_minutes":   drone.battery_minutes,
         "strips_geojson":    {"type": "FeatureCollection", "features": strips_features},
         "transits_geojson":  {"type": "FeatureCollection", "features": transit_features},
+        "advanced_mode":     req.advanced_mode,
+        "altitude_profile":  [round(a, 1) for a in altitude_profile],
     }
 
 
