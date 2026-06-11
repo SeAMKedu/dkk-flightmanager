@@ -423,7 +423,7 @@ function _buildLegend(hasArea, hasDsm, colorHex) {
 
   if (hasDsm) {
     leg.appendChild(_legRow('dsm',
-      '<div class="l-swatch" style="background:linear-gradient(to right,#000,#fff);border:1px solid #9ca3af;"></div>',
+      '<div class="l-swatch" style="background:linear-gradient(to right,#440154,#31688e,#35b779,#fde725);border:1px solid #9ca3af;"></div>',
       'DSM elevation'));
   }
 
