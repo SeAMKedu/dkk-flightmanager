@@ -501,12 +501,12 @@ export function _mvStatJobClickInternal(path) {
 
 // Called by stat-view.js when stat mode changes
 export function _onStatModeChangeInternal(mode) {
+  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
   _mvLayers.forEach(function(item) {
     if (_mvSelected.has(item.path)) return;
     var c = getMvStatColor(item.feature.properties);
     item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.30});
   });
-  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
   _mvUpdateDim();
 }
 
