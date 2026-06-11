@@ -106,8 +106,14 @@
 
     <div class="sec is-coll" id="flight-sec">
       <div class="sec-hdr" onclick="toggleSec('flight')">
-        <h3>Flight</h3>
-        <span class="sec-chev">&#9660;</span>
+        <div class="sec-hdr-left">
+          <h3>Flight</h3>
+          <span id="adv-dot" class="adv-dot" style="display:none" title="Variable altitude active">ADV</span>
+        </div>
+        <div class="sec-hdr-right" onclick="event.stopPropagation()">
+          <button id="tpl-btn" class="tpl-gear-btn" onclick="openTplModal()" title="Template &amp; waylines settings">&#9881;</button>
+          <span class="sec-chev">&#9660;</span>
+        </div>
       </div>
       <div class="sec-body" id="flight-body">
         <label>Subcategory</label>
@@ -488,6 +494,81 @@
     <div id="route-rename-footer">
       <button id="route-rename-confirm-btn" onclick="confirmRouteRenameAction()">Rename</button>
       <button class="cancel-btn" onclick="closeRouteRenameModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="tpl-modal">
+  <div id="tpl-card">
+    <div class="tpl-hdr">
+      <span>Template Settings</span>
+      <button class="batch-close" onclick="closeTplModal()">&#10005;</button>
+    </div>
+    <div class="tpl-tabs">
+      <button class="tpl-tab active" data-tab="capture" onclick="tplTab('capture')">Capture</button>
+      <button class="tpl-tab" data-tab="safety" onclick="tplTab('safety')">Safety</button>
+      <button class="tpl-tab" data-tab="terrain" onclick="tplTab('terrain')">Terrain</button>
+    </div>
+
+    <div class="tpl-panel" id="tpl-panel-capture">
+      <p class="tpl-hint">Overlap affects strip spacing and maximum slope for variable altitude.</p>
+      <label>Front overlap (%)</label>
+      <div class="simp-row">
+        <button class="simp-step" id="tpl-ovf-minus">&#8722;</button>
+        <span class="simp-val" id="tpl-ovf-val">80%</span>
+        <button class="simp-step" id="tpl-ovf-plus">&#43;</button>
+        <input type="hidden" id="tpl-overlap-front" value="80">
+      </div>
+      <label>Side overlap (%)</label>
+      <div class="simp-row">
+        <button class="simp-step" id="tpl-ovs-minus">&#8722;</button>
+        <span class="simp-val" id="tpl-ovs-val">70%</span>
+        <button class="simp-step" id="tpl-ovs-plus">&#43;</button>
+        <input type="hidden" id="tpl-overlap-side" value="70">
+      </div>
+    </div>
+
+    <div class="tpl-panel" id="tpl-panel-safety" style="display:none">
+      <label>Take-off security height (m)</label>
+      <input type="number" id="tpl-takeoff-sec" min="5" max="200" step="1" value="50">
+      <label>Return-to-home altitude (m)</label>
+      <input type="number" id="tpl-rth-height" min="10" max="500" step="5" value="80">
+      <label>RC signal lost</label>
+      <select id="tpl-rc-lost">
+        <option value="goBack">Return to home</option>
+        <option value="hover">Hover in place</option>
+        <option value="landing">Land immediately</option>
+      </select>
+      <label>Mission finish action</label>
+      <select id="tpl-finish-action">
+        <option value="goHome">Return to home</option>
+        <option value="hover">Hover in place</option>
+        <option value="autoLand">Auto land</option>
+        <option value="noAction">No action</option>
+      </select>
+    </div>
+
+    <div class="tpl-panel" id="tpl-panel-terrain" style="display:none">
+      <label class="ck-row tpl-adv-toggle">
+        <input type="checkbox" id="tpl-advanced">
+        Variable altitude (Phase 2)
+      </label>
+      <p class="tpl-hint tpl-adv-hint" id="tpl-adv-hint">Enable to generate explicit per-waypoint altitudes near buildings and power lines. Generation not yet implemented.</p>
+      <div id="tpl-adv-fields" class="tpl-adv-fields">
+        <label>Min altitude — A2 floor (m)</label>
+        <input type="number" id="tpl-adv-min-height" min="20" max="120" step="1" value="30" disabled>
+        <label>Max altitude — open field (m) <span class="tpl-hint-inline">blank = use height field</span></label>
+        <input type="number" id="tpl-adv-max-height" min="20" max="120" step="1" placeholder="same as height" disabled>
+        <label>Power line clearance (m AGL)</label>
+        <input type="number" id="tpl-adv-powerline" min="40" max="300" step="5" value="70" disabled>
+        <label>Slope tolerance F <span class="tpl-hint-inline">0.20 = 20% altitude change per photo baseline</span></label>
+        <input type="number" id="tpl-adv-slope-f" min="0.05" max="0.50" step="0.01" value="0.20" disabled>
+      </div>
+      <button class="tpl-adv-run-btn" id="tpl-adv-run-btn" disabled title="Variable altitude path generation coming in Phase 2">Generate 3D Path</button>
+    </div>
+
+    <div class="tpl-footer">
+      <button class="tpl-done-btn" onclick="closeTplModal()">Done</button>
     </div>
   </div>
 </div>

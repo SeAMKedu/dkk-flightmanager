@@ -36,6 +36,7 @@ import { closeDeleteModal, confirmDeleteAction, closeMoveModal, submitNewFolderM
 import { setVlosRange } from './takeoff.js';
 import { clearMeasurements } from './measurement.js';
 import { initCesiumView, toggle3dView } from './cesium-view.js';
+import { openTplModal, closeTplModal, tplTab, initTplModal, initTplDefaults } from './tpl-modal.js';
 
 // ── Assign all functions needed in HTML onclick= attributes to window ─────────
 Object.assign(window, {
@@ -114,6 +115,9 @@ Object.assign(window, {
 
   // cesium-view
   toggle3dView,
+
+  // tpl-modal
+  openTplModal, closeTplModal, tplTab,
 });
 
 // ── Application init ──────────────────────────────────────────────────────────
@@ -162,10 +166,12 @@ async function init() {
     initCesiumView();
     if (cfg.color_palette) initColorPalette(cfg.color_palette);
     if (cfg.max_area_loss_pct != null) st._cfgMaxAreaLossPct = cfg.max_area_loss_pct;
+    initTplDefaults(cfg);
     console.log('[init] config loaded, outputDir=' + st.outputDir + ', drone=' + cfg.default_drone);
   } catch(e) {
     console.error('[init] failed:', e);
   }
+  initTplModal();
   renderStatus(null);
   focusArea();
   setJpOpen(localStorage.getItem('jp-open') !== 'false');

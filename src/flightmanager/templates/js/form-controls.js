@@ -1,6 +1,7 @@
 // ── Form controls: GSD, radius, subcategory, simplify, poly state ─────────────
 
 import { st } from './state.js';
+import { getTplSettings } from './tpl-modal.js';
 import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from './map-init.js';
 import { markDirty, confirmIfDirty } from './dirty-tracking.js';
 import { redrawRings } from './legend.js';
@@ -314,6 +315,7 @@ export function getParams() {
     preview_radius_m: parseFloat(document.getElementById('warn-radius').value) || null,
     route_angle_deg: st._routeAngleDeg,
     speed_ms: st._speedMsOverride,
+    template_settings: getTplSettings(),
   };
 }
 

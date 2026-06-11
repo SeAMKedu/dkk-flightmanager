@@ -87,6 +87,7 @@ class FlightConfig(BaseModel):
     max_height_agl_m: float = Field(default=110.0, le=120.0)
     agl_safety_margin_m: float = Field(default=10.0, ge=0)
     takeoff_security_height_m: float = Field(default=50.0)
+    rth_height_m: float = Field(default=80.0)
     transitional_speed_ms: float = Field(default=15.0)
     overlap_front_pct: int = Field(default=80, ge=0, le=100)
     overlap_side_pct: int = Field(default=70, ge=0, le=100)

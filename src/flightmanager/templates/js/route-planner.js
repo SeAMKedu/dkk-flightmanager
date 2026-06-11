@@ -5,6 +5,7 @@ import { map, lrs } from './map-init.js';
 import { markDirty } from './dirty-tracking.js';
 import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
 import { notifyCesiumRouteReady } from './cesium-view.js';
+import { getTplSettings } from './tpl-modal.js';
 
 var _routeDebounceTimer = null;
 var _routeLayer = null;
@@ -27,10 +28,13 @@ function _getRouteParams() {
   var p_m = d.pixel_pitch_um * 1e-6, f_m = d.focal_length_mm * 1e-3;
   var fpAcross = H * d.image_width_px  * p_m / f_m;
   var fpAlong  = H * d.image_height_px * p_m / f_m;
+  var tpl = getTplSettings();
+  var ovf = tpl ? tpl.overlap_front_pct : st._cfgOverlapFront;
+  var ovs = tpl ? tpl.overlap_side_pct  : st._cfgOverlapSide;
   return {
     angle:  _effectiveRouteAngle(),
-    stripM: fpAcross * (1 - st._cfgOverlapSide  / 100),
-    photoM: fpAlong  * (1 - st._cfgOverlapFront / 100),
+    stripM: fpAcross * (1 - ovs / 100),
+    photoM: fpAlong  * (1 - ovf / 100),
     fpAcross: fpAcross,
   };
 }
@@ -288,13 +292,16 @@ function _scheduleAccurateEstimate() {
 async function _fetchAccurateEstimate() {
   if (!st.previewData || !st.previewData.survey) return;
   var home = getTakeoffPt() || getTakeoffAuto();
+  var tpl = getTplSettings();
   var body = {
-    polygon_4326:       st.previewData.survey,
-    angle_deg:          st._routeAngleDeg,
-    height_m:           parseFloat(document.getElementById('hgt').value) || null,
-    drone:              document.getElementById('dsel').value || null,
-    speed_ms:           st._speedMsOverride,
-    takeoff_point_4326: home || null,
+    polygon_4326:        st.previewData.survey,
+    angle_deg:           st._routeAngleDeg,
+    height_m:            parseFloat(document.getElementById('hgt').value) || null,
+    drone:               document.getElementById('dsel').value || null,
+    speed_ms:            st._speedMsOverride,
+    takeoff_point_4326:  home || null,
+    overlap_front_pct:   tpl ? tpl.overlap_front_pct : null,
+    overlap_side_pct:    tpl ? tpl.overlap_side_pct  : null,
   };
   try {
     var res = await fetch('/api/route_estimate', {

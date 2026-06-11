@@ -39,6 +39,7 @@ class PreviewRequest(BaseModel):
     custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
     route_angle_deg: float | None = None
     speed_ms: float | None = None
+    template_settings: dict | None = None  # per-job template/waylines overrides
 
 
 class RouteEstimateRequest(BaseModel):
@@ -48,6 +49,8 @@ class RouteEstimateRequest(BaseModel):
     drone: str | None = None
     speed_ms: float | None = None
     takeoff_point_4326: list | None = None  # [lon, lat]
+    overlap_front_pct: int | None = None
+    overlap_side_pct: int | None = None
 
 
 class ExportRequest(PreviewRequest):
@@ -352,13 +355,15 @@ async def route_estimate(req: RouteEstimateRequest):
         drone = cfg.active_drone()
 
     H = req.height_m if req.height_m else drone.height_from_gsd(cfg.flight.target_gsd_cm)
+    ovf = req.overlap_front_pct if req.overlap_front_pct is not None else cfg.flight.overlap_front_pct
+    ovs = req.overlap_side_pct  if req.overlap_side_pct  is not None else cfg.flight.overlap_side_pct
     speed_ms = req.speed_ms if req.speed_ms else resolve_strip_speed(cfg.flight, drone, H)
 
     p_m = drone.pixel_pitch_um * 1e-6
     f_m = drone.focal_length_mm * 1e-3
     footprint_m = H * drone.image_width_px * p_m / f_m
-    strip_m = footprint_m * (1 - cfg.flight.overlap_side_pct  / 100)
-    photo_m = H * drone.image_height_px * p_m / f_m * (1 - cfg.flight.overlap_front_pct / 100)
+    strip_m = footprint_m * (1 - ovs / 100)
+    photo_m = H * drone.image_height_px * p_m / f_m * (1 - ovf / 100)
 
     poly_4326 = _shape(req.polygon_4326)
     poly_3067 = reproject_to_3067(poly_4326)
@@ -476,6 +481,20 @@ def _prepare_config(req: PreviewRequest):
     if req.speed_ms is not None and req.speed_ms > 0:
         cfg.flight.auto_flight_speed_ms = req.speed_ms
 
+    ts = req.template_settings or {}
+    if ts.get("overlap_front_pct") is not None:
+        cfg.flight.overlap_front_pct = int(ts["overlap_front_pct"])
+    if ts.get("overlap_side_pct") is not None:
+        cfg.flight.overlap_side_pct = int(ts["overlap_side_pct"])
+    if ts.get("takeoff_security_height_m") is not None:
+        cfg.flight.takeoff_security_height_m = float(ts["takeoff_security_height_m"])
+    if ts.get("rth_height_m") is not None:
+        cfg.flight.rth_height_m = float(ts["rth_height_m"])
+    if ts.get("rc_lost_action") is not None:
+        cfg.flight.rc_lost_action = str(ts["rc_lost_action"])
+    if ts.get("finish_action") is not None:
+        cfg.flight.finish_action = str(ts["finish_action"])
+
     return cfg
 
 
@@ -508,6 +527,7 @@ def _write_job_params(
         "safety": {
             "preview_radius_m": req.preview_radius_m,
         },
+        "template_settings": req.template_settings or {},
         "custom_polygon_4326": req.custom_polygon,
         "takeoff_point_4326":  req.takeoff_point_4326,
         "color": req.color or None,

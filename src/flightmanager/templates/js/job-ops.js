@@ -15,6 +15,7 @@ import { renderMap } from './map-layers.js';
 import { updateRouteOverlay, updateRouteStats, setRouteAngleSilent as _setRouteAngleSilentRP,
          setSpeedSilent, _renderAngleControl } from './route-planner.js';
 import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
+import { restoreTplSettings } from './tpl-modal.js';
 import { hideExtModifiedNotice } from './event-stream.js';
 // Circular — only called at runtime:
 import { startPreview } from './preview-runner.js';
@@ -142,6 +143,7 @@ function _restoreFormFromParams(p) {
     st.editedPoly = null; st.polyModified = false;
     document.getElementById('modbadge').style.display = 'none';
   }
+  restoreTplSettings(p.template_settings || {});
   var hasIds = !!(p.inputs && ((p.inputs.parcel_ids||[]).length || (p.inputs.property_ids||[]).length));
   _setSec('area', hasIds);
 }

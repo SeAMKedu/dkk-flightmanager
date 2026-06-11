@@ -204,6 +204,7 @@ def _build_template_kml(
     _tx(mc, f"{_WPML}exitOnRCLost",          "executeLostAction")
     _tx(mc, f"{_WPML}executeRCLostAction",   cfg.rc_lost_action)
     _tx(mc, f"{_WPML}takeOffSecurityHeight", f"{cfg.takeoff_security_height_m:.6g}")
+    _tx(mc, f"{_WPML}globalRTHHeight",       f"{cfg.rth_height_m:.6g}")
     _tx(mc, f"{_WPML}globalTransitionalSpeed", f"{cfg.transitional_speed_ms:.6g}")
     de = str(drone.drone_enum)         if drone else _DRONE_ENUM
     ds = str(drone.drone_sub_enum)     if drone else _DRONE_SUB_ENUM
@@ -309,6 +310,7 @@ def _build_waylines_stub(cfg: FlightConfig, *, speed_ms: float, drone: DroneConf
     _tx(mc, f"{_WPML}exitOnRCLost",          "executeLostAction")
     _tx(mc, f"{_WPML}executeRCLostAction",   cfg.rc_lost_action)
     _tx(mc, f"{_WPML}takeOffSecurityHeight", f"{cfg.takeoff_security_height_m:.6g}")
+    _tx(mc, f"{_WPML}globalRTHHeight",       f"{cfg.rth_height_m:.6g}")
     _tx(mc, f"{_WPML}globalTransitionalSpeed", f"{cfg.transitional_speed_ms:.6g}")
     di = etree.SubElement(mc, f"{_WPML}droneInfo")
     _tx(di, f"{_WPML}droneEnumValue",    de)
