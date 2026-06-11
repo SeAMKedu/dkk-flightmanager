@@ -19,6 +19,12 @@ var _lastTransitsGj = null;
 var _currentEntities = [];
 var _dsmLayer = null;
 
+// Per-layer entity groups for visibility toggling
+var _entityGroups = {area: [], path: [], curtain: [], drone: []};
+
+// Layer visibility state — persists across re-renders
+var _layerVis = {dsm: true, area: true, path: true, curtain: true, drone: true};
+
 // Playback
 var _isPlaying = false;
 var _playbackTime = 0;
@@ -106,6 +112,8 @@ export function hideCesiumView() {
   if (measSvg) measSvg.style.visibility = '';
   _showPlayback(false);
   _positionOverlayBtn(false);
+  var leg = document.getElementById('cesium-legend');
+  if (leg) leg.style.display = 'none';
 }
 
 // ── Cesium bootstrap ──────────────────────────────────────────────────────────
@@ -156,11 +164,23 @@ function _createViewer() {
 function _clearScene() {
   _currentEntities.forEach(function(e) { _viewer.entities.remove(e); });
   _currentEntities = [];
+  Object.keys(_entityGroups).forEach(function(k) { _entityGroups[k] = []; });
   if (_dsmLayer) { _viewer.imageryLayers.remove(_dsmLayer); _dsmLayer = null; }
   _dronePositionProperty = null;
   _playbackTime = 0;
   _totalDuration = 0;
   _isPlaying = false;
+}
+
+/** Add entity to a named group and to the flat list; applies current layer visibility. */
+function _addEntity(group, entityDef) {
+  /* eslint-disable no-undef */
+  var e = _viewer.entities.add(entityDef);
+  /* eslint-enable no-undef */
+  e.show = _layerVis[group];
+  _entityGroups[group].push(e);
+  _currentEntities.push(e);
+  return e;
 }
 
 function _haversineM(lat1, lon1, lat2, lon2) {
@@ -247,14 +267,15 @@ function _renderScene() {
   var pathColor   = Cesium.Color.fromCssColorString(jobColorHex);
 
   // ── 0. Survey boundary polygon ──────────────────────────────────────────────
-  if (st.previewData && st.previewData.survey) {
+  var hasArea = !!(st.previewData && st.previewData.survey);
+  if (hasArea) {
     var geom  = st.previewData.survey;
     var rings = geom.type === 'Polygon'       ? [geom.coordinates[0]]
               : geom.type === 'MultiPolygon'  ? geom.coordinates.map(function(p){ return p[0]; })
               : [];
     rings.forEach(function(ring) {
       var rPos = ring.map(function(c) { return Cesium.Cartesian3.fromDegrees(c[0], c[1], 0.5); });
-      var poly = _viewer.entities.add({
+      _addEntity('area', {
         polygon: {
           hierarchy:    new Cesium.PolygonHierarchy(rPos),
           material:     pathColor.withAlpha(0.12),
@@ -264,9 +285,8 @@ function _renderScene() {
           height:       0.5,
         },
       });
-      _currentEntities.push(poly);
-      // Clamped polyline for a crisp ground outline (Cesium polygon outlines can be thin on WebGL)
-      var line = _viewer.entities.add({
+      // Clamped polyline for a crisp ground outline
+      _addEntity('area', {
         polyline: {
           positions:     [...rPos, rPos[0]],
           width:         3,
@@ -274,12 +294,10 @@ function _renderScene() {
           clampToGround: true,
         },
       });
-      _currentEntities.push(line);
     });
   }
 
   // ── 1. Flight path tubes ────────────────────────────────────────────────────
-  // Octagonal cross-section; radius 0.8 m gives clear visibility at 60 m altitude.
   var tubeShape = [];
   for (var ti = 0; ti < 360; ti += 45) {
     var rad = Cesium.Math.toRadians(ti);
@@ -287,35 +305,33 @@ function _renderScene() {
   }
 
   for (var si = 0; si < positions.length - 1; si++) {
-    _currentEntities.push(_viewer.entities.add({
+    _addEntity('path', {
       polylineVolume: {
         positions: [positions[si], positions[si + 1]],
         shape:     tubeShape,
         material:  pathColor,
       },
-    }));
-    // Joint sphere to smooth corners
-    _currentEntities.push(_viewer.entities.add({
+    });
+    _addEntity('path', {
       position: positions[si],
       ellipsoid: {
         radii:    new Cesium.Cartesian3(0.8, 0.8, 0.8),
         material: pathColor,
       },
-    }));
+    });
   }
-  // End cap
   if (positions.length > 0) {
-    _currentEntities.push(_viewer.entities.add({
+    _addEntity('path', {
       position: positions[positions.length - 1],
       ellipsoid: {
         radii:    new Cesium.Cartesian3(0.8, 0.8, 0.8),
         material: pathColor,
       },
-    }));
+    });
   }
 
   // ── 2. Curtain (translucent wall below path) ────────────────────────────────
-  var curtain = _viewer.entities.add({
+  var curtainRef = _addEntity('curtain', {
     wall: {
       positions:    positions,
       material:     pathColor.withAlpha(0.08),
@@ -323,10 +339,10 @@ function _renderScene() {
       outlineColor: pathColor.withAlpha(0.22),
     },
   });
-  _currentEntities.push(curtain);
 
   // ── 3. DSM imagery overlay ──────────────────────────────────────────────────
-  if (st.previewData && st.previewData.dsm_b64 && st.previewData.dsm_bounds) {
+  var hasDsm = !!(st.previewData && st.previewData.dsm_b64 && st.previewData.dsm_bounds);
+  if (hasDsm) {
     var b = st.previewData.dsm_bounds; // [west, south, east, north]
     _dsmLayer = _viewer.imageryLayers.addImageryProvider(
       new Cesium.SingleTileImageryProvider({
@@ -335,6 +351,7 @@ function _renderScene() {
       })
     );
     _dsmLayer.alpha = 0.65;
+    _dsmLayer.show  = _layerVis.dsm;
   }
 
   // ── 4. Drone marker for playback ────────────────────────────────────────────
@@ -345,7 +362,7 @@ function _renderScene() {
     _dronePositionProperty.addSample(jd, Cesium.Cartesian3.fromDegrees(wp.lon, wp.lat, wp.height));
   });
 
-  _currentEntities.push(_viewer.entities.add({
+  _addEntity('drone', {
     position: new Cesium.CallbackProperty(function() {
       var jd = Cesium.JulianDate.addSeconds(epoch, _playbackTime, new Cesium.JulianDate());
       return _dronePositionProperty.getValue(jd);
@@ -356,12 +373,12 @@ function _renderScene() {
       outlineColor: Cesium.Color.BLACK,
       outlineWidth: 2,
     },
-  }));
+  });
 
   /* eslint-enable no-undef */
 
   // Fly to scene
-  _viewer.zoomTo(curtain);
+  _viewer.zoomTo(curtainRef);
 
   // Reset playback UI
   _playbackTime = 0;
@@ -369,6 +386,78 @@ function _renderScene() {
   if (slider) { slider.value = 0; slider.max = _totalDuration; }
   _updateTimeDisplay();
   document.getElementById('cesium-play-btn').textContent = '▶';
+
+  // Build layer legend (after entities are placed so rows match reality)
+  _buildLegend(hasArea, hasDsm, jobColorHex);
+}
+
+// ── Layer legend ──────────────────────────────────────────────────────────────
+
+var _EYE_OPEN = '<svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+var _EYE_SLASH = '<svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+function _legRow(layer, iconHTML, label) {
+  var row = document.createElement('div');
+  row.className = 'leg-row';
+  var btn = document.createElement('button');
+  btn.className = 'leg-eye' + (_layerVis[layer] ? '' : ' off');
+  btn.id = 'c3d-eye-' + layer;
+  btn.title = label;
+  btn.innerHTML = _EYE_OPEN + _EYE_SLASH;
+  btn.addEventListener('click', function() { _toggle3dLayer(layer); });
+  var iconDiv = document.createElement('div');
+  iconDiv.className = 'leg-icon';
+  iconDiv.innerHTML = iconHTML;
+  var span = document.createElement('span');
+  span.textContent = label;
+  row.appendChild(btn);
+  row.appendChild(iconDiv);
+  row.appendChild(span);
+  return row;
+}
+
+function _buildLegend(hasArea, hasDsm, colorHex) {
+  var leg = document.getElementById('cesium-legend');
+  if (!leg) return;
+  leg.innerHTML = '<h4>Layers</h4>';
+
+  if (hasDsm) {
+    leg.appendChild(_legRow('dsm',
+      '<div class="l-swatch" style="background:linear-gradient(to right,#000,#fff);border:1px solid #9ca3af;"></div>',
+      'DSM elevation'));
+  }
+
+  if (hasArea) {
+    leg.appendChild(_legRow('area',
+      '<div class="l-swatch" style="background:' + colorHex + '20;border:1.5px solid ' + colorHex + ';"></div>',
+      'Area'));
+  }
+
+  leg.appendChild(_legRow('path',
+    '<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="' + colorHex + '" stroke-width="3" stroke-linecap="round"/></svg>',
+    'Flight path'));
+
+  leg.appendChild(_legRow('curtain',
+    '<div class="l-swatch" style="background:' + colorHex + '14;border:1px solid ' + colorHex + '44;"></div>',
+    'Curtain'));
+
+  leg.appendChild(_legRow('drone',
+    '<div class="l-dot" style="background:#fff;border:1.5px solid #374151;"></div>',
+    'Drone'));
+
+  leg.style.display = 'block';
+}
+
+function _toggle3dLayer(layer) {
+  _layerVis[layer] = !_layerVis[layer];
+  var visible = _layerVis[layer];
+  var btn = document.getElementById('c3d-eye-' + layer);
+  if (btn) btn.classList.toggle('off', !visible);
+  if (layer === 'dsm') {
+    if (_dsmLayer) _dsmLayer.show = visible;
+  } else {
+    _entityGroups[layer].forEach(function(e) { e.show = visible; });
+  }
 }
 
 // ── Playback ──────────────────────────────────────────────────────────────────
@@ -438,8 +527,6 @@ function _positionOverlayBtn(show) {
   var btn = document.getElementById('cesium-2d-btn');
   if (!btn) return;
   if (!show) { btn.style.display = 'none'; return; }
-  // Mirror the exact pixel position of the Leaflet toggle button.
-  // _toggle3dBtn is visibility:hidden but still laid out, so its rect is valid.
   if (_toggle3dBtn) {
     var tRect  = _toggle3dBtn.getBoundingClientRect();
     var mcRect = document.getElementById('mc').getBoundingClientRect();
