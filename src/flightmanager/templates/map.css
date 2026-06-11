@@ -66,3 +66,24 @@
 .takeoff-icon{cursor:grab;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
 .takeoff-tooltip{background:#1e293b;border:1px solid #334155;color:#f1f5f9;font-size:11px;padding:3px 8px;border-radius:4px;white-space:nowrap}
 .l-takeoff-icon{width:14px;height:14px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900;color:#1e293b;text-shadow:0 0 0 2px #fff,-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff,1px 1px 0 #fff}
+/* ─── Cesium 3D view ─────────────────────────────────────────────────────── */
+#cesium-container{position:absolute;top:0;left:0;right:0;bottom:0;display:none;z-index:500}
+#cesium-container.active{display:block}
+/* Hide Cesium default chrome */
+.cesium-viewer-bottom,.cesium-viewer-animationContainer,.cesium-viewer-timelineContainer{display:none!important}
+#cesium-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.9);color:#cbd5e1;font-size:13px;z-index:10;letter-spacing:.03em}
+#cesium-playback{display:none;position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:600;align-items:center;gap:12px;background:rgba(15,23,42,.88);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 20px;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.5);white-space:nowrap;pointer-events:auto}
+#cesium-playback.active{display:flex}
+#cesium-play-btn,#cesium-reset-btn{background:#00d2ff;color:#000;border:none;padding:5px 11px;border-radius:5px;font-weight:700;cursor:pointer;width:auto;font-size:13px;transition:background .15s}
+#cesium-play-btn:hover,#cesium-reset-btn:hover{background:#00b8e0}
+#cesium-slider{width:260px;accent-color:#00d2ff;cursor:pointer}
+#cesium-time-display{font-family:monospace;font-size:13px;min-width:52px;text-align:right}
+#cesium-speed{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:4px;padding:3px 5px;outline:none;font-size:12px;width:auto;cursor:pointer}
+#cesium-speed option{background:#222}
+/* 2D/3D toggle button — Leaflet topleft control matching zoom/layer switcher style */
+.toggle-3d-ctrl{width:30px!important;height:30px!important;background:#fff;border:2px solid rgba(0,0,0,.2)!important;border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.4);cursor:pointer;font-size:11px;font-weight:700;color:#374151;padding:0!important;transition:background .15s,color .15s,border-color .15s;line-height:28px;text-align:center}
+.toggle-3d-ctrl:hover:not(:disabled){background:#f4f4f4}
+.toggle-3d-ctrl.active{background:#3b82f6!important;color:#fff!important;border-color:#2563eb!important}
+.toggle-3d-ctrl:disabled{opacity:.42;cursor:not-allowed}
+/* Overlay "2D" button — sits above Cesium at same pixel position as the Leaflet toggle */
+#cesium-2d-btn{position:absolute;display:none;z-index:601}

@@ -33,7 +33,7 @@ import { _initEventStream, showExtModifiedNotice, hideExtModifiedNotice, reloadC
 import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
 import { setVlosRange } from './takeoff.js';
 import { clearMeasurements } from './measurement.js';
-import './cesium-view.js';
+import { initCesiumView, toggle3dView } from './cesium-view.js';
 
 // ── Assign all functions needed in HTML onclick= attributes to window ─────────
 Object.assign(window, {
@@ -105,6 +105,9 @@ Object.assign(window, {
 
   // measurement
   clearMeasurements,
+
+  // cesium-view
+  toggle3dView,
 });
 
 // ── Application init ──────────────────────────────────────────────────────────
@@ -150,6 +153,7 @@ async function init() {
     }
     updateGsd();
     if (cfg.mml_api_key) _initBaseLayers(cfg.mml_api_key);
+    initCesiumView();
     if (cfg.color_palette) initColorPalette(cfg.color_palette);
     if (cfg.max_area_loss_pct != null) st._cfgMaxAreaLossPct = cfg.max_area_loss_pct;
     console.log('[init] config loaded, outputDir=' + st.outputDir + ', drone=' + cfg.default_drone);

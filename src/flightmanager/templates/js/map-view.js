@@ -8,6 +8,7 @@ import { loadJobsList } from './jobs-panel.js';
 import { clearTakeoffForMapView, _hideVlos } from './takeoff.js';
 import { getMvStatColor, getMvStatMode, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
 import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
+import { hideCesiumView } from './cesium-view.js';
 // Circular — only called at runtime:
 import { saveEdit } from './polygon-edit.js';
 import { openJob as _openJobFn } from './job-ops.js';
@@ -39,6 +40,7 @@ export function showFolderOnMap(e, folderName) {
 }
 
 export function openMapView(folderFilter) {
+  hideCesiumView();
   var folderKey = folderFilter || null;
   var _comingFromEditor = _mvFromEditor && st._activeJobFolder === folderKey;
   var _skipFit = _comingFromEditor;

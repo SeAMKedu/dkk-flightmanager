@@ -4,6 +4,7 @@ import { st } from './state.js';
 import { map, lrs } from './map-init.js';
 import { markDirty } from './dirty-tracking.js';
 import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
+import { notifyCesiumRouteReady } from './cesium-view.js';
 
 var _routeDebounceTimer = null;
 var _routeLayer = null;
@@ -177,6 +178,7 @@ export function _clearRouteLayer() {
   if (row) row.style.display = 'none';
   var crow = document.getElementById('leg-coverage-row');
   if (crow) crow.style.display = 'none';
+  notifyCesiumRouteReady(null, null);
 }
 
 function _stripCoverageRect(ll1, ll2, fpAcross, lat0, lon0, mLat, mLon) {
@@ -252,6 +254,7 @@ function _drawRouteGeoJSON(stripsGeojson, transitsGeojson) {
     return f.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
   });
   _drawRouteLines(lines, transits, _lastFpAcross);
+  notifyCesiumRouteReady(stripsGeojson, transitsGeojson);
 }
 
 export function updateRouteStats(data) {

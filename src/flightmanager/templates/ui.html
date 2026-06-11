@@ -169,6 +169,23 @@
 
   <div id="mc">
     <div id="map"></div>
+    <!-- 3D Cesium view — fills #mc via position:absolute when active -->
+    <div id="cesium-container"></div>
+    <!-- Mirror of the 2D/3D toggle: shown on top of Cesium at the same pixel position -->
+    <button id="cesium-2d-btn" class="toggle-3d-ctrl active" onclick="toggle3dView()" title="Switch to 2D view" style="display:none">2D</button>
+    <!-- 3D playback controls -->
+    <div id="cesium-playback">
+      <button id="cesium-play-btn">&#9654;</button>
+      <button id="cesium-reset-btn">&#8635;</button>
+      <span id="cesium-time-display">0:00</span>
+      <input type="range" id="cesium-slider" min="0" max="100" value="0" step="0.1">
+      <select id="cesium-speed" title="Playback speed">
+        <option value="1">1&times;</option>
+        <option value="2">2&times;</option>
+        <option value="5">5&times;</option>
+        <option value="10">10&times;</option>
+      </select>
+    </div>
     <div id="bridge-hint"></div>
     <!-- Map view: floating action bar (top-center, visible when jobs selected) -->
     <div id="mv-actions">
