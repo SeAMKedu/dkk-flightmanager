@@ -33,7 +33,6 @@ from pathlib import Path
 from lxml import etree
 from shapely.geometry.base import BaseGeometry
 
-from jobgen.buildings import Building
 from jobgen.config import (
     M3E_FOCAL_LENGTH_MM,
     M3E_IMAGE_HEIGHT_PX,
@@ -43,6 +42,7 @@ from jobgen.config import (
     FlightConfig,
 )
 from jobgen.crs import require_4326
+from jobgen.waypoints import ONE_BATTERY_MINUTES, budget_estimate
 
 log = logging.getLogger(__name__)
 
@@ -59,9 +59,6 @@ _DRONE_SUB_ENUM  = "0"
 _PAYLOAD_ENUM    = "68"
 _PAYLOAD_SUB_ENUM = "3"
 _PAYLOAD_POS_IDX = "0"
-
-# Default battery threshold (M3M).  Exported for use in tests.
-ONE_BATTERY_MINUTES = 28.0
 
 # Fallback capture interval when no DroneConfig is available.
 # Calibrated from M3M: 8.9 m/s at 100 m AGL, 80% front overlap.
@@ -140,8 +137,8 @@ def build_kmz(
     )
 
     # Battery budget estimate
-    budget = _estimate_budget(survey_4326, flight_config, speed_ms=speed_ms, drone=drone)
     battery_limit = drone.battery_minutes if drone else ONE_BATTERY_MINUTES
+    budget = budget_estimate(survey_4326, flight_config, speed_ms=speed_ms, drone=drone)
 
     if budget["over_one_battery"]:
         log.warning(
@@ -339,55 +336,6 @@ def _build_waylines_stub(cfg: FlightConfig, *, speed_ms: float, drone: DroneConf
     ).decode("utf-8")
 
 
-# ---- Battery budget estimate ----
-
-def _estimate_budget(
-    survey_4326: BaseGeometry,
-    cfg: FlightConfig,
-    *,
-    speed_ms: float,
-    drone: DroneConfig | None = None,
-    home_3067: tuple[float, float] | None = None,
-) -> dict:
-    """Estimate photo count and flight time for manifest + battery warning.
-
-    Uses actual scanline strip intersections in EPSG:3067 (via route.py).
-    Returns dict: photo_count, flight_time_min, over_one_battery.
-    """
-    from jobgen import route as _route
-    from jobgen.geometry import reproject_to_3067
-
-    pitch_m = (drone.pixel_pitch_um  if drone else M3E_PIXEL_PITCH_UM)  * 1e-6
-    focal_m = (drone.focal_length_mm if drone else M3E_FOCAL_LENGTH_MM) * 1e-3
-    w_px    =  drone.image_width_px  if drone else M3E_IMAGE_WIDTH_PX
-    h_px    =  drone.image_height_px if drone else M3E_IMAGE_HEIGHT_PX
-    bat_min =  drone.battery_minutes if drone else ONE_BATTERY_MINUTES
-    H       =  drone.height_from_gsd(cfg.target_gsd_cm) if drone else cfg.derived_flight_height_m
-
-    footprint_m = H * (w_px * pitch_m) / focal_m
-    strip_m = footprint_m * (1 - cfg.overlap_side_pct  / 100)
-    photo_m = H * (h_px * pitch_m) / focal_m * (1 - cfg.overlap_front_pct / 100)
-
-    survey_3067 = reproject_to_3067(survey_4326)
-    angle_deg = _route.compute_auto_angle(survey_3067)
-    result = _route.compute_route(survey_3067, angle_deg, strip_m, photo_m,
-                                  footprint_width_m=footprint_m, home_3067=home_3067)
-    flight_time_min = _route.estimate_flight_time(
-        result,
-        flight_height_m=H,
-        auto_speed_ms=speed_ms,
-        transit_speed_ms=cfg.transitional_speed_ms,
-        takeoff_security_height_m=cfg.takeoff_security_height_m,
-        home_3067=home_3067,
-    )
-
-    return {
-        "photo_count":      result.photo_count,
-        "flight_time_min":  flight_time_min,
-        "over_one_battery": flight_time_min > bat_min,
-    }
-
-
 # ---- Helpers ----
 
 def _validate_polygon(geom: BaseGeometry) -> None:
@@ -410,95 +358,6 @@ def _polygon_coords(geom: BaseGeometry) -> str:
     for x, y in geom.exterior.coords:
         lines.append(f"                {x},{y},0")
     return "\n".join(lines)
-
-
-def build_homes_kml(
-    buildings: list[Building],
-    output_path: Path,
-    home_safety: "HomeSafetyConfig | None" = None,
-) -> Path:
-    """Write a DJI Pilot 2 custom map layer KML with one pin per building.
-
-    Format confirmed from PIN-20260529224114.kml (fixtures/FIXTURE_NOTES.md).
-    The file can be imported into Pilot 2 as a new map layer for situational
-    awareness — pins appear on the map overlay during pre-flight planning.
-
-    Color coding:
-      red    — buildings subject to the keep-out rule for the configured
-               subcategory (residential for A2; residential + commercial +
-               holiday + industrial for A3).
-      yellow — all other buildings (noted but outside the keep-out codes).
-
-    Blue, purple and green are left free for the operator's own use.
-
-    Returns *output_path*.
-    """
-    from jobgen.config import HomeSafetyConfig as _HSC
-    cfg = home_safety or _HSC()
-
-    red_codes    = set(cfg.residential_kohdeluokka)
-    yellow_codes = set(cfg.a3_additional_kohdeluokka)
-    if cfg.operating_subcategory == "A3":
-        red_codes |= yellow_codes
-        yellow_codes = set()
-
-    shown_codes = red_codes | yellow_codes
-
-    def _style(b: Building) -> str:
-        return "#dji_style_red" if b.kohdeluokka in red_codes else "#dji_style_yellow"
-
-    def _label(b: Building) -> str:
-        mapping = {
-            42210: "residence", 42211: "residence", 42212: "residence",
-            42220: "commercial", 42221: "commercial", 42222: "commercial",
-            42230: "holiday", 42231: "holiday", 42232: "holiday",
-            42240: "industrial", 42241: "industrial", 42242: "industrial",
-        }
-        return mapping.get(b.kohdeluokka, f"building-{b.kohdeluokka}")
-
-    # DJI colour values (AABBGGRR — confirmed from fixture)
-    _COLOURS = {
-        "red":    "#FF393CE2",
-        "green":  "#FF6BBE19",
-        "yellow": "#FF00BBFF",
-        "blue":   "#FFF08C2D",
-        "purple": "#FFE020B6",
-    }
-
-    timestamp = time.strftime("%Y%m%d%H%M%S")
-
-    # Build XML — Document must have xmlns="" to match Pilot 2 export format
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>']
-    lines.append('<kml xmlns="http://www.opengis.net/kml/2.2">')
-    lines.append(f'<Document xmlns=""><name>homes-{timestamp}.kml</name>')
-
-    for colour, hex_val in _COLOURS.items():
-        lines.append(f'<Style id="dji_style_{colour}">')
-        lines.append(f'  <IconStyle><color>{hex_val}</color></IconStyle>')
-        lines.append(f'  <LabelStyle><color>{hex_val}</color></LabelStyle>')
-        lines.append('</Style>')
-
-    for b in [b for b in buildings if b.kohdeluokka in shown_codes]:
-        centroid = b.geometry.centroid
-        style = _style(b)
-        label = _label(b)
-        lines.append('<Placemark>')
-        lines.append(f'  <name>{label}</name>')
-        lines.append(f'  <description>mtk_id={b.mtk_id} kohdeluokka={b.kohdeluokka}</description>')
-        lines.append(f'  <styleUrl>{style}</styleUrl>')
-        lines.append('  <Point>')
-        lines.append(f'    <coordinates>{centroid.x},{centroid.y},0.0</coordinates>')
-        lines.append('    <altitudeMode>absolute</altitudeMode>')
-        lines.append('  </Point>')
-        lines.append('</Placemark>')
-
-    lines.append('</Document></kml>')
-
-    pin_count = sum(1 for b in buildings if b.kohdeluokka in shown_codes)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(lines), encoding="utf-8")
-    log.info("Homes KML written: %d pin(s) → %s", pin_count, output_path)
-    return output_path
 
 
 def _tx(parent: etree._Element, tag: str, text: str) -> etree._Element:

@@ -16,7 +16,9 @@ from shapely.geometry import Polygon
 from jobgen.buildings import Building
 from jobgen.config import FlightConfig
 from jobgen.crs import CRSError
-from jobgen.wpml import KmzResult, ONE_BATTERY_MINUTES, _estimate_budget, build_homes_kml, build_kmz
+from jobgen.homes_kml import build_homes_kml
+from jobgen.waypoints import ONE_BATTERY_MINUTES, budget_estimate
+from jobgen.wpml import KmzResult, build_kmz
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 REFERENCE_KMZ = FIXTURES / "reference_mission.kmz"
@@ -448,7 +450,7 @@ class TestBatteryBudget:
     def test_estimate_budget_returns_expected_keys(self):
         from jobgen.wpml import resolve_strip_speed
         _speed = resolve_strip_speed(_FLIGHT, None, _FLIGHT.derived_flight_height_m)
-        budget = _estimate_budget(_SURVEY, _FLIGHT, speed_ms=_speed)
+        budget = budget_estimate(_SURVEY, _FLIGHT, speed_ms=_speed)
         assert "photo_count"      in budget
         assert "flight_time_min"  in budget
         assert "over_one_battery" in budget

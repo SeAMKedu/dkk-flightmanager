@@ -32,6 +32,7 @@ import { _initEventStream, showExtModifiedNotice, hideExtModifiedNotice, reloadC
 import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
 import { setVlosRange } from './takeoff.js';
 import { clearMeasurements } from './measurement.js';
+import './cesium-view.js';
 
 // ── Assign all functions needed in HTML onclick= attributes to window ─────────
 Object.assign(window, {

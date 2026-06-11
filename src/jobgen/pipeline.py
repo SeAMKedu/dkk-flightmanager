@@ -45,7 +45,8 @@ from jobgen.parcels import fetch_parcels
 from jobgen.properties import fetch_properties
 from jobgen.raster import build_site_dsm
 from jobgen.preview import build_map_preview, build_preview_dsm_thumbnail
-from jobgen.wpml import build_homes_kml, build_kmz, resolve_strip_speed
+from jobgen.homes_kml import build_homes_kml
+from jobgen.wpml import build_kmz, resolve_strip_speed
 from jobgen.zones import ZoneHit, check_zones
 
 log = logging.getLogger(__name__)
@@ -481,42 +482,9 @@ def run_preview(
         takeoff_point_4326 = None
 
     # Route estimate: actual strip intersections for flight-time/photo preview.
-    from jobgen import route as _route
-    _home_3067 = None
-    if takeoff_point_4326:
-        from shapely.geometry import Point as _HPt
-        _hp = reproject_to_3067(_HPt(*takeoff_point_4326))
-        _home_3067 = (_hp.x, _hp.y)
-    _drone_cfg = drone_cfg  # already resolved above
-    _H   = flight_height_m
-    _p_m = _drone_cfg.pixel_pitch_um * 1e-6
-    _f_m = _drone_cfg.focal_length_mm * 1e-3
-    _fp  = _H * _drone_cfg.image_width_px  * _p_m / _f_m
-    _sm  = _fp * (1 - config.flight.overlap_side_pct  / 100)
-    _pm  = _H * _drone_cfg.image_height_px * _p_m / _f_m * (1 - config.flight.overlap_front_pct / 100)
-    try:
-        _angle_auto = _route.compute_auto_angle(survey_geom.survey_3067)
-        _rr = _route.compute_route(survey_geom.survey_3067, _angle_auto, _sm, _pm,
-                                   footprint_width_m=_fp, home_3067=_home_3067)
-        _ft = _route.estimate_flight_time(
-            _rr,
-            flight_height_m=_H,
-            auto_speed_ms=resolve_strip_speed(config.flight, _drone_cfg, _H),
-            transit_speed_ms=config.flight.transitional_speed_ms,
-            takeoff_security_height_m=config.flight.takeoff_security_height_m,
-            home_3067=_home_3067,
-        )
-        _route_stats = {
-            "route_angle_deg_auto": round(_angle_auto, 1),
-            "route_strip_count":    _rr.strip_count,
-            "route_photo_count":    _rr.photo_count,
-            "route_flight_time_min": round(_ft, 1),
-        }
-    except Exception as _re:
-        log.warning("Preview: route estimate failed — %s", _re)
-        _angle_auto = 0.0
-        _route_stats = {"route_angle_deg_auto": None, "route_strip_count": None,
-                        "route_photo_count": None, "route_flight_time_min": None}
+    _route_stats = _compute_route_stats(
+        survey_geom.survey_3067, config, drone_cfg, takeoff_point_4326
+    )
 
     # Power lines for map display (both overhead and underground)
     power_lines_data = []
@@ -798,6 +766,55 @@ def _fetch_survey_inputs(
     )
 
 
+
+
+def _compute_route_stats(
+    survey_3067,
+    config: "AppConfig",
+    drone_cfg,
+    takeoff_point_4326: list | None,
+) -> dict:
+    """Compute strip/photo count and flight-time estimate for the preview payload.
+
+    Returns a dict with route_angle_deg_auto, route_strip_count,
+    route_photo_count, route_flight_time_min (all None on failure).
+    """
+    from jobgen import route as _route
+
+    home_3067 = None
+    if takeoff_point_4326:
+        from shapely.geometry import Point as _HPt
+        _hp = reproject_to_3067(_HPt(*takeoff_point_4326))
+        home_3067 = (_hp.x, _hp.y)
+
+    H   = drone_cfg.height_from_gsd(config.flight.target_gsd_cm)
+    p_m = drone_cfg.pixel_pitch_um * 1e-6
+    f_m = drone_cfg.focal_length_mm * 1e-3
+    fp  = H * drone_cfg.image_width_px  * p_m / f_m
+    sm  = fp * (1 - config.flight.overlap_side_pct  / 100)
+    pm  = H * drone_cfg.image_height_px * p_m / f_m * (1 - config.flight.overlap_front_pct / 100)
+    try:
+        angle = _route.compute_auto_angle(survey_3067)
+        rr = _route.compute_route(survey_3067, angle, sm, pm,
+                                  footprint_width_m=fp, home_3067=home_3067)
+        ft = _route.estimate_flight_time(
+            rr,
+            flight_height_m=H,
+            auto_speed_ms=resolve_strip_speed(config.flight, drone_cfg, H),
+            transit_speed_ms=config.flight.transitional_speed_ms,
+            takeoff_security_height_m=config.flight.takeoff_security_height_m,
+            home_3067=home_3067,
+        )
+        return {
+            "route_angle_deg_auto":  round(angle, 1),
+            "route_strip_count":     rr.strip_count,
+            "route_photo_count":     rr.photo_count,
+            "route_flight_time_min": round(ft, 1),
+        }
+    except Exception as exc:
+        log.warning("Preview: route estimate failed — %s", exc)
+        return {"route_angle_deg_auto": None, "route_strip_count": None,
+                "route_photo_count": None, "route_flight_time_min": None}
 
 
 def _require_api_key() -> str:
