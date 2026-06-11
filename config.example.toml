@@ -1,4 +1,4 @@
-# dkk-jobgen configuration — copy to config.toml and adjust.
+# dkk-flightmanager configuration — copy to config.toml and adjust.
 # config.toml is gitignored. This example file is committed.
 # API keys go in environment variables (see .env.example), NOT here.
 
@@ -165,7 +165,7 @@ timeout_s = 60
 # Drone / payload profiles
 #
 # default_drone selects which [[drones]] entry is used when generating a job.
-# Override per-job with: jobgen run --drone <name>
+# Override per-job with: flightmanager run --drone <name>
 #
 # Built-in profiles are always available even without entries here.
 # Add [[drones]] entries to extend the list or override a built-in profile.

@@ -12,8 +12,8 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 from shapely.geometry import box
 
-from jobgen.crs import CRSError
-from jobgen.raster import _NODATA, _stats, build_site_dsm
+from flightmanager.crs import CRSError
+from flightmanager.raster import _NODATA, _stats, build_site_dsm
 
 # Real 1km DEM tile fetched during Phase 4 development
 _REAL_TILE = Path("/tmp/test_tile.tif")
@@ -221,9 +221,9 @@ class TestStats:
 @pytest.mark.skip(reason="Hits live MML WCS — run with -m integration and set MML_API_KEY")
 def test_live_build_site_dsm(tmp_path):
     import os
-    from jobgen.cache import get_tiles
-    from jobgen.config import CacheConfig
-    from jobgen.elevation import tile_fetcher
+    from flightmanager.cache import get_tiles
+    from flightmanager.config import CacheConfig
+    from flightmanager.elevation import tile_fetcher
 
     api_key = os.environ["MML_API_KEY"]
     cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))

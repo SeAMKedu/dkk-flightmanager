@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jobgen.config import ParcelsConfig
-from jobgen.parcels import (
+from flightmanager.config import ParcelsConfig
+from flightmanager.parcels import (
     ParcelNotFoundError,
     _fetch_by_bbox,
     _fetch_by_ids,
@@ -91,7 +91,7 @@ class TestToParcel:
         assert 6_500_000 < bounds[1] < 7_800_000
 
     def test_geometry_outside_3067_raises(self):
-        from jobgen.crs import CRSError
+        from flightmanager.crs import CRSError
         bad_feature = {**_FEATURE_A, "geometry": {
             "type": "Polygon",
             "coordinates": [[[22.6, 62.5], [22.7, 62.5], [22.7, 62.6], [22.6, 62.6], [22.6, 62.5]]],
@@ -277,7 +277,7 @@ class TestPaging:
 @pytest.mark.skip(reason="Hits live Ruokavirasto WFS — run with -m integration to enable")
 def test_live_fetch_by_id():
     """Fetch a real parcel and verify geometry is in EPSG:3067."""
-    from jobgen.crs import assert_crs
+    from flightmanager.crs import assert_crs
     parcels = fetch_parcels(parcel_ids=["0040003911"])
     assert len(parcels) == 1
     assert parcels[0].parcel_id == "0040003911"

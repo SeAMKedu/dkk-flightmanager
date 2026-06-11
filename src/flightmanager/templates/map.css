@@ -1,0 +1,68 @@
+#battery-timeline{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:600;pointer-events:none;background:rgba(15,23,42,.82);border-radius:8px;padding:5px 8px;backdrop-filter:blur(3px);display:none}
+#sb.mv-hidden{display:none}
+#legend.mv-hidden{display:none}
+#sp.sp-visible{display:block}
+#sp.mv-hidden{display:none!important}
+
+#mv-actions{display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:600;align-items:center;gap:6px;background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:5px 12px;box-shadow:0 2px 8px rgba(0,0,0,.15);white-space:nowrap}
+#mv-actions.visible{display:flex}
+#mv-sel-count{font-size:11px;font-weight:700;color:#1e293b;margin-right:2px}
+.mv-sep{width:1px;height:14px;background:#e2e8f0;flex-shrink:0;margin:0 1px}
+#mv-right-panel{display:none;position:absolute;top:10px;right:10px;z-index:500;flex-direction:column;gap:8px;max-height:calc(100% - 60px);overflow-y:auto;overflow-x:hidden}
+#mv-right-panel.visible{display:flex}
+#mv-status-legend{background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,.12);min-width:120px;flex-shrink:0}
+#mv-status-legend h4{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+.mv-leg-row{display:flex;align-items:center;gap:7px;color:#374151;margin:2px 0}
+.mv-leg-row svg{flex-shrink:0}
+#mv-stat-panel{background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,.12);min-width:160px;flex-shrink:0}
+#mv-stat-mode{width:100%;font-size:11px;padding:3px 4px;margin-bottom:7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:3px;color:#1e293b;cursor:pointer}
+#mv-stat-body{display:flex;flex-direction:column;gap:1px}
+.mv-st-row{display:flex;justify-content:space-between;align-items:center;padding:2px 0;font-size:11px;color:#1e293b;border-bottom:1px solid #f1f5f9}
+.mv-st-row:last-child{border-bottom:none}
+.mv-st-lbl{color:#64748b}
+.mv-st-brow{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:11px}
+.mv-st-sw{width:11px;height:11px;border-radius:2px;flex-shrink:0}
+.mv-st-bl{flex:1;color:#64748b}
+.mv-st-bc{color:#1e293b;font-weight:600}
+.mv-st-div{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin:5px 0 2px;padding-top:4px;border-top:1px solid #f1f5f9}
+.mv-st-job{display:flex;align-items:center;gap:4px;padding:2px 3px;border-radius:3px;cursor:pointer;font-size:11px;color:#1e293b}
+.mv-st-job:hover{background:#f1f5f9}
+.mv-st-jdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.mv-st-jname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.mv-st-jval{color:#64748b;flex-shrink:0;margin-left:3px;font-size:10px}
+.mv-st-nodata{font-size:11px;color:#94a3b8;padding:4px 0}
+#mv-route-btn{background:none;border:1px solid #334155;border-radius:3px;color:#64748b;font-size:9px;padding:2px 7px;cursor:pointer;font-weight:600;transition:color .12s,border-color .12s;margin-top:6px;display:block;width:100%;text-align:center}
+#mv-route-btn:hover{color:#94a3b8;border-color:#475569}
+#mv-route-btn.active{color:#3b82f6;border-color:#3b82f6}
+.mv-tooltip{background:#1e293b;border:1px solid #334155;color:#f1f5f9;font-size:12px;line-height:1.5;padding:6px 10px;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:auto}
+.mv-tooltip::before{border-top-color:#334155}
+.mv-tt-inner{min-width:140px}
+.mv-tt-name{font-size:13px;font-weight:600;margin-bottom:1px}
+.mv-tt-folder{font-size:10px;color:#94a3b8;font-weight:400}
+.mv-tt-meta{font-size:11px;margin-bottom:2px}
+.mv-tt-flight{font-size:11px;color:#94a3b8;margin-bottom:4px;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.mv-tt-flight:last-of-type{margin-bottom:6px}
+.mv-ic{width:11px;height:11px;flex-shrink:0;vertical-align:-1px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
+.mv-tt-actions{display:flex;gap:5px}
+.mv-tt-actions button{flex:1;padding:4px 0;font-size:11px;background:#475569;color:#fff;border:none;border-radius:3px;cursor:pointer;white-space:nowrap}
+.mv-tt-actions button:hover{background:#64748b}
+.mv-tt-del{background:#dc2626 !important}
+.mv-tt-del:hover{background:#ef4444 !important}
+.mv-popup .leaflet-popup-content-wrapper{background:#1e293b;border:1px solid #334155;color:#f1f5f9;box-shadow:0 4px 12px rgba(0,0,0,.5);border-radius:6px}
+.mv-popup .leaflet-popup-tip{background:#1e293b}
+.mv-popup .leaflet-popup-close-button{color:#94a3b8}
+.mv-popup .leaflet-popup-close-button:hover{color:#f1f5f9}
+/* Leaflet.draw midpoint handles — diamond via ::before so Leaflet's own
+   translate3d positioning transform on the icon element is not overridden */
+.ld-mid{background:transparent!important;border:none!important;overflow:visible!important}
+.ld-mid::before{content:''!important;position:absolute!important;width:7px!important;height:7px!important;top:50%!important;left:50%!important;transform:translate(-50%,-50%) rotate(45deg)!important;background:#fff!important;border:1px solid #94a3b8!important;box-sizing:border-box!important}
+.leaflet-control-layers{border:none!important;background:none!important;box-shadow:none!important}
+.leaflet-control-layers-toggle{width:30px!important;height:30px!important;background-color:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);background-size:18px 18px!important}
+.leaflet-control-layers-expanded{padding:6px 8px!important;background:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);font-size:12px;min-width:80px}
+.leaflet-control-layers-expanded label{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;color:#1e293b;margin:3px 0;cursor:pointer}
+.leaflet-control-layers-expanded input{width:auto;margin:0;cursor:pointer}
+.meas-clear-ctrl{width:30px!important;height:30px!important;background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;padding:0;font-size:18px;font-weight:700;line-height:30px;text-align:center;color:#444;cursor:pointer;display:block}
+.meas-clear-ctrl:hover{background:#f4f4f4;color:#111}
+.takeoff-icon{cursor:grab;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
+.takeoff-tooltip{background:#1e293b;border:1px solid #334155;color:#f1f5f9;font-size:11px;padding:3px 8px;border-radius:4px;white-space:nowrap}
+.l-takeoff-icon{width:14px;height:14px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900;color:#1e293b;text-shadow:0 0 0 2px #fff,-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff,1px 1px 0 #fff}

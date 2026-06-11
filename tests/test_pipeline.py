@@ -14,12 +14,12 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 from shapely.geometry import Polygon, box
 
-from jobgen.buildings import Building
-from jobgen.cache import TileRecord
-from jobgen.config import AppConfig, CacheConfig, FlightConfig, HomeSafetyConfig, ParcelsConfig, PolygonConfig, ZonesConfig
-from jobgen.parcels import Parcel
-from jobgen.pipeline import run_job
-from jobgen.zones import ZoneCheckResult
+from flightmanager.buildings import Building
+from flightmanager.cache import TileRecord
+from flightmanager.config import AppConfig, CacheConfig, FlightConfig, HomeSafetyConfig, ParcelsConfig, PolygonConfig, ZonesConfig
+from flightmanager.parcels import Parcel
+from flightmanager.pipeline import run_job
+from flightmanager.zones import ZoneCheckResult
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -116,7 +116,7 @@ class TestRunJob:
             zones=ZonesConfig(zones_file=""),
         )
         # Patch output_dir
-        from jobgen.config import OutputConfig
+        from flightmanager.config import OutputConfig
         cfg.output = OutputConfig(output_dir=str(tmp_path / "output"))
         return cfg
 
@@ -143,15 +143,15 @@ class TestRunJob:
 
         with (
             patch.dict(os.environ, {"MML_API_KEY": "test-key"}),
-            patch("jobgen.pipeline.fetch_parcels", return_value=[_PARCEL]),
-            patch("jobgen.pipeline.get_tiles", side_effect=[
+            patch("flightmanager.pipeline.fetch_parcels", return_value=[_PARCEL]),
+            patch("flightmanager.pipeline.get_tiles", side_effect=[
                 [bldg_rec],   # buildings call
                 [],           # powerlines call
                 [],           # pylons call
                 [dem_rec],    # DEM call
             ]),
-            patch("jobgen.pipeline.load_tile", return_value=[_BUILDING]),
-            patch("jobgen.pipeline.check_zones", return_value=zone_result),
+            patch("flightmanager.pipeline.load_tile", return_value=[_BUILDING]),
+            patch("flightmanager.pipeline.check_zones", return_value=zone_result),
         ):
             return run_job(
                 "test-job",
@@ -168,7 +168,7 @@ class TestRunJob:
             assert key in manifest, f"Missing manifest key: {key}"
 
     def test_tool_version_stamped(self, config, dem_tile, bldg_tile):
-        from jobgen import tool_version
+        from flightmanager import tool_version
         manifest = self._run(config, dem_tile, bldg_tile)
         assert manifest["tool_version"] == tool_version()
 
@@ -253,7 +253,7 @@ def test_live_run_job(tmp_path):
         parcels=ParcelsConfig(lpis_year=2025),
         zones=ZonesConfig(),
     )
-    from jobgen.config import OutputConfig
+    from flightmanager.config import OutputConfig
     cfg.output = OutputConfig(output_dir=str(tmp_path / "output"))
 
     manifest = run_job(

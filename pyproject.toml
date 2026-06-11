@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dkk-jobgen"
-version = "1.5.1"
-description = "DJI terrain-following mapping job generator for Finnish field parcels"
+name = "dkk-flightmanager"
+version = "1.5.2"
+description = "DJI terrain-following flight manager for Finnish agricultural field surveys"
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
@@ -29,16 +29,42 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "responses>=0.25",
+    "ruff>=0.4",
+    "radon>=6.0",
+    "invoke>=2.2",
 ]
 
 [project.scripts]
-jobgen = "jobgen.cli:app"
+flightmanager = "flightmanager.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-jobgen = ["templates/*.html", "templates/*.css", "templates/*.js", "drones.toml"]
+flightmanager = ["templates/*.html", "templates/*.css", "templates/*.js", "drones.toml"]
+
+[tool.ruff]
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "C901"]
+ignore = ["E501"]  # line length not enforced; focus on unused imports and complexity
+# E = pycodestyle errors, F = pyflakes, C901 = McCabe complexity
+
+[tool.ruff.lint.per-file-ignores]
+# load_dotenv() must run before project imports in these entry points
+"src/flightmanager/_devserver.py" = ["E402"]
+"src/flightmanager/cli.py" = ["E402"]
+"src/flightmanager/preview.py" = ["E402"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.radon]
+# radon cc: cyclomatic complexity  (run: radon cc src/flightmanager -s -n C)
+# radon mi: maintainability index  (run: radon mi src/flightmanager -s -n B)
+# radon raw: raw line counts        (run: radon raw src/flightmanager -s)
+exclude = "tests/*"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

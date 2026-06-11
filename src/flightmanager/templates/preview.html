@@ -1,0 +1,108 @@
+{# Jinja2 template — rendered by preview.py into a standalone static HTML file. #}
+{# CSS and JS are inlined at render time via {% include %} so the output is self-contained. #}
+{# status_colour is passed via CSS custom property to keep preview.css free of Jinja2 vars. #}
+
+{% macro eye_btn(btn_id, title, start_off=false) -%}
+<button class="eye-btn{% if start_off %} off{% endif %}" id="{{ btn_id }}" title="{{ title }}"><svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+{%- endmacro %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>{{ job_name }} — flightmanager preview</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>{% include "preview.css" %}</style>
+</head>
+<body style="--status-colour: {{ status_colour }}">
+<div id="map"></div>
+<div id="panel">
+  <h2>{{ job_name }}</h2>
+  <div class="status">{{ status_text }}</div>
+  <table>
+    {% for key, val in summary_rows %}
+    <tr><td>{{ key }}</td><td><b>{{ val }}</b></td></tr>
+    {% endfor %}
+  </table>
+  <div class="legend">
+    {% if dsm_b64 %}
+    <div class="leg-row">
+      {{ eye_btn("eye-dsm", "Toggle DSM elevation", start_off=true) }}
+      <div class="leg-icon"><div class="swatch" style="background:linear-gradient(to right,#000,#fff);border:1px solid #9ca3af;"></div></div>
+      <span>DSM elevation</span>
+    </div>
+    {% endif %}
+    <div class="leg-row">
+      {{ eye_btn("eye-parcel", "Toggle parcel outline") }}
+      <div class="leg-icon"><div class="swatch" style="background:none;border:1.5px dashed #6b7280;"></div></div>
+      <span>Original parcel</span>
+    </div>
+    <div class="leg-row">
+      {{ eye_btn("eye-survey", "Toggle survey polygon") }}
+      <div class="leg-icon"><div class="swatch" style="background:#4ade80;opacity:.6;border:2px solid #16a34a;"></div></div>
+      <span>Survey polygon</span>
+    </div>
+    <div class="leg-row">
+      {{ eye_btn("eye-vertices", "Toggle polygon vertices") }}
+      <div class="leg-icon"><div class="dot" style="background:#93c5fd;border:1px solid #1d4ed8;"></div></div>
+      <span>Polygon vertices</span>
+    </div>
+    <div class="leg-row">
+      {{ eye_btn("eye-yellow-c", "Toggle " ~ preview_radius_m|int ~ " m circles") }}
+      <div class="leg-icon"><div class="swatch" style="background:#fef08a;opacity:.7;border:1px dashed #ca8a04;"></div></div>
+      <span>{{ preview_radius_m|int }} m radius</span>
+    </div>
+    <div class="leg-row">
+      {{ eye_btn("eye-red-c", "Toggle keep-out circles") }}
+      <div class="leg-icon"><div class="swatch" style="background:#fca5a5;opacity:.7;border:1px dashed #dc2626;"></div></div>
+      <span>{{ home_buffer_m|int }} m keep-out</span>
+    </div>
+    <div class="leg-row">
+      {{ eye_btn("eye-pins", "Toggle buildings") }}
+      <div class="leg-icon" style="display:flex;gap:2px">
+        <div class="dot" style="background:#E23C39;"></div>
+        <div class="dot" style="background:#FFBB00;"></div>
+      </div>
+      <span>Buildings</span>
+    </div>
+    {% if zone_json != '[]' %}
+    <div class="leg-row">
+      {{ eye_btn("eye-zones", "Toggle UAS restriction zones") }}
+      <div class="leg-icon"><div class="swatch" style="background:#fed7aa;opacity:.8;border:2px solid #ea580c;"></div></div>
+      <span>UAS zones</span>
+    </div>
+    {% endif %}
+  </div>
+  {% if review_reasons %}
+  <div class="reasons"><b>Review reasons:</b><ul>
+    {% for r in review_reasons %}<li>{{ r }}</li>{% endfor %}
+  </ul></div>
+  {% endif %}
+  {% if keepout_ignored %}
+  <div class="keepout-notice">
+    <b>&#9888; Keep-out subtraction disabled</b>
+    <p>Building buffers have NOT been applied to the survey polygon.
+    Verify distances to all marked buildings manually before flying —
+    confirm you have the landowner's permission and that you meet the
+    required separation under your operating subcategory.</p>
+  </div>
+  {% endif %}
+</div>
+<script>
+// ── Runtime data ──────────────────────────────────────────────────────────────
+var surveyData = {{ survey_geojson }};
+var parcels    = {{ parcels_json }};
+var pins       = {{ pins_json }};
+var zones      = {{ zone_json }};
+var CENTER_LAT     = {{ center_lat }};
+var CENTER_LON     = {{ center_lon }};
+var PREVIEW_RADIUS = {{ preview_radius_m }};
+var HOME_BUFFER    = {{ home_buffer_m }};
+var DSM_B64        = {{ dsm_b64 | tojson }};
+var DSM_BOUNDS     = {{ dsm_bounds | tojson }};
+</script>
+<script>{% include "preview.js" %}</script>
+</body>
+</html>

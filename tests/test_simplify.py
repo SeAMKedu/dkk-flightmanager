@@ -7,8 +7,8 @@ import math
 import pytest
 from shapely.geometry import MultiPolygon, Point, Polygon
 
-from jobgen.config import PolygonConfig
-from jobgen.simplify import _auto_simplify, _simplify_within, simplify_pieces, vertex_count
+from flightmanager.config import PolygonConfig
+from flightmanager.simplify import _auto_simplify, _simplify_within, simplify_pieces, vertex_count
 
 
 def _dense_polygon(cx: float = 300_000, cy: float = 6_900_000, r: float = 500, n: int = 200) -> Polygon:

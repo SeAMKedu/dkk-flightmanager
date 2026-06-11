@@ -13,10 +13,12 @@ import pytest
 from lxml import etree
 from shapely.geometry import Polygon
 
-from jobgen.buildings import Building
-from jobgen.config import FlightConfig
-from jobgen.crs import CRSError
-from jobgen.wpml import KmzResult, ONE_BATTERY_MINUTES, _estimate_budget, build_homes_kml, build_kmz
+from flightmanager.buildings import Building
+from flightmanager.config import FlightConfig
+from flightmanager.crs import CRSError
+from flightmanager.homes_kml import build_homes_kml
+from flightmanager.waypoints import ONE_BATTERY_MINUTES, budget_estimate
+from flightmanager.wpml import KmzResult, build_kmz
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 REFERENCE_KMZ = FIXTURES / "reference_mission.kmz"
@@ -317,21 +319,21 @@ class TestHomesKml:
         assert "#FFE020B6" in content   # purple
 
     def test_residential_gets_red_pin_a2(self, tmp_path):
-        from jobgen.config import HomeSafetyConfig
+        from flightmanager.config import HomeSafetyConfig
         b = self._make_building(1001, 42211)
         out = build_homes_kml([b], tmp_path / "homes.kml",
                               HomeSafetyConfig(operating_subcategory="A2"))
         assert "#dji_style_red" in out.read_text()
 
     def test_residential_gets_red_pin_a3(self, tmp_path):
-        from jobgen.config import HomeSafetyConfig
+        from flightmanager.config import HomeSafetyConfig
         b = self._make_building(1001, 42211)
         out = build_homes_kml([b], tmp_path / "homes.kml",
                               HomeSafetyConfig(operating_subcategory="A3"))
         assert "#dji_style_red" in out.read_text()
 
     def test_commercial_red_for_a3_yellow_for_a2(self, tmp_path):
-        from jobgen.config import HomeSafetyConfig
+        from flightmanager.config import HomeSafetyConfig
         b = self._make_building(1002, 42221)
         out_a3 = build_homes_kml([b], tmp_path / "a3.kml",
                                  HomeSafetyConfig(operating_subcategory="A3"))
@@ -352,7 +354,7 @@ class TestHomesKml:
         assert "<Placemark>" not in out.read_text()
 
     def test_a3_no_yellow_pins(self, tmp_path):
-        from jobgen.config import HomeSafetyConfig
+        from flightmanager.config import HomeSafetyConfig
         # All relevant buildings are red under A3 — yellow is never used
         buildings = [
             self._make_building(1001, 42211),  # residential
@@ -446,9 +448,9 @@ class TestBatteryBudget:
         assert result.over_one_battery
 
     def test_estimate_budget_returns_expected_keys(self):
-        from jobgen.wpml import resolve_strip_speed
+        from flightmanager.wpml import resolve_strip_speed
         _speed = resolve_strip_speed(_FLIGHT, None, _FLIGHT.derived_flight_height_m)
-        budget = _estimate_budget(_SURVEY, _FLIGHT, speed_ms=_speed)
+        budget = budget_estimate(_SURVEY, _FLIGHT, speed_ms=_speed)
         assert "photo_count"      in budget
         assert "flight_time_min"  in budget
         assert "over_one_battery" in budget
