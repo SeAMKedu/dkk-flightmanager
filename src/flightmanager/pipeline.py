@@ -194,7 +194,9 @@ def run_job(
             try:
                 result = build_kmz(piece_4326, config.flight, kmz_path,
                                    dsm_path=dsm_path if not dry_run else None,
-                                   drone=drone_cfg)
+                                   drone=drone_cfg,
+                                   buildings=inp.buildings,
+                                   power_lines=inp.power_lines)
                 kmz_results.append(result)
                 if result.over_one_battery:
                     reason = (

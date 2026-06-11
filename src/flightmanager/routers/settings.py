@@ -233,6 +233,8 @@ _SKIP_FIELDS: dict[str, set[str]] = {
     "zones":       {"api_url"},
     "cache":       {"tile_size_m", "cache_dir"},
     "output":      {"color_palette"},
+    # Advanced mode params are per-job, configured via the Template Settings modal
+    "flight":      {"advanced_mode", "adv_min_height_m", "adv_powerline_clearance_m", "adv_slope_f"},
 }
 
 

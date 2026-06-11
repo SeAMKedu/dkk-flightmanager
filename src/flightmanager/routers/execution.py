@@ -494,6 +494,13 @@ def _prepare_config(req: PreviewRequest):
         cfg.flight.rc_lost_action = str(ts["rc_lost_action"])
     if ts.get("finish_action") is not None:
         cfg.flight.finish_action = str(ts["finish_action"])
+    cfg.flight.advanced_mode = bool(ts.get("advanced_mode", False))
+    if ts.get("adv_min_height_m") is not None:
+        cfg.flight.adv_min_height_m = float(ts["adv_min_height_m"])
+    if ts.get("adv_powerline_clearance_m") is not None:
+        cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
+    if ts.get("adv_slope_f") is not None:
+        cfg.flight.adv_slope_f = float(ts["adv_slope_f"])
 
     return cfg
 

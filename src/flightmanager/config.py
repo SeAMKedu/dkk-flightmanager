@@ -53,6 +53,16 @@ class DroneConfig(BaseModel):
     # M3M: 2.38 s (5-file MS+RGB burst, ~49 MB; calibrated from 8.9 m/s at 100 m).
     min_capture_interval_s: float = Field(default=2.0, gt=0)
 
+    @property
+    def sensor_h_mm(self) -> float:
+        """Sensor height in mm (along-flight, front-overlap axis)."""
+        return self.image_height_px * self.pixel_pitch_um / 1000.0
+
+    @property
+    def sensor_w_mm(self) -> float:
+        """Sensor width in mm (across-flight, side-overlap axis)."""
+        return self.image_width_px * self.pixel_pitch_um / 1000.0
+
     def height_from_gsd(self, gsd_cm: float) -> float:
         """Return required AGL height (m) for a given GSD (cm/px)."""
         return (gsd_cm / 100) * self.focal_length_mm / (self.pixel_pitch_um / 1000)
@@ -100,6 +110,11 @@ class FlightConfig(BaseModel):
     dsm_margin_m: int = Field(default=300, ge=0)
     finish_action: str = Field(default="goHome")
     rc_lost_action: str = Field(default="goBack")
+    # Advanced (obstacle-aware) waypoint mode
+    advanced_mode: bool = Field(default=False)
+    adv_min_height_m: float = Field(default=30.0, ge=0)
+    adv_powerline_clearance_m: float = Field(default=70.0, ge=0)
+    adv_slope_f: float = Field(default=0.20, gt=0)
 
     @property
     def derived_flight_height_m(self) -> float:

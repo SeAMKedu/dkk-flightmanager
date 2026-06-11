@@ -25,6 +25,13 @@ dsm_margin_m = 300
 finish_action = "goHome"      # goHome | hover | autoLand
 rc_lost_action = "goBack"
 
+# Advanced (obstacle-aware) waypoint mode — configured per-job in the Template Settings modal.
+# Defaults below are used when no per-job override is set.
+# advanced_mode = false
+# adv_min_height_m = 30          # lowest permitted AGL altitude (A2 1:1 rule floor)
+# adv_powerline_clearance_m = 70 # minimum AGL height over 110 kV overhead lines
+# adv_slope_f = 0.20             # max altitude-change fraction per photo interval (slope factor)
+
 [home_safety]
 # EU Open-category subcategory.
 # A2 (C2 label + A2 certificate): buffer ≈ flight height AGL from people.

@@ -111,6 +111,8 @@ def build_kmz(
     *,
     dsm_path: Path | None = None,
     drone: DroneConfig | None = None,
+    buildings: list | None = None,
+    power_lines: list | None = None,
 ) -> KmzResult:
     """Build a .kmz mapping route from a survey polygon and flight config.
 
@@ -152,14 +154,22 @@ def build_kmz(
     if dsm_path is not None and dsm_path.exists():
         dsm_kmz_name = f"wpmz/res/dsm/{dsm_path.name}"
 
-    template_xml = _build_template_kml(survey_4326, flight_config, dsm_kmz_name, speed_ms=speed_ms, drone=drone)
-    waylines_xml = _build_waylines_stub(flight_config, speed_ms=speed_ms, drone=drone)
+    if flight_config.advanced_mode and drone is not None:
+        template_xml, waylines_xml = _build_advanced_files(
+            survey_4326, flight_config, speed_ms=speed_ms, drone=drone,
+            height_m=height_m, buildings=buildings, power_lines=power_lines,
+        )
+        embed_dsm = False  # DSM not used in explicit waypoint mode
+    else:
+        template_xml = _build_template_kml(survey_4326, flight_config, dsm_kmz_name, speed_ms=speed_ms, drone=drone)
+        waylines_xml = _build_waylines_stub(flight_config, speed_ms=speed_ms, drone=drone)
+        embed_dsm = True
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("wpmz/template.kml", template_xml)
         zf.writestr("wpmz/waylines.wpml", waylines_xml)
-        if dsm_path is not None and dsm_path.exists():
+        if embed_dsm and dsm_path is not None and dsm_path.exists():
             zf.write(dsm_path, dsm_kmz_name)
             log.info("DSM embedded in KMZ: %s", dsm_kmz_name)
 
@@ -177,6 +187,71 @@ def build_kmz(
     )
 
 
+# ---- Advanced mode: compute route + altitudes + build files ----
+
+def _build_advanced_files(
+    survey_4326: BaseGeometry,
+    cfg: FlightConfig,
+    *,
+    speed_ms: float,
+    drone: DroneConfig,
+    height_m: float,
+    buildings: list | None,
+    power_lines: list | None,
+) -> tuple[str, str]:
+    """Compute obstacle-aware altitude profile and return (template_xml, waylines_xml)."""
+    from flightmanager.geometry import reproject_to_3067
+    from flightmanager.route import compute_route, compute_auto_angle
+    from flightmanager.obstacle_heights import compute_altitude_profile
+    from flightmanager.waylines_builder import build_waylines
+
+    survey_3067 = reproject_to_3067(survey_4326)
+    angle_deg   = compute_auto_angle(survey_3067)
+
+    sensor_h_m  = drone.image_height_px * drone.pixel_pitch_um * 1e-6
+    sensor_w_m  = drone.image_width_px  * drone.pixel_pitch_um * 1e-6
+    fp_h_m      = height_m * sensor_h_m / (drone.focal_length_mm * 1e-3)
+    fp_w_m      = height_m * sensor_w_m / (drone.focal_length_mm * 1e-3)
+    strip_m     = fp_w_m * (1.0 - cfg.overlap_side_pct  / 100.0)
+    photo_m     = fp_h_m * (1.0 - cfg.overlap_front_pct / 100.0)
+
+    route = compute_route(
+        survey_3067,
+        angle_deg=angle_deg,
+        strip_spacing_m=max(1.0, strip_m),
+        photo_spacing_m=max(0.5, photo_m),
+        footprint_width_m=fp_w_m,
+    )
+
+    if route.strip_count == 0:
+        raise ValueError("Route computation produced no strips — polygon too small?")
+
+    alt_profile = compute_altitude_profile(
+        route,
+        buildings or [],
+        power_lines or [],
+        flight_height_m=height_m,
+        min_h=cfg.adv_min_height_m,
+        powerline_clearance_m=cfg.adv_powerline_clearance_m,
+        overlap_front_pct=cfg.overlap_front_pct,
+        overlap_side_pct=cfg.overlap_side_pct,
+        slope_f=cfg.adv_slope_f,
+        drone=drone,
+    )
+
+    log.info(
+        "Advanced mode: %d strips, altitude range %.1f–%.1f m",
+        len(alt_profile), min(alt_profile), max(alt_profile),
+    )
+
+    template_xml = _build_template_kml(
+        survey_4326, cfg, dsm_kmz_name=None, speed_ms=speed_ms, drone=drone,
+        template_type="waypoint",
+    )
+    waylines_xml = build_waylines(route, alt_profile, drone=drone, cfg=cfg)
+    return template_xml, waylines_xml
+
+
 # ---- template.kml builder ----
 
 def _build_template_kml(
@@ -186,6 +261,7 @@ def _build_template_kml(
     *,
     speed_ms: float,
     drone: DroneConfig | None = None,
+    template_type: str = "mapping2d",
 ) -> str:
     height   = drone.height_from_gsd(cfg.target_gsd_cm) if drone else cfg.derived_flight_height_m
     height_s = f"{height:.15g}"
@@ -224,7 +300,7 @@ def _build_template_kml(
 
     # Folder
     folder = etree.SubElement(doc, f"{_KML}Folder")
-    _tx(folder, f"{_WPML}templateType", "mapping2d")
+    _tx(folder, f"{_WPML}templateType", template_type)
     _tx(folder, f"{_WPML}templateId",   "0")
 
     wc = etree.SubElement(folder, f"{_WPML}waylineCoordinateSysParam")
