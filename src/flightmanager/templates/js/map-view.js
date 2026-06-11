@@ -12,6 +12,7 @@ import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from
 import { saveEdit } from './polygon-edit.js';
 import { openJob as _openJobFn } from './job-ops.js';
 import { _selectedJobs, _selectedMeta, _updateSelBar, openMergeModal } from './multi-select.js';
+import { autoSortFolder } from './drag-reorder.js';
 
 var _mvMode = false;
 var _mvFromEditor = false;
@@ -485,3 +486,10 @@ export function _onStatModeChangeInternal(mode) {
 
 // Set _mvFromEditor flag (called by job-ops when closing a job to go back to map)
 export function setMvFromEditor(v) { _mvFromEditor = v; }
+
+export async function mvAutoRoute() {
+  var folderKey = _mvCurrentFolder;
+  var features = _mvAllFeatures.filter(function(f){ return (f.properties.folder || null) === folderKey; });
+  var group = { jobs: features.map(function(f){ return f.properties; }) };
+  await autoSortFolder(group, folderKey);
+}

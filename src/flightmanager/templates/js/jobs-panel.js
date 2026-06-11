@@ -4,7 +4,6 @@ import { st } from './state.js';
 import { escHtml } from './utils.js';
 // Circular — only called at runtime:
 import { toggleJobSelection, _updateSelBar, _selectedJobs, _selectedMeta } from './multi-select.js';
-import { autoSortFolder } from './drag-reorder.js';
 import { toggleCardMenu } from './card-menu.js';
 import { openJob } from './job-ops.js';
 
@@ -98,14 +97,12 @@ function buildFolderSection(group) {
   var displayName = isRoot ? (st.outputDir.split('/').pop() || 'output') : group.name;
   var dataFolder = isRoot ? '' : escHtml(group.name);
 
-  var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
   var hdr = document.createElement('div');
   hdr.className = 'jfolder-hdr';
   hdr.innerHTML = '<span class="jfolder-caret' + (isOpen ? ' open' : '') + '">&#9658;</span>'
     + '<span class="jfolder-name" title="' + escHtml(displayName) + '">' + escHtml(displayName) + '</span>'
     + '<span class="jfolder-count">' + group.jobs.length + '</span>'
     + '<button class="jfolder-sel-all-btn" title="Select all in folder">&#10003;</button>'
-    + (readyJobs.length >= 2 ? '<button class="jfolder-autosort-btn" title="Auto-sort by nearest-neighbor route">&#8635; Route</button>' : '')
     + '<button class="jfolder-map-btn" data-folder="' + dataFolder + '" title="Show jobs on map"'
     + ' onclick="showFolderOnMap(event,' + (isRoot ? 'null' : '\'' + escHtml(group.name) + '\'') + ')">Map</button>';
 
@@ -122,14 +119,6 @@ function buildFolderSection(group) {
     var chks = jobs.querySelectorAll('.jcard-chk');
     chks.forEach(function(chk){ chk.checked = !allSelected; });
   });
-
-  var autoSortBtn = hdr.querySelector('.jfolder-autosort-btn');
-  if (autoSortBtn) {
-    autoSortBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      autoSortFolder(group, folderKey);
-    });
-  }
 
   hdr.addEventListener('click', function(e) {
     if (e.target.closest('button')) return;

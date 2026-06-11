@@ -174,11 +174,16 @@
     <div id="mv-actions">
       <span id="mv-sel-count"></span>
       <button class="sel-action" id="mv-open-btn" onclick="mvOpenJob(this.dataset.path)" style="display:none">Open</button>
-      <button class="sel-action" id="mv-merge-btn" onclick="unifiedMerge()">Merge</button>
-      <button class="sel-action" onclick="exportKml()">Export KML</button>
+      <span class="mv-sep"></span>
       <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
-      <button class="sel-action" onclick="routeRename()">Route rename</button>
+      <span class="mv-sep"></span>
+      <button class="sel-action" onclick="exportKml()">Export KML</button>
       <button class="sel-action" onclick="exportRoute()">Export Route</button>
+      <span class="mv-sep"></span>
+      <button class="sel-action" id="mv-autoroute-btn" onclick="mvAutoRoute()">Auto route</button>
+      <button class="sel-action" onclick="routeRename()">Route rename</button>
+      <span class="mv-sep"></span>
+      <button class="sel-action" id="mv-merge-btn" onclick="unifiedMerge()">Merge</button>
       <button class="sel-action" id="mv-move-btn" onclick="unifiedBulkMove()">Move</button>
       <button class="sel-action danger" id="mv-delete-btn" onclick="unifiedBulkDelete()">Delete</button>
       <button class="sel-clear" onclick="unifiedClearSel()" title="Clear selection">&#10005;</button>

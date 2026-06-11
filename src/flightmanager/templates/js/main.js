@@ -18,7 +18,8 @@ import { openJob, goBackToMap, revealJob, cloneJob, confirmDeleteJob, deleteJob,
          startRename, doRename, showStaleNotice, hideStaleNotice,
          toggleColorPopup, _applyColor, initColorPalette, _setColorPicker } from './job-ops.js';
 import { showFolderOnMap, openMapView, closeMapView, mvOpenJob, mvToggleSkip,
-         mvDeleteJob, toggleMvRoute, mvMerge, mvBulkMove, mvBulkDelete, mvClearSel } from './map-view.js';
+         mvDeleteJob, toggleMvRoute, mvMerge, mvBulkMove, mvBulkDelete, mvClearSel,
+         mvAutoRoute } from './map-view.js';
 import { toggleJobSelection, clearSelection, openMergeModal, closeMergeModal, submitMerge } from './multi-select.js';
 import { closeCardMenu, createFolder, closeFolderDialog, submitFolder, showMoveMenu, doMoveJob } from './card-menu.js';
 import { autoSortFolder, closeRouteConfirmModal } from './drag-reorder.js';
@@ -71,6 +72,7 @@ Object.assign(window, {
   // map-view
   showFolderOnMap, openMapView, closeMapView, mvOpenJob, mvToggleSkip,
   mvDeleteJob, toggleMvRoute, mvMerge, mvBulkMove, mvBulkDelete, mvClearSel,
+  mvAutoRoute,
 
   // multi-select
   toggleJobSelection, clearSelection, openMergeModal, closeMergeModal, submitMerge,

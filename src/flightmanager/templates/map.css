@@ -7,6 +7,7 @@
 #mv-actions{display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:600;align-items:center;gap:6px;background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:5px 12px;box-shadow:0 2px 8px rgba(0,0,0,.15);white-space:nowrap}
 #mv-actions.visible{display:flex}
 #mv-sel-count{font-size:11px;font-weight:700;color:#1e293b;margin-right:2px}
+.mv-sep{width:1px;height:14px;background:#e2e8f0;flex-shrink:0;margin:0 1px}
 #mv-right-panel{display:none;position:absolute;top:10px;right:10px;z-index:500;flex-direction:column;gap:8px;max-height:calc(100% - 60px);overflow-y:auto;overflow-x:hidden}
 #mv-right-panel.visible{display:flex}
 #mv-status-legend{background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,.12);min-width:120px;flex-shrink:0}
