@@ -243,7 +243,11 @@ def list_jobs(
         flight_ready: If True, only jobs that are cleared to fly.
         untouched: If True, only batch skeleton jobs that haven't been exported yet.
 
-    Returns JSON list of job cards including path, area, drone, zone status.
+    Returns JSON list of job cards. Each card includes: path, folder, name,
+    area_ha, original_area_ha, area_lost_pct, vertex_count, drone, drone_label,
+    height_m, flight_time_min, photo_count, battery_count, over_one_battery,
+    strip_speed_ms, waypoint_mode, flight_ready, needs_review, untouched,
+    subcategory, color, skipped, sort_order, takeoff_point_4326.
     """
     from flightmanager.job_store import scan_jobs
     groups = scan_jobs(_output_dir())
@@ -306,6 +310,24 @@ def get_job(path: str) -> str:
         "needs_review": manifest.get("needs_review", params.get("needs_review")),
         "review_reasons": manifest.get("review_reasons", []),
         "geometry": manifest.get("geometry", {}),
+        "stats": {
+            "area_ha": card.get("area_ha"),
+            "original_area_ha": card.get("original_area_ha"),
+            "area_lost_pct": card.get("area_lost_pct"),
+            "vertex_count": card.get("vertex_count"),
+            "drone": card.get("drone"),
+            "drone_label": card.get("drone_label"),
+            "height_m": card.get("height_m"),
+            "subcategory": card.get("subcategory"),
+            "strip_speed_ms": card.get("strip_speed_ms"),
+            "waypoint_mode": card.get("waypoint_mode", False),
+            "adv_min_height_m": card.get("adv_min_height_m"),
+            "adv_max_height_m": card.get("adv_max_height_m"),
+            "flight_time_min": card.get("flight_time_min"),
+            "photo_count": card.get("photo_count"),
+            "battery_count": card.get("battery_count"),
+            "over_one_battery": card.get("over_one_battery", False),
+        },
         "zones": {
             "checked": zones.get("checked", False),
             "clear": not zone_hits,
@@ -349,9 +371,22 @@ def job_stats(folder: str | None = None) -> str:
 
     total_area = sum(j.get("area_ha") or 0.0 for j in all_jobs)
 
+    total_flight_time = sum(j.get("flight_time_min") or 0.0 for j in all_jobs)
+    total_photos = sum(j.get("photo_count") or 0 for j in all_jobs)
+    total_batteries = sum(j.get("battery_count") or 0 for j in all_jobs if not j.get("untouched"))
+    total_area_lost = sum(
+        (j.get("area_ha") or 0.0) * (j.get("area_lost_pct") or 0.0) / 100
+        for j in all_jobs
+    )
+
     return json.dumps({
         "total_jobs": len(all_jobs),
         "total_area_ha": round(total_area, 2),
+        "total_area_lost_ha": round(total_area_lost, 2),
+        "total_flight_time_min": round(total_flight_time, 1),
+        "total_flight_time_h": round(total_flight_time / 60, 2),
+        "total_photo_count": total_photos,
+        "total_battery_count": total_batteries,
         "flight_ready": sum(1 for j in all_jobs if j.get("flight_ready")),
         "needs_review": sum(1 for j in all_jobs if j.get("needs_review")),
         "untouched": sum(1 for j in all_jobs if j.get("untouched")),
@@ -381,6 +416,183 @@ def create_folder(name: str) -> str:
     folder_dir.mkdir(parents=True, exist_ok=True)
     (folder_dir / ".dkk-folder").touch()
     return json.dumps({"ok": True, "path": str(folder_dir)})
+
+
+@mcp.tool()
+def delete_job(path: str) -> str:
+    """Delete a job and all its output files.
+
+    Args:
+        path: Job path as 'name' or 'folder/name'.
+
+    Returns ok on success, error if the job does not exist.
+    The parent folder is removed automatically if it becomes empty after deletion.
+    """
+    import shutil
+    from flightmanager.job_store import resolve_job_dir, is_folder_dir
+
+    _, _, job_dir = resolve_job_dir(_output_dir(), path)
+    if not job_dir.exists():
+        return json.dumps({"error": f"Job not found: {path}"})
+
+    shutil.rmtree(job_dir)
+
+    parent = job_dir.parent
+    if parent != _output_dir() and parent.exists():
+        remaining = [p for p in parent.iterdir() if p.name != ".dkk-folder"]
+        if not remaining:
+            shutil.rmtree(parent)
+
+    return json.dumps({"ok": True, "deleted": path})
+
+
+@mcp.tool()
+def export_existing_job(
+    path: str,
+    drone: str | None = None,
+    height_m: float | None = None,
+    subcategory: str | None = None,
+    offset_m: float | None = None,
+    keepout: bool | None = None,
+    simplify: str | None = None,
+    color: str | None = None,
+) -> str:
+    """Export (generate KMZ + DSM) for a job that already exists on disk.
+
+    Use this to export batch skeleton jobs or re-export existing jobs without
+    re-supplying the original parcel/property IDs — the stored polygon and
+    parameters are read from job_params.json automatically.
+
+    Optionally override any flight or polygon parameter; stored values are used
+    as defaults for anything not specified here.
+
+    Args:
+        path: Job path as 'name' or 'folder/name'.
+        drone: Drone profile override (e.g. 'm3m', 'm300-p1-24').
+        height_m: Flight height AGL override in metres.
+        subcategory: 'A2' or 'A3' override.
+        offset_m: Survey polygon expansion (+) or contraction (−) in metres.
+        keepout: Whether to subtract building keep-out buffers.
+        simplify: 'auto' or tolerance in metres.
+        color: Hex color for map display (e.g. '#3b82f6').
+
+    Returns job path, output files, flight status, and key stats.
+    """
+    from flightmanager.pipeline import run_job
+    from flightmanager.job_store import resolve_job_dir
+
+    folder, name, job_dir = resolve_job_dir(_output_dir(), path)
+    if not job_dir.exists():
+        return json.dumps({"error": f"Job not found: {path}"})
+
+    params_path = job_dir / "job_params.json"
+    if not params_path.exists():
+        return json.dumps({"error": f"No job_params.json found for {path} — cannot re-export."})
+
+    try:
+        stored = json.loads(params_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return json.dumps({"error": f"Could not read job_params.json: {e}"})
+
+    inputs = stored.get("inputs", {})
+    parcel_ids = inputs.get("parcel_ids") or None
+    property_ids = inputs.get("property_ids") or None
+    custom_polygon = stored.get("custom_polygon_4326")
+
+    if not parcel_ids and not property_ids and not custom_polygon:
+        return json.dumps({"error": "Stored job has no parcel IDs or polygon — cannot re-export."})
+
+    stored_flight = stored.get("flight", {})
+    stored_poly = stored.get("polygon", {})
+    stored_ts = stored.get("template_settings") or {}
+
+    cfg = _prepare_config(
+        drone=drone or stored_flight.get("drone"),
+        height_m=height_m if height_m is not None else stored_flight.get("height_m"),
+        subcategory=subcategory or stored_flight.get("subcategory"),
+        offset_m=offset_m if offset_m is not None else stored_poly.get("offset_m"),
+        simplify=simplify or stored_poly.get("simplify"),
+        keepout=keepout if keepout is not None else stored_poly.get("keepout", True),
+    )
+
+    # Apply stored template settings (overlap, safety, advanced mode)
+    if stored_ts:
+        if stored_ts.get("overlap_front_pct") is not None:
+            cfg.flight.overlap_front_pct = int(stored_ts["overlap_front_pct"])
+        if stored_ts.get("overlap_side_pct") is not None:
+            cfg.flight.overlap_side_pct = int(stored_ts["overlap_side_pct"])
+        if stored_ts.get("takeoff_security_height_m") is not None:
+            cfg.flight.takeoff_security_height_m = float(stored_ts["takeoff_security_height_m"])
+        if stored_ts.get("rth_height_m") is not None:
+            cfg.flight.rth_height_m = float(stored_ts["rth_height_m"])
+        if stored_ts.get("rc_lost_action") is not None:
+            cfg.flight.rc_lost_action = str(stored_ts["rc_lost_action"])
+        if stored_ts.get("finish_action") is not None:
+            cfg.flight.finish_action = str(stored_ts["finish_action"])
+        cfg.flight.advanced_mode = bool(stored_ts.get("advanced_mode", False))
+        if stored_ts.get("adv_min_height_m") is not None:
+            cfg.flight.adv_min_height_m = float(stored_ts["adv_min_height_m"])
+        if stored_ts.get("adv_powerline_clearance_m") is not None:
+            cfg.flight.adv_powerline_clearance_m = float(stored_ts["adv_powerline_clearance_m"])
+        if stored_ts.get("adv_slope_f") is not None:
+            cfg.flight.adv_slope_f = float(stored_ts["adv_slope_f"])
+
+    if folder:
+        cfg.output.output_dir = str(_output_dir() / folder)
+    else:
+        cfg.output.output_dir = str(_output_dir())
+
+    try:
+        with _pipeline_guard():
+            manifest = run_job(
+                name, cfg,
+                parcel_ids=parcel_ids,
+                property_ids=property_ids,
+                custom_polygon_4326=custom_polygon,
+            )
+    except RuntimeError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+    if color:
+        try:
+            stored["color"] = color
+            params_path.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    g = manifest.get("geometry", {})
+    f = manifest.get("flight", {})
+    z = manifest.get("zones", {})
+    bat = manifest.get("battery") or {}
+    output_files = {
+        k: str(p)
+        for k, p in {
+            "kmz": next(job_dir.glob("*.kmz"), None),
+            "homes_kml": next(job_dir.glob("*_homes.kml"), None),
+            "manifest": job_dir / "manifest.json",
+        }.items()
+        if p is not None and Path(p).exists()
+    }
+
+    return json.dumps({
+        "job_path": path,
+        "output_dir": str(job_dir),
+        "flight_ready": manifest.get("flight_ready", False),
+        "needs_review": manifest.get("needs_review", False),
+        "review_reasons": manifest.get("review_reasons", []),
+        "survey_area_ha": g.get("final_area_ha"),
+        "area_lost_pct": g.get("area_lost_pct"),
+        "drone_label": f.get("drone_label"),
+        "flight_height_m": f.get("derived_height_m"),
+        "flight_time_min": bat.get("estimated_flight_time_min"),
+        "photo_count": bat.get("estimated_photo_count"),
+        "battery_count": 2 if bat.get("over_one_battery") else (1 if bat else None),
+        "zones_clear": not z.get("intersecting_zones"),
+        "zone_hit_count": len(z.get("intersecting_zones", [])),
+        "output_files": output_files,
+    }, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()

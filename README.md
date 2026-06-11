@@ -418,9 +418,9 @@ Use the full absolute path to the `.venv` binary so Claude Desktop finds the rig
 
 | Tool / Resource | Description |
 |---|---|
-| `list_jobs` | List jobs with filters: folder, needs\_review, flight\_ready, untouched |
-| `get_job` | Full details for one job — inputs, flight params, zone hits, flight status |
-| `job_stats` | Aggregate stats across all jobs or a folder (total area, review counts) |
+| `list_jobs` | List jobs with filters: folder, needs\_review, flight\_ready, untouched. Each card includes area, flight time, photo count, battery count, height, drone, lost area %, and more |
+| `get_job` | Full details for one job — inputs, flight params, zone hits, flight status, and a `stats` block with all numeric fields |
+| `job_stats` | Aggregate stats across all jobs or a folder: total area, total flight time, total photo count, total battery count, lost area, and review/ready/untouched counts |
 | `jobs://list` | All jobs as a resource (same as list\_jobs with no filters) |
 | `jobs://{path}` | Raw params + manifest for one job |
 | `config://current` | Active drone, GSD, flight and safety settings |
@@ -431,9 +431,11 @@ Use the full absolute path to the `.venv` binary so Claude Desktop finds the rig
 | Tool | Description |
 |---|---|
 | `create_folder` | Create a named job group folder |
+| `delete_job` | Delete a job and all its output files; auto-removes empty parent folder |
 | `create_preview` | Run geometry + UAS zone check without writing files (~10–30 s) |
 | `create_batch` | Create skeleton jobs from parcel/property IDs (no KMZ) |
-| `run_export` | Full pipeline — KMZ, DSM, homes KML, manifest written to disk (~30–120 s) |
+| `export_existing_job` | Export a job that already exists on disk — reads stored polygon and params from `job_params.json`, no need to re-supply IDs (~30–120 s) |
+| `run_export` | Full pipeline from scratch — KMZ, DSM, homes KML, manifest written to disk (~30–120 s) |
 
 Pipeline tools are serialised against the web UI: if a browser job is already running, the MCP tool returns an error immediately rather than colliding on the shared tile cache.
 
@@ -441,10 +443,14 @@ Pipeline tools are serialised against the web UI: if a browser job is already ru
 
 ```
 Which of my jobs have UAS zone conflicts?
-What's the total survey area in the Vaasa-2026 folder?
+What's the total survey area and estimated flight time for the Vaasa-2026 folder?
+How many batteries will I need for all flight-ready jobs in folder Seinäjoki?
+Which jobs have more than 10% lost area, and why?
 Create batch jobs for parcel IDs 5241087453, 5241087454, 5241087455 in folder Seinäjoki
+Export all untouched jobs in folder Seinäjoki
 What drone should I use for a 12 ha field at 3 cm GSD?
 Run a preview for parcel 5241087453 and tell me if there are any zone issues
+Delete all jobs in folder test
 ```
 
 ---
