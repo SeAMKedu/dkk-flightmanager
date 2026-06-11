@@ -5,7 +5,8 @@ import { escHtml, jobApiUrl, _escapeXml, _hexToKmlColor } from './utils.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal } from './multi-select.js';
-import { closeCardMenu, getOpenMenu, setOpenMenu } from './card-menu.js';
+import { closeCardMenu } from './card-menu.js';
+import { openDeleteModal, openMoveModal, openRouteRenameModal } from './modal-utils.js';
 // Circular — only called at runtime:
 import { getMvMode, getMvSelected, getMvCurrentFolder, openMapView,
          mvMerge, mvBulkMove, mvBulkDelete, mvClearSel } from './map-view.js';
@@ -13,45 +14,13 @@ import { openJob } from './job-ops.js';
 
 export function bulkMove() {
   if (!_selectedJobs.size) return;
-  var folderNames = [];
-  document.querySelectorAll('.jfolder-name').forEach(function(el){
-    var n = el.textContent.trim(); if (n) folderNames.push(n);
-  });
-
-  var btn = document.getElementById('mv-move-btn');
   closeCardMenu();
-  var sub = document.createElement('div');
-  sub.className = 'jmenu';
-  sub.style.cssText = 'position:fixed;z-index:9999';
-  var rect = btn.getBoundingClientRect();
-  sub.style.top = (rect.bottom + 4) + 'px';
-  sub.style.left = rect.left + 'px';
-
-  var makeItem = function(label, fn) {
-    var mi = document.createElement('button');
-    mi.className = 'jmenu-item'; mi.textContent = label;
-    mi.addEventListener('click', function(ev){ ev.stopPropagation(); sub.remove(); fn(); });
-    sub.appendChild(mi);
-  };
-
-  makeItem('Move to root', function(){ _bulkMoveToFolder(null); });
-  folderNames.forEach(function(name){ makeItem('→ ' + name, function(){ _bulkMoveToFolder(name); }); });
-  makeItem('+ New folder…', function(){
-    var name = window.prompt('New folder name:');
-    if (!name || !name.trim()) return;
-    name = name.trim();
-    fetch('/api/folders', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
-      .then(function(){ _bulkMoveToFolder(name); })
-      .catch(function(e){ showError('Failed: ' + e.message); });
-  });
-
-  document.body.appendChild(sub);
-  setOpenMenu(sub);
-  setTimeout(function(){ document.addEventListener('click', closeCardMenu, {once:true}); }, 0);
+  var metas = Array.from(_selectedMeta.values());
+  var title = metas.length === 1 ? 'Move "' + metas[0].name + '"' : 'Move ' + metas.length + ' Jobs';
+  openMoveModal(title, metas, function(toFolder) { _bulkMoveToFolder(toFolder, metas); });
 }
 
-async function _bulkMoveToFolder(toFolder) {
-  var metas = Array.from(_selectedMeta.values());
+async function _bulkMoveToFolder(toFolder, metas) {
   for (var i = 0; i < metas.length; i++) {
     var j = metas[i];
     try {
@@ -184,14 +153,16 @@ export async function routeRename() {
   var jobs = result.jobs.filter(function(j) {
     return j.params.sort_order != null || j.params.takeoff_point_4326 != null;
   });
-  var n = jobs.length;
-  if (!n) return;
+  if (!jobs.length) return;
+  openRouteRenameModal(jobs.length, function() { _doRouteRename(jobs); });
+}
 
+async function _doRouteRename(jobs) {
   var today = new Date();
   var dd = today.getFullYear().toString()
     + String(today.getMonth() + 1).padStart(2, '0')
     + String(today.getDate()).padStart(2, '0');
-  var digits = n >= 100 ? 3 : 2;
+  var digits = jobs.length >= 100 ? 3 : 2;
 
   for (var i = 0; i < jobs.length; i++) {
     var job = jobs[i];
@@ -268,23 +239,25 @@ export async function submitExportRoute() {
   }
 }
 
-export async function bulkDelete() {
+export function bulkDelete() {
   var n = _selectedJobs.size;
   if (!n) return;
-  if (!window.confirm('Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '? This cannot be undone.')) return;
-  var metas = Array.from(_selectedMeta.values());
-  for (var i = 0; i < metas.length; i++) {
-    var j = metas[i];
-    try {
-      var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
-      if (r.ok && st._activeJob === j.path) {
-        st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
-        import('./form-controls.js').then(function(m){ m._doNewJob(); });
-      }
-    } catch(err) { showError('Delete failed: ' + err.message); }
-  }
-  clearSelection();
-  await loadJobsList();
+  var msg = 'Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '? This cannot be undone.';
+  openDeleteModal(msg, async function() {
+    var metas = Array.from(_selectedMeta.values());
+    for (var i = 0; i < metas.length; i++) {
+      var j = metas[i];
+      try {
+        var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
+        if (r.ok && st._activeJob === j.path) {
+          st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
+          import('./form-controls.js').then(function(m){ m._doNewJob(); });
+        }
+      } catch(err) { showError('Delete failed: ' + err.message); }
+    }
+    clearSelection();
+    await loadJobsList();
+  });
 }
 
 export function unifiedMerge()      { if (getMvMode()) { mvMerge(); }       else { openMergeModal(); } }

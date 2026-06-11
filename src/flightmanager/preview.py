@@ -42,6 +42,36 @@ log = logging.getLogger(__name__)
 
 _DSM_MAX_PX = 512   # longest side of the thumbnail embedded in the HTML
 
+# Viridis colormap — 11 control points (0.0 … 1.0) derived from matplotlib's viridis LUT.
+# Stored as float32 so the interpolation below works without an explicit cast.
+import numpy as _np
+_VIRIDIS_STOPS = _np.array([
+    [ 68,   1,  84],
+    [ 72,  36, 117],
+    [ 65,  68, 135],
+    [ 53,  95, 141],
+    [ 42, 120, 142],
+    [ 33, 144, 141],
+    [ 39, 168, 128],
+    [ 82, 191, 104],
+    [140, 209,  72],
+    [195, 223,  35],
+    [253, 231,  37],
+], dtype=_np.float32)
+del _np
+
+
+def _colorize_viridis(norm: "np.ndarray") -> "np.ndarray":
+    """Map normalized float32 [0,1] array to viridis RGB. Returns (H, W, 3) uint8."""
+    import numpy as np
+    n = len(_VIRIDIS_STOPS)           # 11 stops → 10 intervals
+    scaled = np.clip(norm, 0.0, 1.0) * (n - 1)
+    idx_lo = np.floor(scaled).astype(np.int32)
+    idx_hi = np.minimum(idx_lo + 1, n - 1)
+    frac = (scaled - idx_lo)[..., np.newaxis]
+    colors = (1.0 - frac) * _VIRIDIS_STOPS[idx_lo] + frac * _VIRIDIS_STOPS[idx_hi]
+    return colors.astype(np.uint8)
+
 
 def build_preview_dsm_thumbnail(
     tile_paths: list[Path],
@@ -115,14 +145,15 @@ def build_preview_dsm_thumbnail(
         return None, None
 
     lo, hi = float(valid.min()), float(valid.max())
-    gray = np.zeros((th, tw), dtype=np.uint8)
+    norm = np.zeros((th, tw), dtype=np.float32)
     if hi > lo:
-        gray[valid_mask] = ((dst_data[0][valid_mask] - lo) / (hi - lo) * 255).astype(np.uint8)
+        norm[valid_mask] = (dst_data[0][valid_mask] - lo) / (hi - lo)
     else:
-        gray[valid_mask] = 128
+        norm[valid_mask] = 0.5
 
+    rgb = _colorize_viridis(norm)     # (H, W, 3) uint8
     rgba = np.zeros((4, th, tw), dtype=np.uint8)
-    rgba[0] = gray; rgba[1] = gray; rgba[2] = gray
+    rgba[0] = rgb[:, :, 0]; rgba[1] = rgb[:, :, 1]; rgba[2] = rgb[:, :, 2]
     rgba[3] = np.where(valid_mask, 255, 0).astype(np.uint8)
 
     with MemoryFile() as mem:
@@ -155,16 +186,15 @@ def _dsm_thumbnail_b64(dsm_path: Path) -> tuple[str, tuple[float, float, float, 
         return None, None
 
     lo, hi = float(valid.min()), float(valid.max())
-    gray = np.zeros((th, tw), dtype=np.uint8)
+    norm = np.zeros((th, tw), dtype=np.float32)
     if hi > lo:
-        gray[valid_mask] = ((data[valid_mask] - lo) / (hi - lo) * 255).astype(np.uint8)
+        norm[valid_mask] = (data[valid_mask] - lo) / (hi - lo)
     else:
-        gray[valid_mask] = 128
+        norm[valid_mask] = 0.5
 
+    rgb = _colorize_viridis(norm)     # (H, W, 3) uint8
     rgba = np.zeros((4, th, tw), dtype=np.uint8)
-    rgba[0] = gray
-    rgba[1] = gray
-    rgba[2] = gray
+    rgba[0] = rgb[:, :, 0]; rgba[1] = rgb[:, :, 1]; rgba[2] = rgb[:, :, 2]
     rgba[3] = np.where(valid_mask, 255, 0).astype(np.uint8)
 
     with MemoryFile() as mem:

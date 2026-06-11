@@ -39,6 +39,7 @@ class PreviewRequest(BaseModel):
     custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
     route_angle_deg: float | None = None
     speed_ms: float | None = None
+    template_settings: dict | None = None  # per-job template/waylines overrides
 
 
 class RouteEstimateRequest(BaseModel):
@@ -48,6 +49,13 @@ class RouteEstimateRequest(BaseModel):
     drone: str | None = None
     speed_ms: float | None = None
     takeoff_point_4326: list | None = None  # [lon, lat]
+    overlap_front_pct: int | None = None
+    overlap_side_pct: int | None = None
+    advanced_mode: bool = False
+    adv_min_height_m: float | None = None
+    adv_max_height_m: float | None = None
+    adv_powerline_clearance_m: float | None = None
+    adv_slope_f: float | None = None
 
 
 class ExportRequest(PreviewRequest):
@@ -216,6 +224,7 @@ async def start_export(req: ExportRequest):
                 "target_gsd_cm":      f.get("target_gsd_cm", 0),
                 "drone":              f.get("drone", ""),
                 "drone_label":        f.get("drone_label", ""),
+                "waypoint_mode":      f.get("waypoint_mode", False),
                 "needs_review":       manifest.get("needs_review", False),
                 "flight_ready":       manifest.get("flight_ready", False),
                 "review_reasons":     manifest.get("review_reasons", []),
@@ -352,13 +361,15 @@ async def route_estimate(req: RouteEstimateRequest):
         drone = cfg.active_drone()
 
     H = req.height_m if req.height_m else drone.height_from_gsd(cfg.flight.target_gsd_cm)
+    ovf = req.overlap_front_pct if req.overlap_front_pct is not None else cfg.flight.overlap_front_pct
+    ovs = req.overlap_side_pct  if req.overlap_side_pct  is not None else cfg.flight.overlap_side_pct
     speed_ms = req.speed_ms if req.speed_ms else resolve_strip_speed(cfg.flight, drone, H)
 
     p_m = drone.pixel_pitch_um * 1e-6
     f_m = drone.focal_length_mm * 1e-3
     footprint_m = H * drone.image_width_px * p_m / f_m
-    strip_m = footprint_m * (1 - cfg.flight.overlap_side_pct  / 100)
-    photo_m = H * drone.image_height_px * p_m / f_m * (1 - cfg.flight.overlap_front_pct / 100)
+    strip_m = footprint_m * (1 - ovs / 100)
+    photo_m = H * drone.image_height_px * p_m / f_m * (1 - ovf / 100)
 
     poly_4326 = _shape(req.polygon_4326)
     poly_3067 = reproject_to_3067(poly_4326)
@@ -383,15 +394,87 @@ async def route_estimate(req: RouteEstimateRequest):
         home_3067=home_3067,
     )
 
-    def _seg_to_feature(x1, y1, x2, y2):
+    # Altitude profile — uniform unless advanced_mode is active
+    altitude_profile: list[float] = [H] * len(result.strips_3067)
+    if req.advanced_mode and result.strips_3067:
+        try:
+            from flightmanager.obstacle_heights import compute_altitude_profile
+            from flightmanager.buildings import Building
+            from flightmanager.powerlines import PowerLine
+            from shapely.geometry import shape as _shape_geom
+
+            preview = _st.last_preview_result or {}
+            buildings: list[Building] = []
+            for bd in preview.get("buildings", []):
+                try:
+                    geom_4326 = _shape_geom(bd["geojson"])
+                    geom_3067 = reproject_to_3067(geom_4326)
+                    buildings.append(Building(
+                        mtk_id=0,
+                        kohdeluokka=bd.get("kohdeluokka", 42210),
+                        kayttotarkoitus=None,
+                        geometry=geom_3067,
+                        alkupvm=None,
+                        kerrosluku=None,
+                    ))
+                except Exception:
+                    pass
+
+            power_lines: list[PowerLine] = []
+            for pl in preview.get("power_lines", []):
+                try:
+                    geom_4326 = _shape_geom(pl["geojson"])
+                    geom_3067 = reproject_to_3067(geom_4326)
+                    power_lines.append(PowerLine(
+                        mtk_id=0,
+                        kohdeluokka=22312,
+                        is_overhead=bool(pl.get("is_overhead", True)),
+                        geometry=geom_3067,
+                        alkupvm=None,
+                    ))
+                except Exception:
+                    pass
+
+            cfg_flight = _st.config.flight
+            min_h      = req.adv_min_height_m          or cfg_flight.adv_min_height_m
+            max_h      = req.adv_max_height_m           or H
+            clearance  = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
+            slope_f    = req.adv_slope_f                or cfg_flight.adv_slope_f
+
+            altitude_profile = compute_altitude_profile(
+                result,
+                buildings=buildings,
+                power_lines=power_lines,
+                flight_height_m=max_h,
+                min_h=min_h,
+                powerline_clearance_m=clearance,
+                overlap_front_pct=ovf,
+                overlap_side_pct=ovs,
+                slope_f=slope_f,
+                drone=drone,
+            )
+        except Exception as _adv_exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[route_estimate] altitude profile failed: {_adv_exc}")
+
+    def _seg_to_feature(x1, y1, x2, y2, alt: float, strip_speed: float):
         line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
-        return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
+        return {
+            "type": "Feature",
+            "geometry": dict(mapping(line_4326)),
+            "properties": {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2)},
+        }
 
     def _path_to_feature(pts: list) -> dict:
         line_4326 = reproject_to_4326(LineString(pts))
         return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
 
-    strips_features  = [_seg_to_feature(*s) for s in result.strips_3067]
+    strips_features = [
+        _seg_to_feature(*s, alt=altitude_profile[i],
+                        strip_speed=drone.auto_speed(altitude_profile[i], ovf))
+        for i, s in enumerate(result.strips_3067)
+    ]
     transit_features = [_path_to_feature(s) for s in result.transit_segs_3067]
 
     return {
@@ -404,6 +487,8 @@ async def route_estimate(req: RouteEstimateRequest):
         "battery_minutes":   drone.battery_minutes,
         "strips_geojson":    {"type": "FeatureCollection", "features": strips_features},
         "transits_geojson":  {"type": "FeatureCollection", "features": transit_features},
+        "advanced_mode":     req.advanced_mode,
+        "altitude_profile":  [round(a, 1) for a in altitude_profile],
     }
 
 
@@ -476,6 +561,27 @@ def _prepare_config(req: PreviewRequest):
     if req.speed_ms is not None and req.speed_ms > 0:
         cfg.flight.auto_flight_speed_ms = req.speed_ms
 
+    ts = req.template_settings or {}
+    if ts.get("overlap_front_pct") is not None:
+        cfg.flight.overlap_front_pct = int(ts["overlap_front_pct"])
+    if ts.get("overlap_side_pct") is not None:
+        cfg.flight.overlap_side_pct = int(ts["overlap_side_pct"])
+    if ts.get("takeoff_security_height_m") is not None:
+        cfg.flight.takeoff_security_height_m = float(ts["takeoff_security_height_m"])
+    if ts.get("rth_height_m") is not None:
+        cfg.flight.rth_height_m = float(ts["rth_height_m"])
+    if ts.get("rc_lost_action") is not None:
+        cfg.flight.rc_lost_action = str(ts["rc_lost_action"])
+    if ts.get("finish_action") is not None:
+        cfg.flight.finish_action = str(ts["finish_action"])
+    cfg.flight.advanced_mode = bool(ts.get("advanced_mode", False))
+    if ts.get("adv_min_height_m") is not None:
+        cfg.flight.adv_min_height_m = float(ts["adv_min_height_m"])
+    if ts.get("adv_powerline_clearance_m") is not None:
+        cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
+    if ts.get("adv_slope_f") is not None:
+        cfg.flight.adv_slope_f = float(ts["adv_slope_f"])
+
     return cfg
 
 
@@ -508,6 +614,7 @@ def _write_job_params(
         "safety": {
             "preview_radius_m": req.preview_radius_m,
         },
+        "template_settings": req.template_settings or {},
         "custom_polygon_4326": req.custom_polygon,
         "takeoff_point_4326":  req.takeoff_point_4326,
         "color": req.color or None,

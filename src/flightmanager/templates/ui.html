@@ -26,6 +26,9 @@
     <symbol id="ic-battery-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M10 17h.01"/><path d="M10 7v6"/><path d="M14 6h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/><path d="M22 14v-4"/><path d="M6 18H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"/>
     </symbol>
+    <symbol id="ic-area" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+    </symbol>
   </defs>
 </svg>
 <div id="hdr">
@@ -40,13 +43,13 @@
         <button id="jp-newjob" onclick="newJob()">&#43; New Job</button>
         <button id="jp-batch" onclick="openBatchDialog()">&#8659; Batch</button>
         <button id="jp-newfolder" onclick="createFolder()" title="Create new folder">&#43; Folder</button>
+        <button id="jp-tog" onclick="toggleJp()" title="Hide jobs panel">&#9664;</button>
       </div>
       <div id="jp-filter-row">
         <input type="text" id="jp-filter" placeholder="Filter&#8230;">
       </div>
       <div id="jp-list"></div>
     </div>
-    <button id="jp-tog" onclick="toggleJp()" title="Toggle jobs panel">&#9664;</button>
   </div>
 
   <div id="sb">
@@ -106,8 +109,14 @@
 
     <div class="sec is-coll" id="flight-sec">
       <div class="sec-hdr" onclick="toggleSec('flight')">
-        <h3>Flight</h3>
-        <span class="sec-chev">&#9660;</span>
+        <div class="sec-hdr-left">
+          <h3>Flight</h3>
+          <span id="adv-dot" class="adv-dot" style="display:none" title="Variable altitude active">ADV</span>
+        </div>
+        <div class="sec-hdr-right" onclick="event.stopPropagation()">
+          <button id="tpl-btn" class="tpl-gear-btn" onclick="openTplModal()" title="Template &amp; waylines settings">&#9881;</button>
+          <span class="sec-chev">&#9660;</span>
+        </div>
       </div>
       <div class="sec-body" id="flight-body">
         <label>Subcategory</label>
@@ -169,6 +178,23 @@
 
   <div id="mc">
     <div id="map"></div>
+    <!-- 3D Cesium view — fills #mc via position:absolute when active -->
+    <div id="cesium-container"><div id="cesium-legend"></div></div>
+    <!-- Mirror of the 2D/3D toggle: shown on top of Cesium at the same pixel position -->
+    <button id="cesium-2d-btn" class="toggle-3d-ctrl active" onclick="toggle3dView()" title="Switch to 2D view" style="display:none">2D</button>
+    <!-- 3D playback controls -->
+    <div id="cesium-playback">
+      <button id="cesium-play-btn">&#9654;</button>
+      <button id="cesium-reset-btn">&#8635;</button>
+      <span id="cesium-time-display">0:00</span>
+      <input type="range" id="cesium-slider" min="0" max="100" value="0" step="0.1">
+      <select id="cesium-speed" title="Playback speed">
+        <option value="1">1&times;</option>
+        <option value="2">2&times;</option>
+        <option value="5">5&times;</option>
+        <option value="10">10&times;</option>
+      </select>
+    </div>
     <div id="bridge-hint"></div>
     <!-- Map view: floating action bar (top-center, visible when jobs selected) -->
     <div id="mv-actions">
@@ -214,9 +240,9 @@
     </div>
     <div id="legend">
       <h4>Layers</h4>
-      <div class="leg-row" id="leg-dsm-row" style="display:none">
+      <div class="leg-row" id="leg-dsm-row">
         <button class="leg-eye off" id="leg-dsm" title="DSM elevation"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-        <div class="leg-icon"><div class="l-swatch" style="background:linear-gradient(to right,#000,#fff);border:1px solid #9ca3af;"></div></div>
+        <div class="leg-icon"><div class="l-swatch" style="background:linear-gradient(to right,#440154,#31688e,#35b779,#fde725);border:1px solid #9ca3af;"></div></div>
         <span>DSM elevation</span>
       </div>
       <div class="leg-row">
@@ -234,7 +260,7 @@
         <div class="leg-icon"><div class="l-dot" style="background:#93c5fd;border:1px solid #1d4ed8;"></div></div>
         <span>Polygon vertices</span>
       </div>
-      <div class="leg-row" id="leg-rings-row" style="display:none">
+      <div class="leg-row" id="leg-rings-row">
         <button class="leg-eye" id="leg-rings" title="Warning radius circles"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><div class="l-swatch" style="background:#fef08a;opacity:.8;border:1px dashed #ca8a04;"></div></div>
         <span id="leg-rings-label">Warning radius</span>
@@ -249,12 +275,12 @@
         <div class="leg-icon"><div class="l-dot" style="background:#dc2626;"></div><div class="l-dot" style="background:#d97706;"></div></div>
         <span>Buildings</span>
       </div>
-      <div class="leg-row" id="leg-plines-row" style="display:none">
+      <div class="leg-row" id="leg-plines-row">
         <button class="leg-eye" id="leg-plines" title="Overhead power lines"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><svg width="28" height="10"><line x1="0" y1="3" x2="28" y2="3" stroke="#d97706" stroke-width="2.5"/><line x1="0" y1="8" x2="28" y2="8" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3"/></svg></div>
         <span>Power lines (HV)</span>
       </div>
-      <div class="leg-row" id="leg-plko-row" style="display:none">
+      <div class="leg-row" id="leg-plko-row">
         <button class="leg-eye" id="leg-plko" title="Power line safe distance"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><div class="l-swatch" style="background:#fde68a;opacity:.8;border:1px dashed #b45309;"></div></div>
         <span>Power line keep-out</span>
@@ -264,17 +290,21 @@
         <div class="leg-icon"><div class="l-swatch" style="background:#f97316;opacity:.4;border:1px solid #ea580c;"></div></div>
         <span>UAS zones</span>
       </div>
-      <div class="leg-row" id="leg-route-row" style="display:none">
+      <div class="leg-row" id="leg-route-row">
         <button class="leg-eye" id="leg-route" title="Route strips"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#f59e0b" stroke-width="2"/><polyline points="17,2 22,5 17,8" fill="none" stroke="#b45309" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
         <span>Route strips</span>
       </div>
-      <div class="leg-row" id="leg-coverage-row" style="display:none">
+      <div class="leg-alt-row" id="leg-alt-row">
+        <div class="l-swatch leg-alt-grad"></div>
+        <div class="leg-alt-labels"><span id="leg-alt-min">—</span><span id="leg-alt-max">—</span></div>
+      </div>
+      <div class="leg-row" id="leg-coverage-row">
         <button class="leg-eye off" id="leg-coverage" title="Camera footprint coverage"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><div class="l-swatch" style="background:#fbbf24;opacity:.5;border:1px solid #f59e0b;"></div></div>
         <span>Coverage</span>
       </div>
-      <div class="leg-row" id="leg-takeoff-row" style="display:none">
+      <div class="leg-row" id="leg-takeoff-row">
         <button class="leg-eye" id="leg-takeoff" title="Takeoff / Landing position"><svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-slash" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
         <div class="leg-icon"><div class="l-takeoff-icon">&#10005;</div></div>
         <span>Takeoff point</span>
@@ -425,6 +455,127 @@
     <h3>Route positions exist</h3>
     <p id="route-confirm-desc"></p>
     <div id="route-confirm-btns"></div>
+  </div>
+</div>
+
+<div id="delete-modal">
+  <div id="delete-card">
+    <div class="batch-hdr">
+      <span>Delete</span>
+      <button class="batch-close" onclick="closeDeleteModal()">&#10005;</button>
+    </div>
+    <div id="delete-body"><p id="delete-msg"></p></div>
+    <div id="delete-footer">
+      <button id="delete-confirm-btn" onclick="confirmDeleteAction()">Delete</button>
+      <button class="cancel-btn" onclick="closeDeleteModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="move-modal">
+  <div id="move-card">
+    <div class="batch-hdr">
+      <span id="move-title">Move to Folder</span>
+      <button class="batch-close" onclick="closeMoveModal()">&#10005;</button>
+    </div>
+    <div id="move-folders"></div>
+    <div id="move-newfolder-row">
+      <input type="text" id="move-newfolder-input" placeholder="New folder name…"
+             autocomplete="off" onkeydown="if(event.key==='Enter')submitNewFolderMove()">
+      <button onclick="submitNewFolderMove()">Create &amp; Move</button>
+      <div id="move-error"></div>
+    </div>
+    <div id="move-footer">
+      <button class="cancel-btn" onclick="closeMoveModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="route-rename-modal">
+  <div id="route-rename-card">
+    <div class="batch-hdr">
+      <span>Route Rename</span>
+      <button class="batch-close" onclick="closeRouteRenameModal()">&#10005;</button>
+    </div>
+    <div id="route-rename-body"><p id="route-rename-msg"></p></div>
+    <div id="route-rename-footer">
+      <button id="route-rename-confirm-btn" onclick="confirmRouteRenameAction()">Rename</button>
+      <button class="cancel-btn" onclick="closeRouteRenameModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="tpl-modal">
+  <div id="tpl-card">
+    <div class="tpl-hdr">
+      <span>Template Settings</span>
+      <button class="batch-close" onclick="closeTplModal()">&#10005;</button>
+    </div>
+    <div class="tpl-tabs">
+      <button class="tpl-tab active" data-tab="capture" onclick="tplTab('capture')">Capture</button>
+      <button class="tpl-tab" data-tab="safety" onclick="tplTab('safety')">Safety</button>
+      <button class="tpl-tab" data-tab="terrain" onclick="tplTab('terrain')">Terrain</button>
+    </div>
+
+    <div class="tpl-panel" id="tpl-panel-capture">
+      <p class="tpl-hint">Overlap affects strip spacing and maximum slope for variable altitude.</p>
+      <label>Front overlap (%)</label>
+      <div class="simp-row">
+        <button class="simp-step" id="tpl-ovf-minus">&#8722;</button>
+        <span class="simp-val" id="tpl-ovf-val">80%</span>
+        <button class="simp-step" id="tpl-ovf-plus">&#43;</button>
+        <input type="hidden" id="tpl-overlap-front" value="80">
+      </div>
+      <label>Side overlap (%)</label>
+      <div class="simp-row">
+        <button class="simp-step" id="tpl-ovs-minus">&#8722;</button>
+        <span class="simp-val" id="tpl-ovs-val">70%</span>
+        <button class="simp-step" id="tpl-ovs-plus">&#43;</button>
+        <input type="hidden" id="tpl-overlap-side" value="70">
+      </div>
+    </div>
+
+    <div class="tpl-panel" id="tpl-panel-safety" style="display:none">
+      <label>Take-off security height (m)</label>
+      <input type="number" id="tpl-takeoff-sec" min="5" max="200" step="1" value="50">
+      <label>Return-to-home altitude (m)</label>
+      <input type="number" id="tpl-rth-height" min="10" max="500" step="5" value="80">
+      <label>RC signal lost</label>
+      <select id="tpl-rc-lost">
+        <option value="goBack">Return to home</option>
+        <option value="hover">Hover in place</option>
+        <option value="landing">Land immediately</option>
+      </select>
+      <label>Mission finish action</label>
+      <select id="tpl-finish-action">
+        <option value="goHome">Return to home</option>
+        <option value="hover">Hover in place</option>
+        <option value="autoLand">Auto land</option>
+        <option value="noAction">No action</option>
+      </select>
+    </div>
+
+    <div class="tpl-panel" id="tpl-panel-terrain" style="display:none">
+      <label class="ck-row tpl-adv-toggle">
+        <input type="checkbox" id="tpl-advanced">
+        Variable altitude
+      </label>
+      <p class="tpl-hint tpl-adv-hint" id="tpl-adv-hint">Generate explicit per-waypoint altitudes: lower near buildings (A2 1:1 rule from rooftop), higher over power lines. Applied automatically when saving.</p>
+      <div id="tpl-adv-fields" class="tpl-adv-fields">
+        <label>Min altitude — A2 floor (m)</label>
+        <input type="number" id="tpl-adv-min-height" min="20" max="120" step="1" value="30" disabled>
+        <label>Max altitude — open field (m) <span class="tpl-hint-inline">blank = use height field</span></label>
+        <input type="number" id="tpl-adv-max-height" min="20" max="120" step="1" placeholder="same as height" disabled>
+        <label>Power line clearance (m AGL)</label>
+        <input type="number" id="tpl-adv-powerline" min="40" max="300" step="5" value="70" disabled>
+        <label>Slope tolerance F <span class="tpl-hint-inline">0.20 = 20% altitude change per photo baseline</span></label>
+        <input type="number" id="tpl-adv-slope-f" min="0.05" max="0.50" step="0.01" value="0.20" disabled>
+      </div>
+    </div>
+
+    <div class="tpl-footer">
+      <button class="tpl-done-btn" onclick="closeTplModal()">Done</button>
+    </div>
   </div>
 </div>
 

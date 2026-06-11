@@ -3,8 +3,7 @@
 import { st } from './state.js';
 import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from './map-init.js';
 import { escHtml, jobApiUrl } from './utils.js';
-import { markDirty } from './dirty-tracking.js';
-import { confirmIfDirty } from './dirty-tracking.js';
+import { markDirty, confirmIfDirty, xbUpdate } from './dirty-tracking.js';
 import { showError, clearError, updateFolderHint, updateGsd, setRadiusLinked,
          setSub, setSimpAuto, setSimpManual, setAutoTimer,
          getAutoTimer, setFitBoundsFlag, setLastPreviewedIds, _setEditedPoly, _clearEditedPoly,
@@ -16,6 +15,7 @@ import { renderMap } from './map-layers.js';
 import { updateRouteOverlay, updateRouteStats, setRouteAngleSilent as _setRouteAngleSilentRP,
          setSpeedSilent, _renderAngleControl } from './route-planner.js';
 import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
+import { restoreTplSettings } from './tpl-modal.js';
 import { hideExtModifiedNotice } from './event-stream.js';
 // Circular — only called at runtime:
 import { startPreview } from './preview-runner.js';
@@ -49,13 +49,14 @@ export async function _doOpenJob(path) {
       setTakeoffUserMoved(true);
       _renderTakeoffMarker(p.takeoff_point_4326);
     }
+    st._waypointMode = !!(p && p.template_settings && p.template_settings.advanced_mode);
     _restoreFormFromParams(p);
     document.getElementById('jname').value = name;
     st._activeJob = path;
     st._activeJobFolder = data.folder || null;
     updateFolderHint();
     _setColorPicker(p && p.color);
-    st._dirty = false;
+    st._dirty = false; xbUpdate();
     clearError();
     hideExtModifiedNotice();
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
@@ -83,7 +84,6 @@ export async function _doOpenJob(path) {
             flight_time_min: st.previewData.stats.route_flight_time_min,
           });
         }
-        document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
       } catch(ex) { console.error('[openJob] render error', ex); }
     } else {
@@ -97,10 +97,8 @@ export async function _doOpenJob(path) {
         setTimeout(function(){
           if (lrs.survey) map.fitBounds(lrs.survey.getBounds(), {padding: [40, 40]});
         }, 50);
-        document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
       } else {
-        document.getElementById('xb').disabled = true;
         document.getElementById('rstbtn').disabled = true;
         resetMapToUserLocation();
         import('./form-controls.js').then(function(m){ m.focusArea(); });
@@ -146,6 +144,7 @@ function _restoreFormFromParams(p) {
     st.editedPoly = null; st.polyModified = false;
     document.getElementById('modbadge').style.display = 'none';
   }
+  restoreTplSettings(p.template_settings || {});
   var hasIds = !!(p.inputs && ((p.inputs.parcel_ids||[]).length || (p.inputs.property_ids||[]).length));
   _setSec('area', hasIds);
 }

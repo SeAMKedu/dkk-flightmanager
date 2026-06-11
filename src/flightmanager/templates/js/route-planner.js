@@ -4,6 +4,8 @@ import { st } from './state.js';
 import { map, lrs } from './map-init.js';
 import { markDirty } from './dirty-tracking.js';
 import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
+import { notifyCesiumRouteReady } from './cesium-view.js';
+import { getTplSettings } from './tpl-modal.js';
 
 var _routeDebounceTimer = null;
 var _routeLayer = null;
@@ -26,10 +28,13 @@ function _getRouteParams() {
   var p_m = d.pixel_pitch_um * 1e-6, f_m = d.focal_length_mm * 1e-3;
   var fpAcross = H * d.image_width_px  * p_m / f_m;
   var fpAlong  = H * d.image_height_px * p_m / f_m;
+  var tpl = getTplSettings();
+  var ovf = tpl ? tpl.overlap_front_pct : st._cfgOverlapFront;
+  var ovs = tpl ? tpl.overlap_side_pct  : st._cfgOverlapSide;
   return {
     angle:  _effectiveRouteAngle(),
-    stripM: fpAcross * (1 - st._cfgOverlapSide  / 100),
-    photoM: fpAlong  * (1 - st._cfgOverlapFront / 100),
+    stripM: fpAcross * (1 - ovs / 100),
+    photoM: fpAlong  * (1 - ovf / 100),
     fpAcross: fpAcross,
   };
 }
@@ -177,6 +182,11 @@ export function _clearRouteLayer() {
   if (row) row.style.display = 'none';
   var crow = document.getElementById('leg-coverage-row');
   if (crow) crow.style.display = 'none';
+  var altRow = document.getElementById('leg-alt-row');
+  if (altRow) altRow.style.display = 'none';
+  st._altProfileMin = null;
+  st._altProfileMax = null;
+  notifyCesiumRouteReady(null, null);
 }
 
 function _stripCoverageRect(ll1, ll2, fpAcross, lat0, lon0, mLat, mLon) {
@@ -193,7 +203,28 @@ function _stripCoverageRect(ll1, ll2, fpAcross, lat0, lon0, mLat, mLon) {
   ];
 }
 
-function _drawRouteLines(lines, transits, fpAcross) {
+// Viridis-inspired 5-stop palette for altitude coloring (low→high)
+var _ALT_STOPS = [
+  [68,  1,  84], // deep purple  (lowest)
+  [59, 82, 139], // blue-purple
+  [33, 145, 140], // teal
+  [94, 201, 98],  // green
+  [253, 231, 37], // yellow      (highest)
+];
+function _altColor(t) {
+  // t in [0,1]; returns CSS hex
+  t = Math.max(0, Math.min(1, t));
+  var seg = t * (_ALT_STOPS.length - 1);
+  var i = Math.min(Math.floor(seg), _ALT_STOPS.length - 2);
+  var f = seg - i;
+  var a = _ALT_STOPS[i], b = _ALT_STOPS[i + 1];
+  var r = Math.round(a[0] + f * (b[0] - a[0]));
+  var g = Math.round(a[1] + f * (b[1] - a[1]));
+  var bv = Math.round(a[2] + f * (b[2] - a[2]));
+  return '#' + [r,g,bv].map(function(x){return x.toString(16).padStart(2,'0');}).join('');
+}
+
+function _drawRouteLines(lines, transits, fpAcross, altitudes) {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   if (!lines || !lines.length) { lrs.route = null; lrs.coverage = null; return; }
@@ -201,10 +232,20 @@ function _drawRouteLines(lines, transits, fpAcross) {
   var lat0 = lines[0][0][0], lon0 = lines[0][0][1];
   var mLat = 111132.0, mLon = mLat * Math.cos(lat0 * Math.PI / 180);
 
+  // Compute altitude range for color mapping
+  var hasAlt = altitudes && altitudes.length === lines.length;
+  var altMin = hasAlt ? Math.min.apply(null, altitudes) : 0;
+  var altMax = hasAlt ? Math.max.apply(null, altitudes) : 1;
+  var altRange = (altMax - altMin) || 1;
+
   var g = L.layerGroup();
-  var lineStyle = {color:'#f59e0b', weight:2, opacity:0.85, interactive:false};
-  lines.forEach(function(line) {
-    L.polyline(line, lineStyle).addTo(g);
+  var defaultColor = '#f59e0b';
+  lines.forEach(function(line, idx) {
+    var color = hasAlt
+      ? _altColor((altitudes[idx] - altMin) / altRange)
+      : defaultColor;
+    var arrowColor = hasAlt ? color : '#b45309';
+    L.polyline(line, {color: color, weight: 2, opacity: 0.9, interactive: false}).addTo(g);
     var ll1 = line[0], ll2 = line[1];
     var mid = [(ll1[0]+ll2[0])/2, (ll1[1]+ll2[1])/2];
     var dx = (ll2[1]-ll1[1])*mLon, dy = (ll2[0]-ll1[0])*mLat;
@@ -212,14 +253,16 @@ function _drawRouteLines(lines, transits, fpAcross) {
     var arrowHtml =
       '<svg width="14" height="14" viewBox="-7 -7 14 14" xmlns="http://www.w3.org/2000/svg" ' +
       'style="transform:rotate('+deg.toFixed(1)+'deg);display:block">' +
-      '<polyline points="-3.5,-5 4,0 -3.5,5" fill="none" stroke="#b45309" ' +
+      '<polyline points="-3.5,-5 4,0 -3.5,5" fill="none" stroke="'+arrowColor+'" ' +
       'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     L.marker(mid, {
       icon: L.divIcon({html:arrowHtml, className:'', iconSize:[14,14], iconAnchor:[7,7]}),
       interactive:false, keyboard:false,
     }).addTo(g);
   });
-  (transits || []).forEach(function(seg) { L.polyline(seg, lineStyle).addTo(g); });
+  (transits || []).forEach(function(seg) {
+    L.polyline(seg, {color: defaultColor, weight: 2, opacity: 0.85, interactive: false}).addTo(g);
+  });
 
   _routeLayer = g; lrs.route = g;
   var btn = document.getElementById('leg-route');
@@ -227,11 +270,32 @@ function _drawRouteLines(lines, transits, fpAcross) {
   var row = document.getElementById('leg-route-row');
   if (row) row.style.display = '';
 
+  // Altitude legend — show gradient bar with min/max when altitudes vary
+  var altRow = document.getElementById('leg-alt-row');
+  if (altRow) {
+    if (hasAlt) {
+      var altMin2 = Math.round(Math.min.apply(null, altitudes));
+      var altMax2 = Math.round(Math.max.apply(null, altitudes));
+      var minEl = document.getElementById('leg-alt-min');
+      var maxEl = document.getElementById('leg-alt-max');
+      if (minEl) minEl.textContent = altMin2 + ' m';
+      if (maxEl) maxEl.textContent = altMax2 + ' m';
+      altRow.style.display = '';
+      st._altProfileMin = altMin2;
+      st._altProfileMax = altMax2;
+    } else {
+      altRow.style.display = 'none';
+      st._altProfileMin = null;
+      st._altProfileMax = null;
+    }
+  }
+
   if (fpAcross && fpAcross > 0) {
     var cg = L.layerGroup();
-    var covStyle = {color:'#f59e0b', weight:0.8, opacity:0.5,
-                    fillColor:'#fbbf24', fillOpacity:0.18, interactive:false};
-    lines.forEach(function(line) {
+    lines.forEach(function(line, idx) {
+      var color = hasAlt ? _altColor((altitudes[idx] - altMin) / altRange) : '#f59e0b';
+      var covStyle = {color: color, weight: 0.8, opacity: 0.5,
+                      fillColor: color, fillOpacity: 0.15, interactive: false};
       var corners = _stripCoverageRect(line[0], line[1], fpAcross, lat0, lon0, mLat, mLon);
       if (corners) L.polygon(corners, covStyle).addTo(cg);
     });
@@ -248,10 +312,18 @@ function _drawRouteGeoJSON(stripsGeojson, transitsGeojson) {
   var lines = stripsGeojson.features.map(function(f) {
     return f.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
   });
+  var altitudes = stripsGeojson.features.map(function(f) {
+    return f.properties && f.properties.altitude_m != null ? f.properties.altitude_m : null;
+  });
+  var _validAlts = altitudes.filter(function(a) { return a !== null; });
+  var _altVaries = _validAlts.length > 1 &&
+    (Math.max.apply(null, _validAlts) - Math.min.apply(null, _validAlts)) > 1.0;
+  if (!_altVaries) altitudes = null;
   var transits = (transitsGeojson && transitsGeojson.features || []).map(function(f) {
     return f.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
   });
-  _drawRouteLines(lines, transits, _lastFpAcross);
+  _drawRouteLines(lines, transits, _lastFpAcross, altitudes);
+  notifyCesiumRouteReady(stripsGeojson, transitsGeojson);
 }
 
 export function updateRouteStats(data) {
@@ -285,13 +357,21 @@ function _scheduleAccurateEstimate() {
 async function _fetchAccurateEstimate() {
   if (!st.previewData || !st.previewData.survey) return;
   var home = getTakeoffPt() || getTakeoffAuto();
+  var tpl = getTplSettings();
   var body = {
-    polygon_4326:       st.previewData.survey,
-    angle_deg:          st._routeAngleDeg,
-    height_m:           parseFloat(document.getElementById('hgt').value) || null,
-    drone:              document.getElementById('dsel').value || null,
-    speed_ms:           st._speedMsOverride,
-    takeoff_point_4326: home || null,
+    polygon_4326:              st.previewData.survey,
+    angle_deg:                 st._routeAngleDeg,
+    height_m:                  parseFloat(document.getElementById('hgt').value) || null,
+    drone:                     document.getElementById('dsel').value || null,
+    speed_ms:                  st._speedMsOverride,
+    takeoff_point_4326:        home || null,
+    overlap_front_pct:         tpl ? tpl.overlap_front_pct : null,
+    overlap_side_pct:          tpl ? tpl.overlap_side_pct  : null,
+    advanced_mode:             tpl ? !!tpl.advanced_mode : false,
+    adv_min_height_m:          tpl ? tpl.adv_min_height_m          : null,
+    adv_max_height_m:          tpl ? tpl.adv_max_height_m           : null,
+    adv_powerline_clearance_m: tpl ? tpl.adv_powerline_clearance_m  : null,
+    adv_slope_f:               tpl ? tpl.adv_slope_f                : null,
   };
   try {
     var res = await fetch('/api/route_estimate', {

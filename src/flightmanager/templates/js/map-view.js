@@ -5,9 +5,11 @@ import { map, lrs, editLayers, resetLrs } from './map-init.js';
 import { escHtml, jobApiUrl } from './utils.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
+import { openDeleteModal, openMoveModal } from './modal-utils.js';
 import { clearTakeoffForMapView, _hideVlos } from './takeoff.js';
 import { getMvStatColor, getMvStatMode, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
 import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
+import { hideCesiumView } from './cesium-view.js';
 // Circular — only called at runtime:
 import { saveEdit } from './polygon-edit.js';
 import { openJob as _openJobFn } from './job-ops.js';
@@ -39,6 +41,7 @@ export function showFolderOnMap(e, folderName) {
 }
 
 export function openMapView(folderFilter) {
+  hideCesiumView();
   var folderKey = folderFilter || null;
   var _comingFromEditor = _mvFromEditor && st._activeJobFolder === folderKey;
   var _skipFit = _comingFromEditor;
@@ -281,28 +284,35 @@ function _mvOpenHoverPopup(latlng, p) {
   var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
     : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
     : p.untouched ? '<span style="color:#64748b">New</span>' : '<span>—</span>';
-  var area = p.area_ha != null ? p.area_ha.toFixed(1) + ' ha' : '';
-  var areaLost = '';
-  if (p.area_lost_pct != null && Math.abs(p.area_lost_pct) >= 0.05) {
-    var sign = p.area_lost_pct > 0 ? '−' : '+';
-    var col  = p.area_lost_pct > 0 ? '#fb923c' : '#4ade80';
-    areaLost = ' <span style="color:' + col + '">' + sign + Math.abs(p.area_lost_pct).toFixed(1) + '%</span>';
-  }
   var _ic = function(id, col) {
     return '<svg class="mv-ic"' + (col ? ' style="color:' + col + ';opacity:1"' : '') + '><use href="#' + id + '"/></svg>';
   };
+  var areaLostHtml = '';
+  if (p.area_lost_pct != null && Math.abs(p.area_lost_pct) >= 0.05) {
+    var sign = p.area_lost_pct > 0 ? '−' : '+';
+    var col  = p.area_lost_pct > 0 ? '#fb923c' : '#4ade80';
+    areaLostHtml = ' <span style="color:' + col + '">' + sign + Math.abs(p.area_lost_pct).toFixed(1) + '%</span>';
+  }
+  var _stat = function(content) { return '<span style="white-space:nowrap">' + content + '</span>'; };
   var flightParts = [];
-  if (p.height_m != null)      flightParts.push(_ic('ic-altitude') + ' ' + p.height_m.toFixed(0) + ' m');
-  if (p.strip_speed_ms != null) flightParts.push(_ic('ic-gauge') + ' ' + (p.strip_speed_ms * 3.6).toFixed(1) + ' km/h');
-  if (p.flight_time_min != null) flightParts.push(_ic('ic-timer') + ' ' + Math.round(p.flight_time_min) + ' min');
-  if (p.over_one_battery)       flightParts.push(_ic('ic-battery-warn', '#fb923c') + ' <span style="color:#fb923c">2+ bat</span>');
+  if (p.area_ha != null)        flightParts.push(_stat(_ic('ic-area') + ' ' + p.area_ha.toFixed(1) + ' ha' + areaLostHtml));
+  if (p.waypoint_mode && p.adv_min_height_m != null && p.adv_max_height_m != null)
+    flightParts.push(_stat(_ic('ic-altitude') + ' ' + Math.round(p.adv_min_height_m) + '–' + Math.round(p.adv_max_height_m) + ' m'));
+  else if (p.height_m != null)
+    flightParts.push(_stat(_ic('ic-altitude') + ' ' + p.height_m.toFixed(0) + ' m'));
+  if (p.strip_speed_ms != null) flightParts.push(_stat(_ic('ic-gauge') + ' ' + (p.strip_speed_ms * 3.6).toFixed(1) + ' km/h'));
+  if (p.flight_time_min != null) flightParts.push(_stat(_ic('ic-timer') + ' ' + Math.round(p.flight_time_min) + ' min'));
+  if (p.over_one_battery)       flightParts.push(_stat(_ic('ic-battery-warn', '#fb923c') + ' <span style="color:#fb923c">2+ bat</span>'));
   var flightInfo = flightParts.join('<span style="color:#475569"> · </span>');
-  var photoInfo = p.photo_count != null ? _ic('ic-camera') + ' ' + p.photo_count + ' photos' : '';
+  var photoInfo = p.photo_count != null ? _stat(_ic('ic-camera') + ' ' + p.photo_count + ' photos') : '';
+  var routeIndex = (p.sort_order != null && !p.skipped)
+    ? '<span style="display:inline-flex;align-items:center;justify-content:center;background:#f59e0b;color:#000;font-size:9px;font-weight:700;width:16px;height:16px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.25);box-shadow:0 1px 2px rgba(0,0,0,.5);vertical-align:middle;line-height:1;flex-shrink:0">' + (p.sort_order + 1) + '</span>'
+    : '';
   var skipLabel = p.skipped ? '⊘ Unskip' : '⊘ Skip';
   var html = '<div class="mv-tt-inner">'
     + '<div class="mv-tt-name">' + (p.skipped ? '⊘ ' : '') + escHtml(p.name)
     + (p.folder ? ' <span class="mv-tt-folder">(' + escHtml(p.folder) + ')</span>' : '') + '</div>'
-    + '<div class="mv-tt-meta">' + statusChip + (area ? ' · ' + area : '') + areaLost + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
+    + '<div class="mv-tt-meta">' + (routeIndex ? routeIndex + ' · ' : '') + statusChip + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
     + (flightInfo ? '<div class="mv-tt-flight">' + flightInfo + '</div>' : '')
     + (photoInfo ? '<div class="mv-tt-flight">' + photoInfo + '</div>' : '')
     + '<div class="mv-tt-actions">'
@@ -346,20 +356,22 @@ export async function mvToggleSkip(path, currentSkipped) {
   } catch(e) { showError('Failed: ' + e.message); }
 }
 
-export async function mvDeleteJob(path, name) {
-  if (!window.confirm('Delete job "' + name + '"?')) return;
-  try {
-    var r = await fetch(jobApiUrl(path), {method: 'DELETE'});
-    if (!r.ok) { showError('Delete failed'); return; }
-    map.closePopup();
-    _mvLayers = _mvLayers.filter(function(item) {
-      if (item.path === path) { _mvJobGroup.removeLayer(item.layer); return false; }
-      return true;
-    });
-    _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== path; });
-    if (st._activeJob === path) { st._activeJob = null; st._activeJobFolder = null; }
-    loadJobsList();
-  } catch(e) { showError('Delete failed: ' + e.message); }
+export function mvDeleteJob(path, name) {
+  map.closePopup();
+  if (_mvHoverPopup) { _mvHoverPopup = null; }
+  openDeleteModal('Delete "' + name + '"? This cannot be undone.', async function() {
+    try {
+      var r = await fetch(jobApiUrl(path), {method: 'DELETE'});
+      if (!r.ok) { showError('Delete failed'); return; }
+      _mvLayers = _mvLayers.filter(function(item) {
+        if (item.path === path) { _mvJobGroup.removeLayer(item.layer); return false; }
+        return true;
+      });
+      _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== path; });
+      if (st._activeJob === path) { st._activeJob = null; st._activeJobFolder = null; }
+      loadJobsList();
+    } catch(e) { showError('Delete failed: ' + e.message); }
+  });
 }
 
 function _mvUpdateDim() {
@@ -447,48 +459,48 @@ export function mvMerge() {
   openMergeModal();
 }
 
-export async function mvBulkMove() {
+export function mvBulkMove() {
   var paths = Array.from(_mvSelected);
   var metas = paths.map(function(path) {
     var item = _mvLayers.find(function(i){ return i.path === path; });
     return item ? {path: path, name: item.feature.properties.name, folder: item.feature.properties.folder} : null;
   }).filter(Boolean);
-  var folderNames = [];
-  document.querySelectorAll('.jfolder-name').forEach(function(el){
-    var n = el.textContent.trim(); if (n) folderNames.push(n);
+  if (!metas.length) return;
+  var title = metas.length === 1 ? 'Move "' + metas[0].name + '"' : 'Move ' + metas.length + ' Jobs';
+  openMoveModal(title, metas, async function(dest) {
+    for (var i = 0; i < metas.length; i++) {
+      try {
+        await fetch(jobApiUrl(metas[i].path, '/move'), {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({folder: dest})
+        });
+      } catch(e) { showError('Move failed: ' + e.message); }
+    }
+    mvClearSel();
+    await loadJobsList();
+    openMapView(dest);
   });
-  var dest = window.prompt('Move to folder (blank = root, or folder name):\n\nAvailable: ' + (folderNames.join(', ') || '(none)'));
-  if (dest === null) return;
-  dest = dest.trim() || null;
-  for (var i = 0; i < metas.length; i++) {
-    try {
-      await fetch(jobApiUrl(metas[i].path, '/move'), {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({folder: dest})
-      });
-    } catch(e) { showError('Move failed: ' + e.message); }
-  }
-  mvClearSel();
-  await loadJobsList();
-  openMapView(dest);
 }
 
-export async function mvBulkDelete() {
+export function mvBulkDelete() {
   var n = _mvSelected.size;
-  if (!window.confirm('Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '?')) return;
-  var paths = Array.from(_mvSelected);
-  for (var i = 0; i < paths.length; i++) {
-    try {
-      await fetch(jobApiUrl(paths[i]), {method: 'DELETE'});
-      _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== paths[i]; });
-      _mvLayers = _mvLayers.filter(function(item) {
-        if (item.path === paths[i]) { if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); return false; }
-        return true;
-      });
-    } catch(e) { showError('Delete failed: ' + e.message); }
-  }
-  mvClearSel();
-  loadJobsList();
+  if (!n) return;
+  var msg = 'Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '? This cannot be undone.';
+  openDeleteModal(msg, async function() {
+    var paths = Array.from(_mvSelected);
+    for (var i = 0; i < paths.length; i++) {
+      try {
+        await fetch(jobApiUrl(paths[i]), {method: 'DELETE'});
+        _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== paths[i]; });
+        _mvLayers = _mvLayers.filter(function(item) {
+          if (item.path === paths[i]) { if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); return false; }
+          return true;
+        });
+      } catch(e) { showError('Delete failed: ' + e.message); }
+    }
+    mvClearSel();
+    loadJobsList();
+  });
 }
 
 // Called by stat-view.js to pan to a job

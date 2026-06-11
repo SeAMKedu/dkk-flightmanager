@@ -10,6 +10,7 @@ target_gsd_cm = 3.0           # cm/px — derived height ≈ 111 m; tune to stay
 max_height_agl_m = 110        # hard ceiling (legal limit 120 m; keep margin)
 agl_safety_margin_m = 10      # added to DSM min when checking obstacle clearance
 takeoff_security_height_m = 50
+rth_height_m = 80             # return-to-home altitude; must clear all obstacles on RTH path
 transitional_speed_ms = 15    # m/s transit between waylines
 overlap_front_pct = 80
 overlap_side_pct = 70
@@ -23,6 +24,13 @@ overlap_side_pct = 70
 dsm_margin_m = 300
 finish_action = "goHome"      # goHome | hover | autoLand
 rc_lost_action = "goBack"
+
+# Advanced (obstacle-aware) waypoint mode — configured per-job in the Template Settings modal.
+# Defaults below are used when no per-job override is set.
+# advanced_mode = false
+# adv_min_height_m = 30          # lowest permitted AGL altitude (A2 1:1 rule floor)
+# adv_powerline_clearance_m = 70 # minimum AGL height over 110 kV overhead lines
+# adv_slope_f = 0.20             # max altitude-change fraction per photo interval (slope factor)
 
 [home_safety]
 # EU Open-category subcategory.

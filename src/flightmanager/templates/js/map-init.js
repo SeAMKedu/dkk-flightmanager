@@ -31,9 +31,10 @@ export function _initBaseLayers(mmlKey) {
 
 export function resetMapToUserLocation() {
   if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(function(pos) {
-      map.setView([pos.coords.latitude, pos.coords.longitude], 15);
-    });
+    navigator.geolocation.getCurrentPosition(
+      function(pos) { map.setView([pos.coords.latitude, pos.coords.longitude], 15); },
+      function()    { map.setView([64.5, 26.0], 5); }
+    );
   } else {
     map.setView([64.5, 26.0], 5);
   }

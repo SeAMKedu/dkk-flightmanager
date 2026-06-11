@@ -194,7 +194,9 @@ def run_job(
             try:
                 result = build_kmz(piece_4326, config.flight, kmz_path,
                                    dsm_path=dsm_path if not dry_run else None,
-                                   drone=drone_cfg)
+                                   drone=drone_cfg,
+                                   buildings=inp.buildings,
+                                   power_lines=inp.power_lines)
                 kmz_results.append(result)
                 if result.over_one_battery:
                     reason = (
@@ -592,9 +594,15 @@ def _synth_survey_geom(
 
     covered = survey_3067.intersection(baseline_3067)
     area_lost_pct = max(0.0, (1.0 - covered.area / baseline_3067.area) * 100) if baseline_3067.area > 0 else 0.0
-    if area_lost_pct > home_safety.max_area_loss_pct:
+
+    # Threshold check against the drawn polygon, not the full baseline. When a
+    # split piece is exported, the baseline is the full original parcel; using it
+    # for the threshold would always fire for small pieces.
+    drawn_area = original_3067.area
+    threshold_lost_pct = max(0.0, (1.0 - survey_3067.area / drawn_area) * 100) if drawn_area > 0 else 0.0
+    if threshold_lost_pct > home_safety.max_area_loss_pct:
         review_reasons.append(
-            f"Keep-out removed {area_lost_pct:.1f}% of survey area "
+            f"Keep-out removed {threshold_lost_pct:.1f}% of survey area "
             f"(threshold {home_safety.max_area_loss_pct}%)"
         )
 
@@ -607,7 +615,7 @@ def _synth_survey_geom(
         pieces_3067=[survey_3067],
         pieces_4326=[survey_4326],
         bbox_3067=survey_3067.bounds,
-        original_area_ha=original_3067.area / 10_000,
+        original_area_ha=baseline_3067.area / 10_000,
         final_area_ha=area_ha,
         area_lost_pct=area_lost_pct,
         min_dist_to_home_m=None,

@@ -49,7 +49,9 @@ function _getAlt(p)  { return p.height_m; }
 function _getArea(p) { return p.area_ha; }
 function _getFT(p)   { return p.flight_time_min; }
 function _getLostHa(p) {
-  if (p.original_area_ha == null || p.area_ha == null) return null;
+  if (p.original_area_ha == null) return null;
+  if (p.area_lost_pct != null) return p.original_area_ha * p.area_lost_pct / 100;
+  if (p.area_ha == null) return null;
   return Math.max(0, p.original_area_ha - p.area_ha);
 }
 
