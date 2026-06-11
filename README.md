@@ -2,6 +2,8 @@
 
 # dkk-flightmanager
 
+> **Work in progress** — this is an internal research tool under active development. It is not yet polished or packaged for general use. Expect rough edges, breaking changes, and incomplete documentation.
+
 DJI terrain-following mapping job generator for Finnish agricultural field parcels.
 
 `dkk-flightmanager` is a planning tool for drone mapping surveys over Finnish farmland. Identify the survey area by pasting *peruslohkotunnus* field parcel IDs (Ruokavirasto), *kiinteistötunnus* cadastral property IDs, a bounding box, or a polygon drawn directly on the map — the tool fetches field boundaries, 2 m terrain elevation, building footprints, and high-voltage power line geometry from National Land Survey of Finland (MML) open data APIs, checks Traficom UAS restriction zones, and writes a ready-to-fly DJI Pilot 2 mapping job. A built-in browser UI handles everything from parcel lookup and polygon editing to flight parameter tuning and batch job creation for large parcel sets.
@@ -20,6 +22,112 @@ Output files written per job:
 | `job_params.json` | Browser UI save state (inputs, flight params, polygon params, last preview) — used to re-open the job for editing |
 | `thumbnail.svg` | Small polygon thumbnail shown in the jobs panel |
 | `run.log` | Structured log for this run |
+
+## Contents
+
+- [Architecture](#architecture)
+- [Setup](#setup)
+- [Browser UI](#browser-ui)
+  - [Jobs panel](#jobs-panel)
+  - [Defining the survey area](#defining-the-survey-area)
+  - [Flight and polygon parameters](#flight-and-polygon-parameters)
+  - [Preview](#preview)
+  - [3D flight preview](#3d-flight-preview)
+  - [Variable-altitude flight path](#variable-altitude-flight-path)
+  - [Polygon editing](#polygon-editing)
+  - [Map tools](#map-tools)
+  - [Save and settings](#save-and-settings)
+- [AI assistant integration (MCP)](#ai-assistant-integration-mcp)
+- [CLI usage](#cli-usage)
+  - [Specifying the survey area](#specifying-the-survey-area)
+  - [All run options](#all-flightmanager-run-options)
+  - [Polygon simplification](#polygon-simplification---simplify)
+  - [Survey polygon offset](#survey-polygon-offset---offset)
+  - [Disabling keep-out subtraction](#disabling-keep-out-subtraction---no-keepout)
+  - [Drone profiles](#drone-profiles---drone)
+  - [Strip speed (auto mode)](#strip-speed-auto-mode)
+  - [Batch skeleton job creation](#batch-skeleton-job-creation-flightmanager-batch)
+  - [Cache management](#cache-management)
+- [Operator workflow](#operator-workflow)
+- [Subcategory and keep-out distances](#subcategory-and-keep-out-distances)
+- [Safety notes](#safety-notes)
+- [Disclaimer](#disclaimer)
+- [Attribution (CC-BY 4.0)](#attribution-cc-by-40)
+
+---
+
+## Architecture
+
+### Technology stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.10+, FastAPI, uvicorn |
+| Geometry | Shapely, pyproj (EPSG:3067 internally, EPSG:4326 output) |
+| Raster / DSM | rasterio, numpy |
+| KMZ / WPML | lxml, zipfile |
+| Tile cache | SQLite (1 km grid, atomic writes) |
+| Frontend | Vanilla JS (ES modules), Leaflet 1.9, Leaflet.draw, CesiumJS (CDN, 3D view) |
+| Config | TOML (`config.toml`), Pydantic v2 models |
+| CLI | Typer |
+
+All geometry is kept in EPSG:3067 (Finnish national projection, metres) throughout the pipeline and reprojected to EPSG:4326 only for KMZ/KML output and the browser map.
+
+### Pipeline
+
+Every job runs through the same ordered stages in `pipeline.py:run_job()`:
+
+```
+Parcel / property fetch  →  Buildings fetch  →  Geometry processing
+  →  DEM tiles  →  DSM mosaic  →  Zone check  →  KMZ  →  Homes KML
+  →  HTML preview  →  Manifest
+```
+
+`run_preview()` runs only the first five stages (no file output) and returns a GeoJSON payload with a base64 DSM thumbnail. The browser calls preview on every parameter change; export (Save) runs the full pipeline.
+
+Progress is streamed to the browser via Server-Sent Events (`GET /api/progress/{job_id}`). The pipeline runs in a single-worker `ThreadPoolExecutor`; a second job returns HTTP 409 while one is in flight.
+
+### Data sources and caching
+
+| Source | What it provides | Cache |
+|---|---|---|
+| Ruokavirasto WFS | Field parcel boundaries (*peruslohko*) | SQLite, 400-day TTL |
+| MML OGC API | Cadastral property boundaries (*kiinteistö*) | SQLite, 400-day TTL |
+| MML WMTS/WCS | 2 m DEM tiles (elevation model) | SQLite tile cache, 1 km grid |
+| MML Maastotietokanta | Building footprints + power lines | SQLite tile cache, 1 km grid |
+| Traficom REST | UAS restriction zones | SQLite, 1-day TTL |
+
+Tile cache keys are `E{xmin}_N{ymin}` on the 1 km EPSG:3067 grid. All writes are atomic. Building and DEM tiles share the same SQLite database as parcel/property geometry records (`cache.py` and `geo_cache.py` share the same DB primitives).
+
+### KMZ structure
+
+The output KMZ is a ZIP containing:
+- `wpmz/template.kml` — mission envelope (drone enum, camera, action defaults). `templateType=mapping2d` in simple mode; `templateType=waypoint` in advanced (variable-altitude) mode.
+- `wpmz/waylines.wpml` — route waypoints. Simple mode: a stub generated by DJI Pilot 2 at import time. Advanced mode: explicit per-waypoint altitudes and speeds generated by `waylines_builder.py`.
+- `<name>_dsm.tif` — terrain-follow DSM clipped to the survey polygon, embedded for Pilot 2 to link automatically.
+
+### Advanced (variable-altitude) mode
+
+When the Terrain tab's **Variable altitude** toggle is on, two additional modules run between route planning and KMZ generation:
+
+1. **`obstacle_heights.py`** — computes one altitude per strip from building proximity (A2 1:1 rule relative to rooftop height) and power-line clearance requirements. A forward + backward slope filter ensures the profile is physically achievable given the drone's climb rate.
+2. **`waylines_builder.py`** — converts the altitude profile into a WPML waypoint sequence with per-waypoint speed (`drone.auto_speed(h, overlap)`) and continuous-shooting action groups per strip.
+
+### Frontend structure
+
+The single-page UI (`templates/ui.html`) loads JavaScript as ES modules from `templates/js/`. Key modules:
+
+| Module | Responsibility |
+|---|---|
+| `main.js` | Init, wires up all other modules |
+| `route-planner.js` | Calls `POST /api/route_estimate`, updates 2D overlay and notifies Cesium |
+| `preview-runner.js` | Calls `POST /api/preview`, manages SSE progress |
+| `job-ops.js` | Save / open / clone / delete job |
+| `map-layers.js` | Leaflet layer management (route, coverage, buildings, zones, DSM) |
+| `cesium-view.js` | CesiumJS 3D view; lazy-loads from CDN on first use |
+| `tpl-modal.js` | Template Settings modal (overlap, safety, variable-altitude params) |
+| `map-view.js` | Folder map view (job polygon overlays, statistics, timeline) |
+| `dirty-tracking.js` | Unsaved-change detection and confirmation prompts |
 
 ## Setup
 
@@ -159,17 +267,19 @@ The **⚙** gear icon next to the Flight section header opens the **Template Set
 
 ### Preview
 
-Click **↻ Update** (or change any parameter) to run a preview. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, DSM elevation overlay, and the flight route overlay — all layers are toggleable from the legend.
+Preview runs automatically whenever a parameter changes. The map shows the survey polygon, original parcel outlines, keep-out circles, buildings, warning radius circles, UAS zones, DSM elevation overlay, and the flight route overlay — all layers are toggleable from the legend.
 
 - **Power lines** — high-voltage lines (110 kV+) from MML *Maastotietokanta* (`sahkolinja`) are fetched for the same area as buildings. Overhead spans (solid amber on the map) automatically subtract a configurable keep-out buffer from the survey polygon. Underground cables (dashed amber) are shown for situational awareness only — no keep-out buffer applied. MTK misclassification is corrected automatically: any 22311-coded segment whose endpoints match pylon tower locations in `suurjannitelinjanpylvas` is re-classified as overhead before the keep-out is computed. Disable or adjust the buffer under **⚙ Settings → Power Lines**.
 - **UAS zones** are clickable: see altitude floor/ceiling and all overlapping zones at a point. Inner concentric zones of an airfield are shown with a dashed border for context. The zones legend layer auto-enables when zones first appear.
-- **Zone altitude cap** — when a zone hit carries an altitude floor, flight height is automatically set to 75 % of that floor and the warning radius re-syncs. An orange warning appears if you raise height above the floor. The cap is advisory; override freely.
+- **Zone altitude cap** — when a zone hit carries an altitude floor, flight height is automatically capped to that floor value and the warning radius re-syncs. Buffer-only and context-only zones (e.g. inner concentric airfield zones shown for reference) are excluded from the cap. The cap is advisory; override freely.
 - **Takeoff marker** — a white ✕ on the polygon boundary marks the auto-suggested takeoff/landing point (the boundary point that minimises worst-case VLOS distance). Drag it to a more convenient spot. Click **↺ Reset takeoff position** to revert. Saved with the job.
 - **Route overlay** — amber lines show the planned lawnmower survey strips and all transit legs (inter-strip turns, takeoff-to-start, and return-to-home). Each strip has a `›` direction chevron at its midpoint so you can see which end the drone departs from. For concave polygons, inter-strip transitions that would exit the survey area are automatically rerouted along the polygon boundary (shorter direction). The status panel below the map shows strip count, estimated photo count, and estimated total flight time. The route auto-computes on every parameter change; an accurate Python estimate (EPSG:3067 geometry, correct home transit distance) replaces the instant JS approximation 800 ms after input settles. Layer visibility is remembered across parameter changes and job switches. Legend eye toggles are persistent for the session.
 - **Coverage layer** (off by default, toggle in legend) — semi-transparent amber rectangles showing the exact camera footprint for every strip. Toggle on to verify edge coverage and confirm the first/last strip reach the polygon boundary (the first strip is centred at `footprint_width / 2` from the boundary, matching DJI Pilot 2's `margin=0` convention).
 - **DSM elevation overlay** — the terrain-follow DSM thumbnail is rendered using a viridis colour palette (purple = low, yellow = high).
 
 ### 3D flight preview
+
+> **Work in progress**
 
 Click the **3D** button in the map controls (top-left, next to the layer switcher) to switch from the Leaflet 2D view to an interactive CesiumJS 3D globe. The button is enabled once a route estimate has been computed.
 
@@ -182,6 +292,8 @@ In 3D view:
 The 3D view loads CesiumJS from a CDN on first use; subsequent activations are instant.
 
 ### Variable-altitude flight path
+
+> **Work in progress** Just the initial code to handle this is in place. The path generation is flawed and hasn't been tested yet on actual drone.
 
 Enable **Variable altitude** in the Terrain tab of the Template Settings modal (⚙ next to the Flight section header). When active:
 
