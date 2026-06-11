@@ -24,15 +24,23 @@ from flightmanager.config import HomeSafetyConfig
 # Fixture features (EPSG:3067 coords, Finnish range)
 # ---------------------------------------------------------------------------
 
-def _make_feature(mtk_id: int, kohdeluokka: int, kayttotarkoitus: int) -> dict:
+def _make_feature(
+    mtk_id: int,
+    kohdeluokka: int,
+    kayttotarkoitus: int,
+    kerrosluku: int | None = None,
+) -> dict:
+    props: dict = {
+        "mtk_id": mtk_id,
+        "kohdeluokka": kohdeluokka,
+        "kayttotarkoitus": kayttotarkoitus,
+        "alkupvm": "2025-03-01",
+    }
+    if kerrosluku is not None:
+        props["kerrosluku"] = kerrosluku
     return {
         "type": "Feature",
-        "properties": {
-            "mtk_id": mtk_id,
-            "kohdeluokka": kohdeluokka,
-            "kayttotarkoitus": kayttotarkoitus,
-            "alkupvm": "2025-03-01",
-        },
+        "properties": props,
         "geometry": {
             "type": "Polygon",
             "coordinates": [[
@@ -73,6 +81,17 @@ class TestToBuilding:
         assert b.mtk_id == 1001
         assert b.kohdeluokka == 42211
         assert b.kayttotarkoitus == 1
+        assert b.kerrosluku is None  # not present in FEAT_RESIDENTIAL fixture
+
+    def test_kerrosluku_parsed(self):
+        feat = _make_feature(9001, 42211, 1, kerrosluku=3)
+        b = _to_building(feat)
+        assert b is not None
+        assert b.kerrosluku == 3
+
+    def test_kerrosluku_absent_is_none(self):
+        b = _to_building(FEAT_RESIDENTIAL)
+        assert b.kerrosluku is None
 
     def test_geometry_in_3067(self):
         b = _to_building(FEAT_RESIDENTIAL)

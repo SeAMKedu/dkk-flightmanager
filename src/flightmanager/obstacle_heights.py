@@ -13,7 +13,6 @@ import math
 from typing import TYPE_CHECKING
 
 from shapely.geometry import Point
-from shapely.ops import unary_union
 
 if TYPE_CHECKING:
     from flightmanager.buildings import Building
@@ -22,6 +21,31 @@ if TYPE_CHECKING:
     from flightmanager.route import RouteResult
 
 _MAX_CLIMB_MS = 3.0  # conservative max vertical speed (m/s) for M3M/M3E in waypoint mode
+
+_FLOOR_HEIGHT_M = 3.0  # metres per storey (kerrosluku)
+
+# Estimated building height by MML kohdeluokka when kerrosluku is absent.
+# Applied as d_effective = horizontal_distance + building_height so that the
+# 1:1 proximity metric is relative to the rooftop rather than the ground.
+_KOHDELUOKKA_HEIGHT_M: dict[int, float] = {
+    42210: 7.0, 42211: 7.0, 42212: 10.0,  # asuinrakennus (residential; 42212 = 3+ floors)
+    42220: 7.0, 42221: 7.0, 42222: 7.0,   # liike-/julkinen (commercial/public)
+    42230: 4.0, 42231: 4.0, 42232: 4.0,   # lomarakennus (holiday/cabin)
+    42240: 15.0, 42241: 15.0, 42242: 15.0, # teollinen (industrial/silo)
+    42260: 10.0, 42261: 10.0, 42262: 10.0, # maatalous/varasto (agricultural/storage)
+}
+_DEFAULT_HEIGHT_M = 7.0
+
+
+def building_height_m(b: Building) -> float:
+    """Estimated building height in metres.
+
+    Uses ``kerrosluku`` (floor count) × 3 m when available; falls back to
+    a per-kohdeluokka heuristic.
+    """
+    if b.kerrosluku is not None and b.kerrosluku > 0:
+        return b.kerrosluku * _FLOOR_HEIGHT_M
+    return _KOHDELUOKKA_HEIGHT_M.get(b.kohdeluokka, _DEFAULT_HEIGHT_M)
 
 
 def compute_altitude_profile(
@@ -59,9 +83,6 @@ def compute_altitude_profile(
     )
 
     # Shapely geometry for obstacle lookups
-    bldg_union = (
-        unary_union([b.geometry for b in buildings]) if buildings else None
-    )
     pl_geoms = [pl.geometry for pl in power_lines if pl.is_overhead]
 
     # Raw target altitude per strip
@@ -69,9 +90,15 @@ def compute_altitude_profile(
     for x1, y1, x2, y2 in route.strips_3067:
         mid = Point((x1 + x2) / 2.0, (y1 + y2) / 2.0)
 
-        if bldg_union is not None:
-            d = mid.distance(bldg_union)
-            h = float(min(max(d, min_h), flight_height_m))
+        if buildings:
+            # d_effective = horizontal_distance + building_height applies the
+            # 1:1 proximity rule from the rooftop rather than the ground.
+            # The building with the smallest d_eff is the binding constraint.
+            best_d_eff = min(
+                mid.distance(b.geometry) + building_height_m(b)
+                for b in buildings
+            )
+            h = float(min(max(best_d_eff, min_h), flight_height_m))
         else:
             h = flight_height_m
 

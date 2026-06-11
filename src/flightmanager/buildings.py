@@ -60,6 +60,7 @@ class Building:
     kayttotarkoitus: int | None
     geometry: BaseGeometry   # Shapely polygon, EPSG:3067
     alkupvm: str | None      # source date (for provenance)
+    kerrosluku: int | None = None  # floor count from MML API (None if absent)
 
 
 def tile_fetcher(
@@ -174,12 +175,15 @@ def _to_building(feature: dict) -> Building | None:
         props = feature.get("properties") or {}
         geom = shape(feature["geometry"])
         require_3067(geom)
+        raw_floors = props.get("kerrosluku")
+        kerrosluku = int(raw_floors) if raw_floors is not None else None
         return Building(
             mtk_id=int(props["mtk_id"]),
             kohdeluokka=int(props.get("kohdeluokka", 0)),
             kayttotarkoitus=props.get("kayttotarkoitus"),
             geometry=geom,
             alkupvm=props.get("alkupvm"),
+            kerrosluku=kerrosluku,
         )
     except Exception as exc:
         log.warning("Skipping building feature: %s", exc)
