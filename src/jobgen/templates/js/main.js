@@ -23,7 +23,8 @@ import { toggleJobSelection, clearSelection, openMergeModal, closeMergeModal, su
 import { closeCardMenu, createFolder, closeFolderDialog, submitFolder, showMoveMenu, doMoveJob } from './card-menu.js';
 import { autoSortFolder, closeRouteConfirmModal } from './drag-reorder.js';
 import { bulkMove, bulkDelete, exportKml, openGoogleMaps, routeRename,
-         exportRoute, closeExportRouteModal, submitExportRoute } from './bulk-ops.js';
+         exportRoute, closeExportRouteModal, submitExportRoute,
+         unifiedMerge, unifiedBulkMove, unifiedBulkDelete, unifiedClearSel } from './bulk-ops.js';
 import { openBatchDialog, closeBatchDialog, setBatchType, submitBatch } from './batch-modal.js';
 import { routeAngleAuto, routeAngleStep, speedAuto, speedStep, updateRouteStats } from './route-planner.js';
 import { onStatModeChange, _mvStatJobClick } from './stat-view.js';
@@ -82,6 +83,7 @@ Object.assign(window, {
   // bulk-ops
   bulkMove, bulkDelete, exportKml, openGoogleMaps, routeRename,
   exportRoute, closeExportRouteModal, submitExportRoute,
+  unifiedMerge, unifiedBulkMove, unifiedBulkDelete, unifiedClearSel,
 
   // batch-modal
   openBatchDialog, closeBatchDialog, setBatchType, submitBatch,

@@ -84,9 +84,6 @@
 #jp-batch:hover{background:#334155;color:#f8fafc}
 #jp-newfolder{flex:1;margin:0;padding:6px 0;background:#1e293b;border:1px solid #334155;border-radius:4px;color:#94a3b8;font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:background .12s,color .12s}
 #jp-newfolder:hover{background:#334155;color:#f8fafc}
-#jp-sel-bar{display:none;align-items:center;flex-wrap:wrap;gap:4px;padding:4px 8px;background:#172035;border:1px solid #3b82f6;border-radius:4px;margin:0 6px 4px;flex-shrink:0}
-#jp-sel-bar.visible{display:flex}
-#jp-sel-count{font-size:11px;font-weight:700;color:#93c5fd;white-space:nowrap;margin-right:auto}
 .sel-action{background:none;border:1px solid #334155;border-radius:3px;color:#94a3b8;font-size:10px;padding:2px 7px;cursor:pointer;white-space:nowrap;width:auto;font-weight:600;transition:color .12s,border-color .12s}
 .sel-action:hover{color:#f8fafc;border-color:#475569}
 .sel-action.danger{color:#fca5a5;border-color:#7f1d1d}

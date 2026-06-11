@@ -94,6 +94,7 @@ export function closeMapView() {
   });
   _mvSelected.clear();
   _mvUpdateSelBar();
+  _updateSelBar(); // re-show list-mode toast if jobs were selected in the panel
 
   document.getElementById('sb').classList.remove('mv-hidden');
   document.getElementById('legend').classList.remove('mv-hidden');
@@ -394,7 +395,7 @@ export function mvClearSel() {
 
 function _mvUpdateSelBar() {
   var n = _mvSelected.size;
-  document.getElementById('mv-actions').classList.toggle('visible', _mvMode);
+  document.getElementById('mv-actions').classList.toggle('visible', _mvMode && n > 0);
   document.getElementById('mv-sel-count').textContent = n + ' selected';
   document.getElementById('mv-merge-btn').disabled = n < 2;
   var openBtn = document.getElementById('mv-open-btn');

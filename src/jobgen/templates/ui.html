@@ -44,16 +44,6 @@
       <div id="jp-filter-row">
         <input type="text" id="jp-filter" placeholder="Filter&#8230;">
       </div>
-      <div id="jp-sel-bar">
-        <span id="jp-sel-count">0 selected</span>
-        <button class="sel-action" id="sel-merge-btn" onclick="openMergeModal()">Merge</button>
-        <button class="sel-action" onclick="exportKml()">Export KML</button>
-        <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
-        <button class="sel-action" onclick="routeRename()">Route rename</button>
-        <button class="sel-action" onclick="bulkMove()">Move</button>
-        <button class="sel-action danger" onclick="bulkDelete()">Delete</button>
-        <button class="sel-clear" onclick="clearSelection()" title="Clear selection">&#10005;</button>
-      </div>
       <div id="jp-list"></div>
     </div>
     <button id="jp-tog" onclick="toggleJp()" title="Toggle jobs panel">&#9664;</button>
@@ -184,14 +174,14 @@
     <div id="mv-actions">
       <span id="mv-sel-count"></span>
       <button class="sel-action" id="mv-open-btn" onclick="mvOpenJob(this.dataset.path)" style="display:none">Open</button>
-      <button class="sel-action" id="mv-merge-btn" onclick="mvMerge()">Merge</button>
+      <button class="sel-action" id="mv-merge-btn" onclick="unifiedMerge()">Merge</button>
       <button class="sel-action" onclick="exportKml()">Export KML</button>
       <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
       <button class="sel-action" onclick="routeRename()">Route rename</button>
       <button class="sel-action" onclick="exportRoute()">Export Route</button>
-      <button class="sel-action" onclick="mvBulkMove()">Move</button>
-      <button class="sel-action danger" id="mv-delete-btn" onclick="mvBulkDelete()">Delete</button>
-      <button class="sel-clear" onclick="mvClearSel()" title="Clear selection">&#10005;</button>
+      <button class="sel-action" id="mv-move-btn" onclick="unifiedBulkMove()">Move</button>
+      <button class="sel-action danger" id="mv-delete-btn" onclick="unifiedBulkDelete()">Delete</button>
+      <button class="sel-clear" onclick="unifiedClearSel()" title="Clear selection">&#10005;</button>
     </div>
     <!-- Map view: right column — status legend + stat panel (top-right) -->
     <div id="mv-right-panel">

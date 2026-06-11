@@ -46,11 +46,13 @@ export function clearSelection() {
 }
 
 export function _updateSelBar() {
+  if (getMvMode()) return; // map view manages #mv-actions via _mvUpdateSelBar
   var n = _selectedJobs.size;
-  var bar = document.getElementById('jp-sel-bar');
-  bar.classList.toggle('visible', n > 0);
-  document.getElementById('jp-sel-count').textContent = n + ' selected';
-  document.getElementById('sel-merge-btn').disabled = n < 2;
+  document.getElementById('mv-actions').classList.toggle('visible', n > 0);
+  document.getElementById('mv-sel-count').textContent = n + ' selected';
+  document.getElementById('mv-merge-btn').disabled = n < 2;
+  var openBtn = document.getElementById('mv-open-btn');
+  if (openBtn) openBtn.style.display = 'none'; // Open only relevant in map mode
 }
 
 export function openMergeModal() {

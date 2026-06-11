@@ -4,10 +4,11 @@ import { st } from './state.js';
 import { escHtml, jobApiUrl, _escapeXml, _hexToKmlColor } from './utils.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
-import { _selectedJobs, _selectedMeta, clearSelection } from './multi-select.js';
+import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal } from './multi-select.js';
 import { closeCardMenu, getOpenMenu, setOpenMenu } from './card-menu.js';
 // Circular — only called at runtime:
-import { getMvMode, getMvSelected, getMvCurrentFolder, openMapView } from './map-view.js';
+import { getMvMode, getMvSelected, getMvCurrentFolder, openMapView,
+         mvMerge, mvBulkMove, mvBulkDelete, mvClearSel } from './map-view.js';
 import { openJob } from './job-ops.js';
 
 export function bulkMove() {
@@ -17,7 +18,7 @@ export function bulkMove() {
     var n = el.textContent.trim(); if (n) folderNames.push(n);
   });
 
-  var btn = document.getElementById('jp-sel-bar').querySelector('.sel-action:nth-child(3)');
+  var btn = document.getElementById('mv-move-btn');
   closeCardMenu();
   var sub = document.createElement('div');
   sub.className = 'jmenu';
@@ -285,3 +286,8 @@ export async function bulkDelete() {
   clearSelection();
   await loadJobsList();
 }
+
+export function unifiedMerge()      { if (getMvMode()) { mvMerge(); }       else { openMergeModal(); } }
+export function unifiedBulkMove()   { if (getMvMode()) { mvBulkMove(); }    else { bulkMove(); } }
+export function unifiedBulkDelete() { if (getMvMode()) { mvBulkDelete(); }  else { bulkDelete(); } }
+export function unifiedClearSel()   { if (getMvMode()) { mvClearSel(); }    else { clearSelection(); } }
