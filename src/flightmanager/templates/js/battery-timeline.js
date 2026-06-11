@@ -121,7 +121,7 @@ function _btRender(routable, groups, mvLayers) {
   out.push('<svg width="' + svgW + '" height="' + SVG_H
     + '" xmlns="http://www.w3.org/2000/svg" pointer-events="none">');
 
-  segments.forEach(function(seg) {
+  segments.forEach(function(seg, si) {
     var sx = seg.x;
     var cx = sx + seg.w / 2;
 
@@ -134,7 +134,7 @@ function _btRender(routable, groups, mvLayers) {
       + '" opacity="0.88" pointer-events="auto" cursor="pointer"'
       + ' data-path="' + escHtml(seg.path) + '"/>');
 
-    if (seg.w >= IDX_R * 2 + 2) {
+    if (seg.isBatStart) {
       out.push('<circle cx="' + cx + '" cy="' + IDX_CY + '" r="' + IDX_R
         + '" fill="#f59e0b" stroke="#fff" stroke-width="1.5"/>');
       out.push('<text x="' + cx + '" y="' + IDX_CY

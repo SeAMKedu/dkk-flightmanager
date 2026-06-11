@@ -34,9 +34,7 @@ export function getMvLayers() { return _mvLayers; }
 
 export function showFolderOnMap(e, folderName) {
   e.stopPropagation();
-  var f = folderName || null;
-  if (_mvMode && _mvCurrentFolder === f) { closeMapView(); return; }
-  openMapView(f);
+  openMapView(folderName || null);
 }
 
 export function openMapView(folderFilter) {
