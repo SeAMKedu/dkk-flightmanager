@@ -1,3 +1,5 @@
+![Datakasvukunto](images/logo_dkk.png)
+
 # dkk-flightmanager
 
 DJI terrain-following mapping job generator for Finnish agricultural field parcels.
@@ -101,7 +103,7 @@ The panel updates live — changes made by the CLI, MCP server, or another tab a
 
 **Map view:** click **Map** on any folder header to see all its job polygons on the map. Dash pattern encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown. Hover a polygon to open a popup with the job name, status, area, and two quick actions: **⊘ Skip** (exclude the job from route ordering and counting) and **Delete**. Skipped jobs render at low opacity. Hover the popup to keep it open; mouse out to dismiss. Click a polygon to select it; double-click to open the job for editing. Ctrl+click to multi-select. Click **Map** again, open a job, or click **＋ New Job** to return to the editor.
 
-A toolbar floats at the top of the map whenever map view is active. **Export Route** copies the `.kmz` and homes KML for every route job in the current folder to a local directory you specify — a quick way to collect all mission files before heading to the field. Route jobs are those with a computed takeoff point that have not been marked as skipped; `homes.kml` files are renamed `<job_name>_homes.kml` to avoid collisions. The remaining toolbar buttons (**Merge**, **Export KML**, **Google Maps**, **Route rename**, **Move**, **Delete**) become active when one or more jobs are selected.
+A toolbar floats at the top of the map whenever map view is active. **Export Route** copies the `.kmz` and homes KML for every route job in the current folder to a local directory you specify — a quick way to collect all mission files before heading to the field. Route jobs are those with a computed takeoff point that have not been marked as skipped; `homes.kml` files are renamed `<job_name>_homes.kml` to avoid collisions. **Auto route** computes the optimal survey order for all ready jobs in the folder using a greedy nearest-neighbour algorithm (starting from the northernmost takeoff point); if some jobs already have route positions, a modal offers to re-route everything from scratch or slot in only the unrouted ones. The remaining toolbar buttons (**Merge**, **Export KML**, **Google Maps**, **Route rename**, **Move**, **Delete**) become active when one or more jobs are selected.
 
 **Statistics panel:** a card below the status legend (top-right) shows summary statistics for the current folder. Use the dropdown to switch between seven modes:
 
@@ -691,3 +693,11 @@ All data sources require attribution. The manifest records the exact strings wit
 This tool was developed as part of the **[Datakasvukunto](https://projektit.seamk.fi/kestavat-ruokaratkaisut/datakasvukunto/)** project at [Seinäjoki University of Applied Sciences (SeAMK)](https://www.seamk.fi).
 
 More projects from SeAMK: [github.com/SeAMKedu](https://github.com/SeAMKedu)
+
+---
+
+![SeAMK](images/logo_seamk.jpg) 
+---
+![Luke](images/logo_luke.png) 
+---
+![Co-funded by the European Union](images/logo_cofunded.png)
