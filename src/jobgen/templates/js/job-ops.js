@@ -1,79 +1,109 @@
-// ── Job open / restore ────────────────────────────────────────────────────────
+// ── Job open / restore / delete / rename / stale / color ─────────────────────
 
-function openJob(path) {
-  if (isRunning) return;
-  if (_mvMode) closeMapView();
-  confirmIfDirty(function() { _mvFromEditor = true; _doOpenJob(path); });
+import { st } from './state.js';
+import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from './map-init.js';
+import { escHtml, jobApiUrl } from './utils.js';
+import { markDirty } from './dirty-tracking.js';
+import { confirmIfDirty } from './dirty-tracking.js';
+import { showError, clearError, updateFolderHint, updateGsd, setRadiusLinked,
+         setSub, setSimpAuto, setSimpManual, setAutoTimer,
+         getAutoTimer, setFitBoundsFlag, setLastPreviewedIds, _setEditedPoly, _clearEditedPoly,
+         _setSec } from './form-controls.js';
+import { _legendUserVis, redrawRings, resetLegend } from './legend.js';
+import { loadJobsList } from './jobs-panel.js';
+import { renderStatus } from './status-panel.js';
+import { renderMap } from './map-layers.js';
+import { updateRouteOverlay, updateRouteStats, setRouteAngleSilent as _setRouteAngleSilentRP,
+         setSpeedSilent, _renderAngleControl } from './route-planner.js';
+import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
+import { hideExtModifiedNotice } from './event-stream.js';
+// Circular — only called at runtime:
+import { startPreview } from './preview-runner.js';
+import { closeMapView, getMvMode, setMvFromEditor, openMapView } from './map-view.js';
+import { _detachEditListeners } from './polygon-edit.js';
+import { _clearTakeoff, getTakeoffAuto, getTakeoffUserMoved, _renderTakeoffMarker,
+         setTakeoffAuto, setTakeoffUserMoved } from './takeoff.js';
+
+export function openJob(path) {
+  if (st.isRunning) return;
+  if (getMvMode()) closeMapView();
+  confirmIfDirty(function() { setMvFromEditor(true); _doOpenJob(path); });
 }
 
-async function _doOpenJob(path) {
+export async function _doOpenJob(path) {
   try {
     var r = await fetch(jobApiUrl(path));
     if (!r.ok) { showError('Could not load job: HTTP ' + r.status); return; }
     var data = await r.json();
     var p = data.params;
     var name = path.includes('/') ? path.split('/').pop() : path;
-    if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
+    var autoTimer = getAutoTimer();
+    if (autoTimer) { clearTimeout(autoTimer); setAutoTimer(null); }
     Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-    lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
+    resetLrs();
     editLayers.clearLayers();
-    editMode = false; _detachEditListeners();
+    st.editMode = false; _detachEditListeners();
     _clearTakeoff();
     if (p && p.takeoff_point_4326) {
-      _takeoffAuto = p.takeoff_point_4326;
-      _takeoffUserMoved = true;
+      setTakeoffAuto(p.takeoff_point_4326);
+      setTakeoffUserMoved(true);
       _renderTakeoffMarker(p.takeoff_point_4326);
     }
     _restoreFormFromParams(p);
     document.getElementById('jname').value = name;
-    _activeJob = path;
-    _activeJobFolder = data.folder || null;
+    st._activeJob = path;
+    st._activeJobFolder = data.folder || null;
     updateFolderHint();
     _setColorPicker(p && p.color);
-    _dirty = false;
+    st._dirty = false;
     clearError();
     hideExtModifiedNotice();
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
-    _fitBoundsOnNextRender = true;
+    setFitBoundsFlag(true);
     if (p && p.last_preview_geojson) {
-      previewData = p.last_preview_geojson;
-      _lastPreviewedIds = ((p.inputs && p.inputs.parcel_ids)||[]).join(',')
-        + '||' + ((p.inputs && p.inputs.property_ids)||[]).join(',');
+      st.previewData = p.last_preview_geojson;
+      setLastPreviewedIds(
+        ((p.inputs && p.inputs.parcel_ids)||[]).join(',')
+        + '||' + ((p.inputs && p.inputs.property_ids)||[]).join(',')
+      );
       try {
-        renderMap(previewData);
+        renderMap(st.previewData);
         redrawRings();
-        if (previewData.stats && previewData.stats.route_angle_deg_auto != null) {
-          _routeAngleAuto = previewData.stats.route_angle_deg_auto;
+        if (st.previewData.stats && st.previewData.stats.route_angle_deg_auto != null) {
+          st._routeAngleAuto = st.previewData.stats.route_angle_deg_auto;
           _renderAngleControl();
         }
         updateRouteOverlay();
         resetLegend(_legendUserVis);
-        renderStatus(previewData.stats);
-        if (previewData.stats) {
+        renderStatus(st.previewData.stats);
+        if (st.previewData.stats) {
           updateRouteStats({
-            strip_count:     previewData.stats.route_strip_count,
-            photo_count:     previewData.stats.route_photo_count,
-            flight_time_min: previewData.stats.route_flight_time_min,
+            strip_count:     st.previewData.stats.route_strip_count,
+            photo_count:     st.previewData.stats.route_photo_count,
+            flight_time_min: st.previewData.stats.route_flight_time_min,
           });
         }
         document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
       } catch(ex) { console.error('[openJob] render error', ex); }
     } else {
-      previewData = null;
+      st.previewData = null;
       renderStatus(null);
       document.getElementById('legend').classList.add('inactive');
-      if (editedPoly) {
-        previewData = {survey: editedPoly};
-        _updateSurveyDisplay(editedPoly);
-        map.fitBounds(lrs.survey.getBounds(), {padding: [40, 40]});
+      if (st.editedPoly) {
+        st.previewData = {survey: st.editedPoly};
+        import('./polygon-edit.js').then(function(m){ m._updateSurveyDisplay(st.editedPoly); });
+        // fitBounds after display
+        setTimeout(function(){
+          if (lrs.survey) map.fitBounds(lrs.survey.getBounds(), {padding: [40, 40]});
+        }, 50);
         document.getElementById('xb').disabled = false;
         document.getElementById('rstbtn').disabled = false;
       } else {
         document.getElementById('xb').disabled = true;
         document.getElementById('rstbtn').disabled = true;
         resetMapToUserLocation();
-        focusArea();
+        import('./form-controls.js').then(function(m){ m.focusArea(); });
       }
     }
     if (data.cache_stale && data.cache_stale.length) showStaleNotice(data.cache_stale);
@@ -95,7 +125,7 @@ function _restoreFormFromParams(p) {
       updateGsd();
     }
     if (p.flight.subcategory) setSub(p.flight.subcategory, true);
-    setRouteAngleSilent(p.flight.route_angle_deg != null ? p.flight.route_angle_deg : null);
+    _setRouteAngleSilentRP(p.flight.route_angle_deg != null ? p.flight.route_angle_deg : null);
     setSpeedSilent(p.flight.speed_ms != null ? p.flight.speed_ms : null);
   }
   if (p.polygon) {
@@ -113,20 +143,18 @@ function _restoreFormFromParams(p) {
   if (p.custom_polygon_4326) {
     _setEditedPoly(p.custom_polygon_4326);
   } else {
-    editedPoly = null; polyModified = false;
+    st.editedPoly = null; st.polyModified = false;
     document.getElementById('modbadge').style.display = 'none';
   }
   var hasIds = !!(p.inputs && ((p.inputs.parcel_ids||[]).length || (p.inputs.property_ids||[]).length));
   _setSec('area', hasIds);
 }
 
-// ── Back to map view ──────────────────────────────────────────────────────────
-function goBackToMap() {
-  confirmIfDirty(function() { openMapView(_activeJobFolder || null); });
+export function goBackToMap() {
+  confirmIfDirty(function() { openMapView(st._activeJobFolder || null); });
 }
 
-// ── Reveal in file manager ────────────────────────────────────────────────────
-async function revealJob(path) {
+export async function revealJob(path) {
   try {
     var r = await fetch(jobApiUrl(path, '/reveal'), {method:'POST'});
     if (!r.ok) {
@@ -136,9 +164,8 @@ async function revealJob(path) {
   } catch(e) { showError('Could not open folder: ' + e.message); }
 }
 
-// ── Clone ─────────────────────────────────────────────────────────────────────
-async function cloneJob(path) {
-  if (isRunning) return;
+export async function cloneJob(path) {
+  if (st.isRunning) return;
   try {
     var r = await fetch(jobApiUrl(path, '/clone'), {method:'POST'});
     if (!r.ok) {
@@ -151,8 +178,7 @@ async function cloneJob(path) {
   } catch(e) { showError('Clone failed: ' + e.message); }
 }
 
-// ── Delete ────────────────────────────────────────────────────────────────────
-function confirmDeleteJob(j) {
+export function confirmDeleteJob(j) {
   var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (!card) return;
   card.innerHTML =
@@ -163,20 +189,23 @@ function confirmDeleteJob(j) {
     + '</div>';
   card.style.alignItems = 'center';
 }
-async function deleteJob(j) {
+
+export async function deleteJob(j) {
   try {
     var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
     if (!r.ok) {
       var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
       showError(e.detail || 'Delete failed'); return;
     }
-    if (_activeJob === j.path) { _activeJob = null; _activeJobFolder = null; _dirty = false; _doNewJob(); }
+    if (st._activeJob === j.path) {
+      st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
+      import('./form-controls.js').then(function(m){ m._doNewJob(); });
+    }
     await loadJobsList();
   } catch(e) { showError('Delete failed: ' + e.message); }
 }
 
-// ── Rename ────────────────────────────────────────────────────────────────────
-function startRename(j) {
+export function startRename(j) {
   var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (!card) return;
   var nameEl = card.querySelector('.jcard-name');
@@ -199,7 +228,8 @@ function startRename(j) {
     if (e.key === 'Escape') { committed = true; loadJobsList(); }
   });
 }
-async function doRename(j, newName) {
+
+export async function doRename(j, newName) {
   try {
     var r = await fetch(jobApiUrl(j.path), {
       method:'PATCH', headers:{'Content-Type':'application/json'},
@@ -210,8 +240,8 @@ async function doRename(j, newName) {
       showError(e.detail || 'Rename failed'); await loadJobsList(); return;
     }
     var data = await r.json();
-    if (_activeJob === j.path) {
-      _activeJob = data.path;
+    if (st._activeJob === j.path) {
+      st._activeJob = data.path;
       document.getElementById('jname').value = newName;
       updateFolderHint();
     }
@@ -219,39 +249,30 @@ async function doRename(j, newName) {
   } catch(e) { showError('Rename failed: ' + e.message); await loadJobsList(); }
 }
 
-// ── Staleness notice ──────────────────────────────────────────────────────────
-function showStaleNotice(stale) {
+export function showStaleNotice(stale) {
   var el = document.getElementById('stale-notice');
   el.textContent = 'Cached tiles may be stale (' + stale.length + ' missing) — preview will re-fetch.';
   el.style.display = 'block';
 }
-function hideStaleNotice() {
+export function hideStaleNotice() {
   var el = document.getElementById('stale-notice');
   el.style.display = 'none'; el.textContent = '';
 }
 
-// ── Job color picker ──────────────────────────────────────────────────────────
 var _DEFAULT_JOB_COLOR = '#3b82f6';
 
-function _setColorPicker(color) {
+export function _setColorPicker(color) {
   var hex = color || _DEFAULT_JOB_COLOR;
   document.getElementById('job-color').value = hex;
-  document.getElementById('color-btn').disabled = !_activeJob;
+  document.getElementById('color-btn').disabled = !st._activeJob;
   _cpSetFromHex(hex);
-}
-
-function _syncPaletteActive(hex) {
-  var norm = (hex || '').toLowerCase();
-  document.querySelectorAll('.color-swatch').forEach(function(s) {
-    s.classList.toggle('active', s.dataset.color === norm);
-  });
 }
 
 function _closeColorPopup() {
   document.getElementById('color-popup').classList.remove('open');
 }
 
-function toggleColorPopup(e) {
+export function toggleColorPopup(e) {
   e.stopPropagation();
   var popup = document.getElementById('color-popup');
   if (popup.classList.toggle('open')) {
@@ -265,14 +286,14 @@ function toggleColorPopup(e) {
   }
 }
 
-function _applyColor(hex) {
+export function _applyColor(hex) {
   _cpSetFromHex(hex);
   document.getElementById('job-color').value = hex;
   document.getElementById('job-color').dispatchEvent(new Event('change'));
   _closeColorPopup();
 }
 
-function initColorPalette(colors) {
+export function initColorPalette(colors) {
   var palette = document.getElementById('color-palette');
   if (!palette || !colors || !colors.length) return;
   palette.innerHTML = '';
@@ -288,10 +309,10 @@ function initColorPalette(colors) {
 }
 
 document.getElementById('job-color').addEventListener('change', async function() {
-  if (!_activeJob) return;
+  if (!st._activeJob) return;
   try {
-    _ownSavedJob = _activeJob;
-    await fetch(jobApiUrl(_activeJob), {
+    st._ownSavedJob = st._activeJob;
+    await fetch(jobApiUrl(st._activeJob), {
       method: 'PATCH', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({color: this.value})
     });

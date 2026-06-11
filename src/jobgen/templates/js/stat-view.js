@@ -1,41 +1,37 @@
 // ── Map view: stat panel ────────────────────────────────────────────────────
 
-var _mvStatMode = localStorage.getItem('mv-stat-mode') || 'normal';
-var _statBinMap = {};   // path → color, assigned for ALL visible features
+import { escHtml } from './utils.js';
 
-// Palettes: index 0 = lowest/least, last = highest/most
-var _ALT_PAL  = ['#2563eb','#60a5fa','#93c5fd','#dbeafe'];           // low→high alt: dark→light blue
-var _AREA_PAL = ['#fef9c3','#fde047','#fb923c','#f97316','#ef4444']; // small→large: light→dark
-var _LOST_PAL = ['#4ade80','#a3e635','#fde047','#fb923c','#ef4444']; // 0%→max: green→red
-var _TIME_PAL = ['#f0fdf4','#86efac','#4ade80','#22c55e','#16a34a']; // short→long: light→dark
+var _mvStatMode = localStorage.getItem('mv-stat-mode') || 'normal';
+var _statBinMap = {};
+
+var _ALT_PAL  = ['#2563eb','#60a5fa','#93c5fd','#dbeafe'];
+var _AREA_PAL = ['#fef9c3','#fde047','#fb923c','#f97316','#ef4444'];
+var _LOST_PAL = ['#4ade80','#a3e635','#fde047','#fb923c','#ef4444'];
+var _TIME_PAL = ['#f0fdf4','#86efac','#4ade80','#22c55e','#16a34a'];
 var _SUB_PAL  = {A1:'#10b981', A2:'#f59e0b', A3:'#3b82f6'};
 var _ND_COL   = '#94a3b8';
 
-function getMvStatColor(props) {
+export function getMvStatMode() { return _mvStatMode; }
+export function getStatBinMap() { return _statBinMap; }
+
+export function getMvStatColor(props) {
   return _mvStatMode === 'normal' ? (props.color || '#3b82f6') : (_statBinMap[props.path] || _ND_COL);
 }
 
-function onStatModeChange() {
+export function onStatModeChange() {
   _mvStatMode = document.getElementById('mv-stat-mode').value;
   localStorage.setItem('mv-stat-mode', _mvStatMode);
-  var features = _mvLayers.map(function(item) { return item.feature; });
-  renderStatPanel(features);
-  _mvLayers.forEach(function(item) {
-    if (_mvSelected.has(item.path)) return;
-    var c = getMvStatColor(item.feature.properties);
-    item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.30});
-  });
-  _mvUpdateDim();
+  // map-view.js will call renderStatPanel and update layers
+  import('./map-view.js').then(function(m){ m._onStatModeChangeInternal(_mvStatMode); });
 }
 
-// Called after map layers render or selection changes.
-// allFeatures = all features currently in _mvLayers (already folder-filtered).
-function renderStatPanel(allFeatures) {
+export function renderStatPanel(allFeatures, mvSelected) {
   _statBinMap = {};
   var body = document.getElementById('mv-stat-body');
   if (!body) return;
 
-  var sel = _mvSelected.size > 0 ? _mvSelected : null;
+  var sel = mvSelected && mvSelected.size > 0 ? mvSelected : null;
   var active = sel ? allFeatures.filter(function(f) { return sel.has(f.properties.path); }) : allFeatures;
 
   switch (_mvStatMode) {
@@ -49,7 +45,6 @@ function renderStatPanel(allFeatures) {
   }
 }
 
-// ── Value accessors ──────────────────────────────────────────────────────────
 function _getAlt(p)  { return p.height_m; }
 function _getArea(p) { return p.area_ha; }
 function _getFT(p)   { return p.flight_time_min; }
@@ -58,7 +53,6 @@ function _getLostHa(p) {
   return Math.max(0, p.original_area_ha - p.area_ha);
 }
 
-// ── Bin helpers ──────────────────────────────────────────────────────────────
 function _makeBins(vals, palette) {
   if (!vals.length) return [];
   var sorted = vals.slice().sort(function(a, b) { return a - b; });
@@ -82,7 +76,6 @@ function _binIdx(v, bins) {
   return Math.min(bins.length - 1, Math.floor((v - min) / (max - min) * bins.length));
 }
 
-// ── HTML row builders ────────────────────────────────────────────────────────
 function _binRow(color, label, count) {
   return '<div class="mv-st-brow">'
     + '<span class="mv-st-sw" style="background:' + color + '"></span>'
@@ -109,15 +102,10 @@ function _fmtMin(m) {
   return h + ' h' + (mm ? ' ' + mm + ' min' : '');
 }
 
-// ── Pan + select on job click ────────────────────────────────────────────────
-function _mvStatJobClick(path) {
-  var item = _mvLayers.find(function(i) { return i.path === path; });
-  if (!item) return;
-  try { map.fitBounds(item.layer.getBounds(), {padding: [60, 60], maxZoom: 16}); } catch(e) {}
-  if (!_mvSelected.has(path)) _mvToggleSel(path);
+export function _mvStatJobClick(path) {
+  import('./map-view.js').then(function(m){ m._mvStatJobClickInternal(path); });
 }
 
-// ── Mode renderers ───────────────────────────────────────────────────────────
 function _stNormal(active) {
   var count = active.length, area = 0, hasA = false, time = 0, hasT = false, bats = 0, hasB = false;
   active.forEach(function(f) {

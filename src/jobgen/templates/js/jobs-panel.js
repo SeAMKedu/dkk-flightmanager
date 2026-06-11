@@ -1,6 +1,18 @@
 // ── Jobs panel ────────────────────────────────────────────────────────────────
 
+import { st } from './state.js';
+import { escHtml } from './utils.js';
+// Circular — only called at runtime:
+import { toggleJobSelection, _updateSelBar, _selectedJobs, _selectedMeta } from './multi-select.js';
+import { autoSortFolder } from './drag-reorder.js';
+import { toggleCardMenu } from './card-menu.js';
+import { openJob } from './job-ops.js';
+
 var _jpOpen = localStorage.getItem('jp-open') !== 'false';
+export var _jobsCache = [];
+export var _jobsGroups = [];
+var _dragPath = null;
+var _dragFolder = null;
 
 function _jpStickyRefresh() {
   var list = document.getElementById('jp-list');
@@ -15,30 +27,25 @@ function _jpStickyRefresh() {
     var top = fr.top - listRect.top;
     var bottom = fr.bottom - listRect.top;
     var hdrH = hdr.offsetHeight;
-    // Sticking: folder top has scrolled above offset AND folder hasn't left yet
     if (top < offset && bottom > offset + hdrH) offset += hdrH;
   });
 }
 document.getElementById('jp-list').addEventListener('scroll', _jpStickyRefresh);
-var _jobsCache = [];         // flat list of all job cards (for filter search)
-var _jobsGroups = [];        // grouped structure from API
-var _dragPath = null;        // path of card being dragged
-var _dragFolder = null;      // folder key of dragged card
 
-function setJpOpen(open) {
+export function setJpOpen(open) {
   _jpOpen = open;
   localStorage.setItem('jp-open', open ? 'true' : 'false');
   document.getElementById('jp').classList.toggle('closed', !open);
   document.getElementById('jp-tog').innerHTML = open ? '&#9664;' : '&#9654;';
   document.getElementById('jp-tog').title = open ? 'Hide jobs panel' : 'Show jobs panel';
 }
-function toggleJp() { setJpOpen(!_jpOpen); }
+export function toggleJp() { setJpOpen(!_jpOpen); }
 
 document.getElementById('jp-filter').addEventListener('input', function() {
   renderJobsList(_jobsGroups);
 });
 
-async function loadJobsList() {
+export async function loadJobsList() {
   try {
     var r = await fetch('/api/jobs');
     if (!r.ok) return;
@@ -88,7 +95,7 @@ function buildFolderSection(group) {
   var storageKey = 'jf-open-' + (isRoot ? '__root__' : group.name);
   var isOpen = localStorage.getItem(storageKey) !== 'false';
 
-  var displayName = isRoot ? (outputDir.split('/').pop() || 'output') : group.name;
+  var displayName = isRoot ? (st.outputDir.split('/').pop() || 'output') : group.name;
   var dataFolder = isRoot ? '' : escHtml(group.name);
 
   var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
@@ -136,7 +143,7 @@ function buildFolderSection(group) {
   jobs.addEventListener('drop', function(e) {
     e.preventDefault();
     if (!_dragPath) return;
-    _finishDrop(group, folderKey, null, 'after');
+    import('./drag-reorder.js').then(function(m){ m._finishDrop(group, folderKey, null, 'after'); });
   });
 
   (group.jobs || []).forEach(function(j){ jobs.appendChild(buildJobCard(j, group, folderKey)); });
@@ -146,9 +153,9 @@ function buildFolderSection(group) {
   return frag;
 }
 
-function buildJobCard(j, group, folderKey) {
+export function buildJobCard(j, group, folderKey) {
   var card = document.createElement('div');
-  var isActive = j.path === _activeJob;
+  var isActive = j.path === st._activeJob;
   var isSelected = _selectedJobs.has(j.path);
   var isReady = !!j.takeoff_point_4326;
   card.className = 'jcard'
@@ -176,7 +183,7 @@ function buildJobCard(j, group, folderKey) {
     : j.flight_ready === true  ? '<span class="jbadge ok">&#10003;</span>'
     : j.needs_review === true  ? '<span class="jbadge wrn">!</span>'
     : '';
-  var koLine = (j.area_lost_pct != null && j.area_lost_pct >= _cfgMaxAreaLossPct)
+  var koLine = (j.area_lost_pct != null && j.area_lost_pct >= st._cfgMaxAreaLossPct)
     ? '<div class="jcard-ko">−' + j.area_lost_pct.toFixed(0) + '% keepout</div>'
     : '';
   var dragHandle = isReady
@@ -248,9 +255,12 @@ function buildJobCard(j, group, folderKey) {
       var rect = card.getBoundingClientRect();
       var pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
       card.classList.remove('drag-over-top', 'drag-over-bottom');
-      _finishDrop(group, folderKey, j.path, pos);
+      import('./drag-reorder.js').then(function(m){ m._finishDrop(group, folderKey, j.path, pos); });
     });
   }
 
   return card;
 }
+
+export function getDragPath() { return _dragPath; }
+export function getDragFolder() { return _dragFolder; }

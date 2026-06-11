@@ -1,20 +1,25 @@
 // ── Drag-and-drop reordering ──────────────────────────────────────────────────
 
-async function _finishDrop(group, folderKey, targetPath, pos) {
+import { jobApiUrl } from './utils.js';
+import { loadJobsList } from './jobs-panel.js';
+// Circular — only called at runtime:
+import { _mvRefreshRouteData, getMvMode, getMvCurrentFolder } from './map-view.js';
+
+export async function _finishDrop(group, folderKey, targetPath, pos) {
   var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
   var paths = readyJobs.map(function(j){ return j.path; });
 
+  // getDragPath / getDragFolder from jobs-panel
+  var dragPath = (await import('./jobs-panel.js')).getDragPath();
+
   if (targetPath) {
-    var fromIdx = paths.indexOf(_dragPath);
+    var fromIdx = paths.indexOf(dragPath);
     var toIdx = paths.indexOf(targetPath);
     if (fromIdx === -1 || toIdx === -1) return;
     paths.splice(fromIdx, 1);
     toIdx = paths.indexOf(targetPath);
-    paths.splice(pos === 'before' ? toIdx : toIdx + 1, 0, _dragPath);
+    paths.splice(pos === 'before' ? toIdx : toIdx + 1, 0, dragPath);
   }
-
-  _dragPath = null;
-  _dragFolder = null;
 
   try {
     await fetch('/api/jobs/reorder', {
@@ -23,11 +28,10 @@ async function _finishDrop(group, folderKey, targetPath, pos) {
       body: JSON.stringify({paths: paths})
     });
     await loadJobsList();
-    if (_mvMode && _mvCurrentFolder === folderKey) await _mvRefreshRouteData();
+    if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[reorder]', e); }
 }
 
-// ── Greedy nearest-neighbor TSP ───────────────────────────────────────────────
 function _haversineDeg(lat1, lng1, lat2, lng2) {
   var R = 6371000;
   var dLat = (lat2 - lat1) * Math.PI / 180;
@@ -41,7 +45,6 @@ function _haversineDeg(lat1, lng1, lat2, lng2) {
 function _greedyTSP(pts) {
   if (pts.length <= 1) return pts.slice();
   var remaining = pts.slice();
-  // Start from northwesternmost point
   remaining.sort(function(a, b) {
     return b.lat !== a.lat ? b.lat - a.lat : a.lng - b.lng;
   });
@@ -58,7 +61,6 @@ function _greedyTSP(pts) {
   return route;
 }
 
-// Greedy nearest-neighbor starting from a given anchor (for continuing an existing route)
 function _greedyTSPContinue(pts, anchorLat, anchorLng) {
   if (!pts.length) return [];
   var remaining = pts.slice();
@@ -77,17 +79,16 @@ function _greedyTSPContinue(pts, anchorLat, anchorLng) {
   return route;
 }
 
-// ── Route confirmation modal ──────────────────────────────────────────────────
 var _routeConfirmGroup = null;
 var _routeConfirmFolderKey = null;
 
-function closeRouteConfirmModal() {
+export function closeRouteConfirmModal() {
   document.getElementById('route-confirm-modal').classList.remove('open');
   _routeConfirmGroup = null;
   _routeConfirmFolderKey = null;
 }
 
-async function autoSortFolder(group, folderKey) {
+export async function autoSortFolder(group, folderKey) {
   var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
   if (readyJobs.length < 2) return;
 
@@ -95,12 +96,10 @@ async function autoSortFolder(group, folderKey) {
   var unrouted = readyJobs.filter(function(j){ return j.sort_order == null; });
 
   if (!routed.length) {
-    // No existing route positions — run directly
     await _doReRouteAll(readyJobs, folderKey);
     return;
   }
 
-  // Some jobs already have route positions — show confirmation modal
   _routeConfirmGroup = group;
   _routeConfirmFolderKey = folderKey;
 
@@ -153,12 +152,11 @@ async function _doReRouteAll(readyJobs, folderKey) {
       body: JSON.stringify({paths: paths})
     });
     await loadJobsList();
-    if (_mvMode && _mvCurrentFolder === folderKey) await _mvRefreshRouteData();
+    if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[autosort]', e); }
 }
 
 async function _doRouteRemaining(routed, unrouted, folderKey) {
-  // Sort existing route to find the last job (anchor for continuation)
   routed.sort(function(a, b){ return a.sort_order - b.sort_order; });
   var maxSo = routed[routed.length - 1].sort_order;
   var last = routed[routed.length - 1];
@@ -180,7 +178,7 @@ async function _doRouteRemaining(routed, unrouted, folderKey) {
       });
     }
     await loadJobsList();
-    if (_mvMode && _mvCurrentFolder === folderKey) await _mvRefreshRouteData();
+    if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[route-remaining]', e); }
 }
 
@@ -194,6 +192,6 @@ async function _doClearRoute(routed, folderKey) {
       });
     }
     await loadJobsList();
-    if (_mvMode && _mvCurrentFolder === folderKey) await _mvRefreshRouteData();
+    if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[clear-route]', e); }
 }

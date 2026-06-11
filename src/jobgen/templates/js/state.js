@@ -1,28 +1,38 @@
 // ── Shared application state ──────────────────────────────────────────────────
-// Variables read/written by multiple modules. Declared here so every included
-// file can reference them without worrying about declaration order.
+// Single mutable object shared by all modules via import { st } from './state.js'.
+// _altCap and _dataAttribution moved here from map-init.js.
 
-var drones = [];
-var outputDir = '';
-var previewData = null;
-var editedPoly = null;
-var polyModified = false;
-var _polySetWithIds = false; // was the polygon established while ID fields were populated?
-var isRunning = false;
-var _pendingPreview = false;  // startPreview() deferred because isRunning was true
-var _ownSavedJob = null;      // path of job we just saved ourselves (suppress ext-modified notice)
-var currentSSE = null;
-var editMode = false;
-var _bridgeMode = false;
-var _dirty = false;
-var _activeJob = null;       // full path (folder/name or name)
-var _activeJobFolder = null; // folder part, null for root
+export const st = {
+  // App-wide state
+  drones: [],
+  outputDir: '',
+  previewData: null,
+  editedPoly: null,
+  polyModified: false,
+  _polySetWithIds: false, // was the polygon established while ID fields were populated?
+  isRunning: false,
+  _pendingPreview: false,  // startPreview() deferred because isRunning was true
+  _ownSavedJob: null,      // path of job we just saved ourselves (suppress ext-modified notice)
+  currentSSE: null,
+  editMode: false,
+  _bridgeMode: false,
+  _dirty: false,
+  _activeJob: null,       // full path (folder/name or name)
+  _activeJobFolder: null, // folder part, null for root
 
-// Route planner state
-var _routeAngleDeg = null;    // null = auto, number = user override
-var _routeAngleAuto = null;   // computed by Python on preview
-var _speedMsOverride = null;  // null = auto, number = user override
-var _cfgOverlapFront = 80;    // set from /api/config
-var _cfgOverlapSide  = 70;
-var _cfgDefaultSpeedMs = 8.9;
-var _cfgMaxAreaLossPct = 30;  // set from /api/config
+  // Route planner state
+  _routeAngleDeg: null,    // null = auto, number = user override
+  _routeAngleAuto: null,   // computed by Python on preview
+  _speedMsOverride: null,  // null = auto, number = user override
+  _cfgOverlapFront: 80,    // set from /api/config
+  _cfgOverlapSide: 70,
+  _cfgDefaultSpeedMs: 8.9,
+  _cfgMaxAreaLossPct: 30,  // set from /api/config
+
+  // Map state (moved from map-init.js)
+  _altCap: null,         // minimum AGL ceiling (metres) from current zone hits; null if none
+  _dataAttribution: '',  // attribution string currently added to the map control
+
+  // Map-view mode flag — used by polygon-edit, measurement, etc. to gate interactions
+  _mvMode: false,
+};

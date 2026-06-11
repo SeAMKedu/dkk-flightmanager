@@ -1,39 +1,58 @@
 // ── Map view (in-place — reuses existing #map, hides #sb) ─────────────────────
 
+import { st } from './state.js';
+import { map, lrs, editLayers, resetLrs } from './map-init.js';
+import { escHtml, jobApiUrl } from './utils.js';
+import { showError } from './form-controls.js';
+import { loadJobsList } from './jobs-panel.js';
+import { clearTakeoffForMapView, _hideVlos } from './takeoff.js';
+import { getMvStatColor, getMvStatMode, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
+import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
+// Circular — only called at runtime:
+import { saveEdit } from './polygon-edit.js';
+import { openJob as _openJobFn } from './job-ops.js';
+import { _selectedJobs, _selectedMeta, _updateSelBar, openMergeModal } from './multi-select.js';
+
 var _mvMode = false;
-var _mvFromEditor = false;   // true only when entering map view directly from the job editor
-var _mvJobGroup = null;      // L.LayerGroup on the main map
-var _mvLayers = [];          // [{path, layer, feature}]
-var _mvHoverPopup = null;    // currently open hover popup
-var _mvHoverTimer = null;    // deferred-close timer
+var _mvFromEditor = false;
+var _mvJobGroup = null;
+var _mvLayers = [];
+var _mvHoverPopup = null;
+var _mvHoverTimer = null;
 var _mvSelected = new Set();
 var _mvAllFeatures = [];
 var _mvCurrentFolder = null;
 var _DEFAULT_COLOR = '#3b82f6';
-var _mvRouteLayer = null;    // L.layerGroup for route polyline + numbered markers
-var _mvRouteVisible = true; // toggled by the Route button; on by default
-var _mvDimLayer = null;     // full-world dim overlay shown in non-normal stat modes
+var _mvRouteLayer = null;
+var _mvRouteVisible = true;
+var _mvDimLayer = null;
 
-function showFolderOnMap(e, folderName) {
+export function getMvMode() { return _mvMode; }
+export function getMvSelected() { return _mvSelected; }
+export function getMvCurrentFolder() { return _mvCurrentFolder; }
+export function getMvLayers() { return _mvLayers; }
+
+export function showFolderOnMap(e, folderName) {
   e.stopPropagation();
   var f = folderName || null;
   if (_mvMode && _mvCurrentFolder === f) { closeMapView(); return; }
   openMapView(f);
 }
 
-function openMapView(folderFilter) {
-  var _comingFromEditor = _mvFromEditor && _activeJobFolder === (folderFilter || null);
+export function openMapView(folderFilter) {
+  var _comingFromEditor = _mvFromEditor && st._activeJobFolder === (folderFilter || null);
   var _skipFit = _comingFromEditor;
   _mvFromEditor = false;
 
   _mvMode = true;
+  st._mvMode = true;
   _mvCurrentFolder = folderFilter || null;
-  if (editMode) saveEdit();
+  if (st.editMode) saveEdit();
 
   Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
+  resetLrs();
   editLayers.clearLayers();
-  if (_takeoffMarker) map.removeLayer(_takeoffMarker);
+  clearTakeoffForMapView();
   _hideVlos();
 
   document.getElementById('sb').classList.add('mv-hidden');
@@ -42,7 +61,7 @@ function openMapView(folderFilter) {
   document.getElementById('mv-right-panel').classList.add('visible');
   map.invalidateSize();
   var sel = document.getElementById('mv-stat-mode');
-  if (sel) sel.value = _mvStatMode;
+  if (sel) sel.value = getMvStatMode();
   document.querySelectorAll('.jfolder-map-btn').forEach(function(btn) {
     btn.classList.toggle('active', btn.dataset.folder === (folderFilter || ''));
   });
@@ -58,9 +77,10 @@ function openMapView(folderFilter) {
   _mvLoad(folderFilter, _skipFit);
 }
 
-function closeMapView() {
+export function closeMapView() {
   if (!_mvMode) return;
   _mvMode = false;
+  st._mvMode = false;
   _mvCurrentFolder = null;
   clearTimeout(_mvHoverTimer);
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
@@ -94,12 +114,11 @@ async function _mvLoad(folderFilter, skipFit) {
   } catch(e) { console.error('[mapview]', e); }
 }
 
-function _mvDrawRoute() {
+export function _mvDrawRoute() {
   if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
   if (!_mvRouteVisible || !_mvMode) return;
 
   var features = _mvAllFeatures.filter(function(f){ return (f.properties.folder || null) === _mvCurrentFolder; });
-
   var routable = features.filter(function(f){ return f.properties.takeoff_point_4326 && !f.properties.skipped; });
   routable.sort(function(a, b) {
     var pa = a.properties, pb = b.properties;
@@ -118,10 +137,7 @@ function _mvDrawRoute() {
   });
 
   _mvRouteLayer = L.layerGroup().addTo(map);
-
-  L.polyline(latlngs, {
-    color: '#f59e0b', weight: 2, opacity: 0.7, dashArray: '6,4',
-  }).addTo(_mvRouteLayer);
+  L.polyline(latlngs, {color: '#f59e0b', weight: 2, opacity: 0.7, dashArray: '6,4'}).addTo(_mvRouteLayer);
 
   routable.forEach(function(f, i) {
     var tp = f.properties.takeoff_point_4326;
@@ -138,14 +154,14 @@ function _mvDrawRoute() {
   });
 }
 
-function toggleMvRoute() {
+export function toggleMvRoute() {
   _mvRouteVisible = !_mvRouteVisible;
   var btn = document.getElementById('mv-route-btn');
   if (btn) btn.classList.toggle('active', _mvRouteVisible);
   _mvDrawRoute();
 }
 
-async function _mvRefreshRouteData() {
+export async function _mvRefreshRouteData() {
   try {
     var r = await fetch('/api/jobs/geojson');
     if (!r.ok) return;
@@ -174,9 +190,9 @@ function _mvApplyFilter(folderFilter, skipFit) {
     map.fitBounds(combined, {padding: [40, 40]});
   }
   _mvDrawRoute();
-  showBatteryTimeline();
-  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }));
-  if (_mvStatMode !== 'normal') {
+  showBatteryTimeline(_mvAllFeatures, _mvSelected, _mvCurrentFolder, _mvLayers);
+  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
+  if (getMvStatMode() !== 'normal') {
     _mvLayers.forEach(function(item) {
       if (_mvSelected.has(item.path)) return;
       var c = getMvStatColor(item.feature.properties);
@@ -288,34 +304,13 @@ function _mvOpenHoverPopup(latlng, p) {
   }, 30);
 }
 
-// Legacy popup helper (currently unused but kept for potential future use)
-function _mvShowPopup(latlng, feature, layer) {
-  var p = feature.properties;
-  var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
-    : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
-    : p.untouched ? '<span style="color:#64748b">New</span>'
-    : '<span style="color:#94a3b8">—</span>';
-  var area = p.area_ha != null ? p.area_ha.toFixed(1) + ' ha' : '';
-  var skipLabel = p.skipped ? '⊘ Unskip' : '⊘ Skip';
-  var html = '<div style="font-size:12px;line-height:1.6;min-width:150px">'
-    + '<b style="font-size:13px">' + escHtml(p.name) + '</b><br>'
-    + (p.folder ? '<span style="font-size:10px;color:#94a3b8">' + escHtml(p.folder) + '</span><br>' : '')
-    + statusChip + (area ? ' &nbsp;' + area : '')
-    + '<div style="display:flex;gap:5px;margin-top:8px">'
-    + '<button onclick="mvOpenJob(\'' + escHtml(p.path) + '\')" style="flex:1;padding:4px;font-size:11px;background:#3b82f6;color:#fff;border:none;border-radius:3px;cursor:pointer">Open</button>'
-    + '<button onclick="mvToggleSkip(\'' + escHtml(p.path) + '\',' + !!p.skipped + ')" style="flex:1;padding:4px;font-size:11px;background:#475569;color:#fff;border:none;border-radius:3px;cursor:pointer">' + skipLabel + '</button>'
-    + '<button onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')" style="padding:4px 6px;font-size:11px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer">✕</button>'
-    + '</div></div>';
-  L.popup({closeButton: true, minWidth: 170, className: 'mv-popup'}).setLatLng(latlng).setContent(html).openOn(map);
-}
-
-function mvOpenJob(path) {
+export function mvOpenJob(path) {
   map.closePopup();
   closeMapView();
-  openJob(path);
+  _openJobFn(path);
 }
 
-async function mvToggleSkip(path, currentSkipped) {
+export async function mvToggleSkip(path, currentSkipped) {
   try {
     var r = await fetch(jobApiUrl(path), {
       method: 'PATCH', headers: {'Content-Type': 'application/json'},
@@ -332,7 +327,7 @@ async function mvToggleSkip(path, currentSkipped) {
   } catch(e) { showError('Failed: ' + e.message); }
 }
 
-async function mvDeleteJob(path, name) {
+export async function mvDeleteJob(path, name) {
   if (!window.confirm('Delete job "' + name + '"?')) return;
   try {
     var r = await fetch(jobApiUrl(path), {method: 'DELETE'});
@@ -343,14 +338,13 @@ async function mvDeleteJob(path, name) {
       return true;
     });
     _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== path; });
-    if (_activeJob === path) { _activeJob = null; _activeJobFolder = null; }
+    if (st._activeJob === path) { st._activeJob = null; st._activeJobFolder = null; }
     loadJobsList();
   } catch(e) { showError('Delete failed: ' + e.message); }
 }
 
-// ── Dim overlay ───────────────────────────────────────────────────────────────
 function _mvUpdateDim() {
-  if (_mvStatMode !== 'normal' && _mvMode) { _mvShowDim(); } else { _mvHideDim(); }
+  if (getMvStatMode() !== 'normal' && _mvMode) { _mvShowDim(); } else { _mvHideDim(); }
 }
 
 function _mvShowDim() {
@@ -367,8 +361,7 @@ function _mvHideDim() {
   if (_mvDimLayer) { map.removeLayer(_mvDimLayer); _mvDimLayer = null; }
 }
 
-// ── Map view multi-select ──────────────────────────────────────────────────────
-function _mvToggleSel(path) {
+export function _mvToggleSel(path) {
   var item = _mvLayers.find(function(i){ return i.path === path; });
   if (!item) return;
   var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
@@ -388,7 +381,7 @@ function _mvToggleSel(path) {
   _mvUpdateSelBar();
 }
 
-function mvClearSel() {
+export function mvClearSel() {
   _mvSelected.forEach(function(path) {
     var item = _mvLayers.find(function(i){ return i.path === path; });
     if (item) { var c = getMvStatColor(item.feature.properties); item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
@@ -409,11 +402,11 @@ function _mvUpdateSelBar() {
     openBtn.style.display = n === 1 ? '' : 'none';
     if (n === 1) openBtn.dataset.path = Array.from(_mvSelected)[0];
   }
-  showBatteryTimeline();
-  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }));
+  showBatteryTimeline(_mvAllFeatures, _mvSelected, _mvCurrentFolder, _mvLayers);
+  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
 }
 
-function mvMerge() {
+export function mvMerge() {
   _selectedJobs.clear(); _selectedMeta.clear();
   _mvSelected.forEach(function(path) {
     var item = _mvLayers.find(function(i){ return i.path === path; });
@@ -428,7 +421,7 @@ function mvMerge() {
   openMergeModal();
 }
 
-async function mvBulkMove() {
+export async function mvBulkMove() {
   var paths = Array.from(_mvSelected);
   var metas = paths.map(function(path) {
     var item = _mvLayers.find(function(i){ return i.path === path; });
@@ -454,7 +447,7 @@ async function mvBulkMove() {
   openMapView(dest);
 }
 
-async function mvBulkDelete() {
+export async function mvBulkDelete() {
   var n = _mvSelected.size;
   if (!window.confirm('Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '?')) return;
   var paths = Array.from(_mvSelected);
@@ -471,3 +464,25 @@ async function mvBulkDelete() {
   mvClearSel();
   loadJobsList();
 }
+
+// Called by stat-view.js to pan to a job
+export function _mvStatJobClickInternal(path) {
+  var item = _mvLayers.find(function(i) { return i.path === path; });
+  if (!item) return;
+  try { map.fitBounds(item.layer.getBounds(), {padding: [60, 60], maxZoom: 16}); } catch(e) {}
+  if (!_mvSelected.has(path)) _mvToggleSel(path);
+}
+
+// Called by stat-view.js when stat mode changes
+export function _onStatModeChangeInternal(mode) {
+  _mvLayers.forEach(function(item) {
+    if (_mvSelected.has(item.path)) return;
+    var c = getMvStatColor(item.feature.properties);
+    item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.30});
+  });
+  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
+  _mvUpdateDim();
+}
+
+// Set _mvFromEditor flag (called by job-ops when closing a job to go back to map)
+export function setMvFromEditor(v) { _mvFromEditor = v; }

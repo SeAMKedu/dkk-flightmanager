@@ -1,24 +1,26 @@
 // ── Route planner ─────────────────────────────────────────────────────────────
-// Two-tier estimation: JS computes strips immediately on angle/param change for
-// live visualization; a debounced POST /api/route_estimate provides accurate
-// numbers (EPSG:3067 intersections, proper home transit) after input settles.
+
+import { st } from './state.js';
+import { map, lrs } from './map-init.js';
+import { markDirty } from './dirty-tracking.js';
+import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
 
 var _routeDebounceTimer = null;
 var _routeLayer = null;
 var _coverageLayer = null;
-var _routeAngleAdjusting = false; // true while +/- is held; suppresses home transit legs
-var _lastRouteStats = null;       // last non-null stats; re-applied after renderStatus rebuilds DOM
-var _lastFpAcross = null;         // last known camera footprint width (m), used by _drawRouteGeoJSON
+var _routeAngleAdjusting = false;
+var _lastRouteStats = null;
+var _lastFpAcross = null;
 
-// ── Parameter helpers ─────────────────────────────────────────────────────────
+export function _getLastRouteStats() { return _lastRouteStats; }
 
 function _effectiveRouteAngle() {
-  return _routeAngleDeg !== null ? _routeAngleDeg
-       : (_routeAngleAuto !== null ? _routeAngleAuto : 0);
+  return st._routeAngleDeg !== null ? st._routeAngleDeg
+       : (st._routeAngleAuto !== null ? st._routeAngleAuto : 0);
 }
 
 function _getRouteParams() {
-  var d = drones.find(function(x) { return x.name === document.getElementById('dsel').value; });
+  var d = st.drones.find(function(x) { return x.name === document.getElementById('dsel').value; });
   var H = parseFloat(document.getElementById('hgt').value) || 60;
   if (!d) return null;
   var p_m = d.pixel_pitch_um * 1e-6, f_m = d.focal_length_mm * 1e-3;
@@ -26,15 +28,11 @@ function _getRouteParams() {
   var fpAlong  = H * d.image_height_px * p_m / f_m;
   return {
     angle:  _effectiveRouteAngle(),
-    stripM: fpAcross * (1 - _cfgOverlapSide  / 100),
-    photoM: fpAlong  * (1 - _cfgOverlapFront / 100),
+    stripM: fpAcross * (1 - st._cfgOverlapSide  / 100),
+    photoM: fpAlong  * (1 - st._cfgOverlapFront / 100),
     fpAcross: fpAcross,
   };
 }
-
-// ── JS strip computation (immediate, approximate) ─────────────────────────────
-// Scanline intersection in a local metric frame rotated by (angle-90)°.
-// Handles exterior ring only; holes from keep-out are excluded (DJI handles them).
 
 function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
   var ring = polygon4326.type === 'Polygon' ? polygon4326.coordinates[0]
@@ -61,8 +59,7 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
   });
   var midX = sumX / rp.length;
 
-  // Home in rotated frame
-  var home = _takeoffPt || _takeoffAuto;
+  var home = getTakeoffPt() || getTakeoffAuto();
   var homeRotY = (minY + maxY) / 2, homeRotX = midX;
   if (home) {
     var hx = (home[0] - lon0) * mLon, hy = (home[1] - lat0) * mLat;
@@ -70,7 +67,6 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
     homeRotY = hx * sinR + hy * cosR;
   }
 
-  // First strip at half-footprint from boundary (matches DJI Pilot 2 margin=0).
   var firstOffset = (fpAcross != null ? fpAcross : stripM) / 2;
   var stripsY = [];
   for (var y = minY + firstOffset; y <= maxY + 1e-6; y += stripM) stripsY.push(y);
@@ -104,22 +100,18 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
     }
   });
 
-  // Boundary-routing helpers (all in the rotated metric frame).
-  var rpOpen = rp.slice(0, rp.length - 1); // open ring (no repeated first vertex)
+  var rpOpen = rp.slice(0, rp.length - 1);
   var nRing   = rpOpen.length;
 
-  // Convert geographic [lat,lon] → rotated metric frame
   function geoToRot(ll) {
     var px = (ll[1] - lon0) * mLon, py = (ll[0] - lat0) * mLat;
     return [px * cosR - py * sinR, px * sinR + py * cosR];
   }
-  // Convert rotated metric [rx,ry] → geographic [lat,lon]
   function rotToGeo(rxy) {
     var lx = rxy[0] * backCos - rxy[1] * backSin;
     var ly = rxy[0] * backSin + rxy[1] * backCos;
     return [lat0 + ly / mLat, lon0 + lx / mLon];
   }
-  // Ray-casting point-in-ring test (rotated frame)
   function inRing(rx, ry) {
     var inside = false;
     for (var i = 0, j = nRing - 1; i < nRing; j = i++) {
@@ -129,7 +121,6 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
     }
     return inside;
   }
-  // Nearest ring-segment index for a point in the rotated frame
   function nearestSegIdx(rx, ry) {
     var bestD = Infinity, best = 0;
     for (var i = 0; i < nRing; i++) {
@@ -142,12 +133,10 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
     }
     return best;
   }
-  // Route from p1geo to p2geo, following boundary when direct path exits polygon.
-  // Returns an array of geographic [lat,lon] waypoints.
   function boundaryTransit(p1geo, p2geo) {
     var p1r = geoToRot(p1geo), p2r = geoToRot(p2geo);
     var mx = (p1r[0] + p2r[0]) / 2, my = (p1r[1] + p2r[1]) / 2;
-    if (inRing(mx, my)) return [p1geo, p2geo]; // midpoint inside → direct is fine
+    if (inRing(mx, my)) return [p1geo, p2geo];
     var i1 = nearestSegIdx(p1r[0], p1r[1]);
     var i2 = nearestSegIdx(p2r[0], p2r[1]);
     if (i1 === i2) return [p1geo, p2geo];
@@ -167,9 +156,8 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
     return plenGeo(cwPath) <= plenGeo(ccwPath) ? cwPath : ccwPath;
   }
 
-  // Build transit legs: inter-strip hops always; home legs only when not adjusting angle
   var transits = [];
-  var homePt = _routeAngleAdjusting ? null : (_takeoffPt || _takeoffAuto);
+  var homePt = _routeAngleAdjusting ? null : (getTakeoffPt() || getTakeoffAuto());
   if (lines.length) {
     if (homePt) transits.push([homePt, lines[0][0]]);
     for (var ti = 0; ti < lines.length - 1; ti++) {
@@ -181,9 +169,7 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
   return { lines: lines, transits: transits, photoCount: photoCount };
 }
 
-// ── Map layer ─────────────────────────────────────────────────────────────────
-
-function _clearRouteLayer() {
+export function _clearRouteLayer() {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   lrs.route = null; lrs.coverage = null;
@@ -193,7 +179,6 @@ function _clearRouteLayer() {
   if (crow) crow.style.display = 'none';
 }
 
-// Compute coverage rectangle corners (geographic [lat,lon]) for one strip.
 function _stripCoverageRect(ll1, ll2, fpAcross, lat0, lon0, mLat, mLon) {
   var x1 = (ll1[1] - lon0) * mLon, y1 = (ll1[0] - lat0) * mLat;
   var x2 = (ll2[1] - lon0) * mLon, y2 = (ll2[0] - lat0) * mLat;
@@ -213,7 +198,6 @@ function _drawRouteLines(lines, transits, fpAcross) {
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   if (!lines || !lines.length) { lrs.route = null; lrs.coverage = null; return; }
 
-  // Local metric parameters for arrow bearing and coverage rectangles
   var lat0 = lines[0][0][0], lon0 = lines[0][0][1];
   var mLat = 111132.0, mLon = mLat * Math.cos(lat0 * Math.PI / 180);
 
@@ -221,11 +205,10 @@ function _drawRouteLines(lines, transits, fpAcross) {
   var lineStyle = {color:'#f59e0b', weight:2, opacity:0.85, interactive:false};
   lines.forEach(function(line) {
     L.polyline(line, lineStyle).addTo(g);
-    // Chevron at midpoint — points in direction of travel
     var ll1 = line[0], ll2 = line[1];
     var mid = [(ll1[0]+ll2[0])/2, (ll1[1]+ll2[1])/2];
     var dx = (ll2[1]-ll1[1])*mLon, dy = (ll2[0]-ll1[0])*mLat;
-    var deg = Math.atan2(-dy, dx) * 180 / Math.PI; // screen coords: y flipped
+    var deg = Math.atan2(-dy, dx) * 180 / Math.PI;
     var arrowHtml =
       '<svg width="14" height="14" viewBox="-7 -7 14 14" xmlns="http://www.w3.org/2000/svg" ' +
       'style="transform:rotate('+deg.toFixed(1)+'deg);display:block">' +
@@ -244,7 +227,6 @@ function _drawRouteLines(lines, transits, fpAcross) {
   var row = document.getElementById('leg-route-row');
   if (row) row.style.display = '';
 
-  // Coverage footprint layer
   if (fpAcross && fpAcross > 0) {
     var cg = L.layerGroup();
     var covStyle = {color:'#f59e0b', weight:0.8, opacity:0.5,
@@ -272,9 +254,7 @@ function _drawRouteGeoJSON(stripsGeojson, transitsGeojson) {
   _drawRouteLines(lines, transits, _lastFpAcross);
 }
 
-// ── Route stats display ───────────────────────────────────────────────────────
-
-function updateRouteStats(data) {
+export function updateRouteStats(data) {
   if (data) _lastRouteStats = data;
   else _lastRouteStats = null;
   var se = document.getElementById('rstat-strips');
@@ -286,14 +266,12 @@ function updateRouteStats(data) {
   te.textContent = (data && data.flight_time_min != null) ? '~' + Math.round(data.flight_time_min) + ' min' : '—';
 }
 
-// ── Main update (called after every polygon/angle/param change) ───────────────
-
-function updateRouteOverlay() {
-  if (!previewData || !previewData.survey) { _clearRouteLayer(); updateRouteStats(null); return; }
+export function updateRouteOverlay() {
+  if (!st.previewData || !st.previewData.survey) { _clearRouteLayer(); updateRouteStats(null); return; }
   var p = _getRouteParams();
   if (!p) { _clearRouteLayer(); updateRouteStats(null); return; }
   _lastFpAcross = p.fpAcross;
-  var r = _computeStripsJS(previewData.survey, p.angle, p.stripM, p.photoM, p.fpAcross);
+  var r = _computeStripsJS(st.previewData.survey, p.angle, p.stripM, p.photoM, p.fpAcross);
   _drawRouteLines(r.lines, r.transits, p.fpAcross);
   updateRouteStats({ strip_count: r.lines.length, photo_count: r.photoCount, flight_time_min: null });
   _scheduleAccurateEstimate();
@@ -305,14 +283,14 @@ function _scheduleAccurateEstimate() {
 }
 
 async function _fetchAccurateEstimate() {
-  if (!previewData || !previewData.survey) return;
-  var home = _takeoffPt || _takeoffAuto;
+  if (!st.previewData || !st.previewData.survey) return;
+  var home = getTakeoffPt() || getTakeoffAuto();
   var body = {
-    polygon_4326:       previewData.survey,
-    angle_deg:          _routeAngleDeg,
+    polygon_4326:       st.previewData.survey,
+    angle_deg:          st._routeAngleDeg,
     height_m:           parseFloat(document.getElementById('hgt').value) || null,
     drone:              document.getElementById('dsel').value || null,
-    speed_ms:           _speedMsOverride,
+    speed_ms:           st._speedMsOverride,
     takeoff_point_4326: home || null,
   };
   try {
@@ -324,83 +302,77 @@ async function _fetchAccurateEstimate() {
     var data = await res.json();
     updateRouteStats(data);
     if (data.strips_geojson) _drawRouteGeoJSON(data.strips_geojson, data.transits_geojson);
-    // Show computed auto-angle in the control when user hasn't overridden
-    if (_routeAngleDeg === null && data.angle_deg_used != null) {
-      _routeAngleAuto = data.angle_deg_used;
+    if (st._routeAngleDeg === null && data.angle_deg_used != null) {
+      st._routeAngleAuto = data.angle_deg_used;
       _renderAngleControl();
     }
   } catch(e) { console.warn('[route] estimate failed', e); }
 }
 
-// ── Angle control ─────────────────────────────────────────────────────────────
-
-function _renderAngleControl() {
-  var isAuto = (_routeAngleDeg === null);
+export function _renderAngleControl() {
+  var isAuto = (st._routeAngleDeg === null);
   document.getElementById('route-auto-btn').classList.toggle('active', isAuto);
   var displayed = isAuto
-    ? (_routeAngleAuto != null ? Math.round(_routeAngleAuto) : null)
-    : Math.round(_routeAngleDeg);
+    ? (st._routeAngleAuto != null ? Math.round(st._routeAngleAuto) : null)
+    : Math.round(st._routeAngleDeg);
   document.getElementById('route-angle-val').textContent =
     displayed != null ? displayed + '°' : '—';
 }
 
-function routeAngleAuto() {
-  _routeAngleDeg = null;
+export function routeAngleAuto() {
+  st._routeAngleDeg = null;
   _renderAngleControl();
   markDirty();
   updateRouteOverlay();
 }
 
-function routeAngleStep(dir) {
-  var cur = _routeAngleDeg !== null ? _routeAngleDeg : (_routeAngleAuto || 0);
-  _routeAngleDeg = ((Math.round(cur) + dir) % 180 + 180) % 180;
+export function routeAngleStep(dir) {
+  var cur = st._routeAngleDeg !== null ? st._routeAngleDeg : (st._routeAngleAuto || 0);
+  st._routeAngleDeg = ((Math.round(cur) + dir) % 180 + 180) % 180;
   _renderAngleControl();
   markDirty();
   updateRouteOverlay();
 }
 
-// Called by job-ops.js when restoring a saved job
-function setRouteAngleSilent(v) {
-  _routeAngleDeg = (v != null) ? v : null;
+export function setRouteAngleSilent(v) {
+  st._routeAngleDeg = (v != null) ? v : null;
   _renderAngleControl();
 }
-
-// ── Speed control ─────────────────────────────────────────────────────────────
 
 function _autoSpeedMs() {
   var h = parseFloat(document.getElementById('hgt').value);
-  var d = drones.find(function(x) { return x.name === document.getElementById('dsel').value; });
+  var d = st.drones.find(function(x) { return x.name === document.getElementById('dsel').value; });
   if (!d || isNaN(h) || h <= 0) return null;
   var sensor_h_m   = d.image_height_px * d.pixel_pitch_um * 1e-6;
   var footprint_m  = h * sensor_h_m / (d.focal_length_mm * 1e-3);
-  var trigger_m    = (1 - _cfgOverlapFront / 100) * footprint_m;
+  var trigger_m    = (1 - st._cfgOverlapFront / 100) * footprint_m;
   return trigger_m / d.min_capture_interval_s;
 }
 
 function _renderSpeedControl() {
-  var isAuto = (_speedMsOverride === null);
+  var isAuto = (st._speedMsOverride === null);
   document.getElementById('speed-auto-btn').classList.toggle('active', isAuto);
-  var val = isAuto ? _autoSpeedMs() : _speedMsOverride;
+  var val = isAuto ? _autoSpeedMs() : st._speedMsOverride;
   document.getElementById('speed-val').textContent = val != null ? val.toFixed(1) : '—';
 }
 
-function speedAuto() {
-  _speedMsOverride = null;
+export function speedAuto() {
+  st._speedMsOverride = null;
   _renderSpeedControl();
   markDirty();
   _scheduleAccurateEstimate();
 }
 
-function speedStep(dir) {
-  var cur = _speedMsOverride !== null ? _speedMsOverride : (_autoSpeedMs() || 4.0);
-  _speedMsOverride = Math.max(0.1, Math.round((cur + dir * 0.1) * 10) / 10);
+export function speedStep(dir) {
+  var cur = st._speedMsOverride !== null ? st._speedMsOverride : (_autoSpeedMs() || 4.0);
+  st._speedMsOverride = Math.max(0.1, Math.round((cur + dir * 0.1) * 10) / 10);
   _renderSpeedControl();
   markDirty();
   _scheduleAccurateEstimate();
 }
 
-function setSpeedSilent(v) {
-  _speedMsOverride = (v != null) ? v : null;
+export function setSpeedSilent(v) {
+  st._speedMsOverride = (v != null) ? v : null;
   _renderSpeedControl();
 }
 

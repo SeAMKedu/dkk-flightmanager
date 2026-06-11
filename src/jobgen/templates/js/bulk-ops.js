@@ -1,5 +1,16 @@
-// ── Bulk move ─────────────────────────────────────────────────────────────────
-function bulkMove() {
+// ── Bulk move / KML export / Google Maps / route rename / export route / bulk delete ──
+
+import { st } from './state.js';
+import { escHtml, jobApiUrl, _escapeXml, _hexToKmlColor } from './utils.js';
+import { showError } from './form-controls.js';
+import { loadJobsList } from './jobs-panel.js';
+import { _selectedJobs, _selectedMeta, clearSelection } from './multi-select.js';
+import { closeCardMenu, getOpenMenu, setOpenMenu } from './card-menu.js';
+// Circular — only called at runtime:
+import { getMvMode, getMvSelected, getMvCurrentFolder, openMapView } from './map-view.js';
+import { openJob } from './job-ops.js';
+
+export function bulkMove() {
   if (!_selectedJobs.size) return;
   var folderNames = [];
   document.querySelectorAll('.jfolder-name').forEach(function(el){
@@ -34,7 +45,7 @@ function bulkMove() {
   });
 
   document.body.appendChild(sub);
-  _openMenu = sub;
+  setOpenMenu(sub);
   setTimeout(function(){ document.addEventListener('click', closeCardMenu, {once:true}); }, 0);
 }
 
@@ -52,7 +63,7 @@ async function _bulkMoveToFolder(toFolder) {
         showError('Move failed for ' + j.name + ': ' + (e.detail||''));
       } else {
         var data = await r.json();
-        if (_activeJob === j.path) { _activeJob = data.path; _activeJobFolder = data.folder || null; }
+        if (st._activeJob === j.path) { st._activeJob = data.path; st._activeJobFolder = data.folder || null; }
       }
     } catch(err) { showError('Move failed: ' + err.message); }
   }
@@ -60,9 +71,8 @@ async function _bulkMoveToFolder(toFolder) {
   await loadJobsList();
 }
 
-// ── KML export & Google Maps ──────────────────────────────────────────────────
 async function _loadSelectedJobs() {
-  var paths = _mvMode ? Array.from(_mvSelected) : Array.from(_selectedJobs);
+  var paths = getMvMode() ? Array.from(getMvSelected()) : Array.from(_selectedJobs);
   if (!paths.length) return null;
   var jobs = [];
   for (var i = 0; i < paths.length; i++) {
@@ -84,13 +94,13 @@ async function _loadSelectedJobs() {
     return 0;
   });
   paths = jobs.map(function(j){ return j.path; });
-  return {paths, jobs};
+  return {paths: paths, jobs: jobs};
 }
 
-async function exportKml() {
+export async function exportKml() {
   var result = await _loadSelectedJobs();
   if (!result) return;
-  var {paths, jobs} = result;
+  var jobs = result.jobs, paths = result.paths;
 
   var kml = ['<?xml version="1.0" encoding="UTF-8"?>',
     '<kml xmlns="http://www.opengis.net/kml/2.2">',
@@ -146,10 +156,10 @@ async function exportKml() {
   URL.revokeObjectURL(url);
 }
 
-async function openGoogleMaps() {
+export async function openGoogleMaps() {
   var result = await _loadSelectedJobs();
   if (!result) return;
-  var {jobs} = result;
+  var jobs = result.jobs;
 
   var navPoints = [];
   jobs.forEach(function(job) {
@@ -165,16 +175,11 @@ async function openGoogleMaps() {
   }
 }
 
-// ── Route rename ─────────────────────────────────────────────────────────────
-// Prefix every selected job with YYYYMMDD-NN- in route order.
-// Strips any existing prefix matching that pattern before applying the new one.
 var _ROUTE_PREFIX_RE = /^\d{8}-\d{2,}-/;
 
-async function routeRename() {
+export async function routeRename() {
   var result = await _loadSelectedJobs();
   if (!result) return;
-  // Skeleton jobs (no sort_order and no takeoff point) are not part of any
-  // route — exclude them so the index sequence only counts flyable jobs.
   var jobs = result.jobs.filter(function(j) {
     return j.params.sort_order != null || j.params.takeoff_point_4326 != null;
   });
@@ -204,7 +209,7 @@ async function routeRename() {
         showError('Rename failed for ' + baseName + ': ' + (e.detail || ''));
       } else {
         var data = await r.json();
-        if (_activeJob === job.path) { _activeJob = data.path; }
+        if (st._activeJob === job.path) { st._activeJob = data.path; }
         job.path = data.path;
       }
     } catch(err) { showError('Rename failed: ' + err.message); }
@@ -213,12 +218,11 @@ async function routeRename() {
   await loadJobsList();
 }
 
-// ── Export Route ─────────────────────────────────────────────────────────────
-function exportRoute() {
+export function exportRoute() {
   var modal = document.getElementById('export-route-modal');
   var desc  = document.getElementById('export-route-desc');
   var err   = document.getElementById('export-route-error');
-  var scope = _mvCurrentFolder ? 'folder "' + _mvCurrentFolder + '"' : 'all folders';
+  var scope = getMvCurrentFolder() ? 'folder "' + getMvCurrentFolder() + '"' : 'all folders';
   desc.textContent = 'Copies .kmz and homes KML for all route jobs in ' + scope + ' to a folder on disk.';
   err.style.display = 'none';
   document.getElementById('export-route-dest').value = '';
@@ -226,11 +230,11 @@ function exportRoute() {
   setTimeout(function(){ document.getElementById('export-route-dest').focus(); }, 50);
 }
 
-function closeExportRouteModal() {
+export function closeExportRouteModal() {
   document.getElementById('export-route-modal').classList.remove('open');
 }
 
-async function submitExportRoute() {
+export async function submitExportRoute() {
   var dest = document.getElementById('export-route-dest').value.trim();
   var err  = document.getElementById('export-route-error');
   if (!dest) { err.textContent = 'Please enter a destination path.'; err.style.display = 'block'; return; }
@@ -244,7 +248,7 @@ async function submitExportRoute() {
     var r = await fetch('/api/export-route', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({dest_dir: dest, folder: _mvCurrentFolder})
+      body: JSON.stringify({dest_dir: dest, folder: getMvCurrentFolder()})
     });
     var data = await r.json();
     if (!r.ok) {
@@ -263,8 +267,7 @@ async function submitExportRoute() {
   }
 }
 
-// ── Bulk delete ───────────────────────────────────────────────────────────────
-async function bulkDelete() {
+export async function bulkDelete() {
   var n = _selectedJobs.size;
   if (!n) return;
   if (!window.confirm('Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '? This cannot be undone.')) return;
@@ -273,7 +276,10 @@ async function bulkDelete() {
     var j = metas[i];
     try {
       var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
-      if (r.ok && _activeJob === j.path) { _activeJob = null; _activeJobFolder = null; _dirty = false; _doNewJob(); }
+      if (r.ok && st._activeJob === j.path) {
+        st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
+        import('./form-controls.js').then(function(m){ m._doNewJob(); });
+      }
     } catch(err) { showError('Delete failed: ' + err.message); }
   }
   clearSelection();

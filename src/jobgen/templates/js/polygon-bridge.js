@@ -1,16 +1,21 @@
 // ── Bridge / Split mode ────────────────────────────────────────────────────────
-// Right-click a vertex to enter bridge/split mode.
-// 2 picks on same polygon → split line preview + "Split job" button in hint bar.
-// 4 picks across 2 polygons → bridge (quad union).
 
-var _bridgePts = [];        // [{coord:[lng,lat], polyIdx}]
-var _bridgeVerts = [];      // all vertices of current survey geometry
+import { st } from './state.js';
+import { map, lrs, editLayers, layerGeom } from './map-init.js';
+import { markDirty } from './dirty-tracking.js';
+import { _setEditedPoly } from './form-controls.js';
+// Circular — only called at runtime:
+import { _detachEditListeners } from './polygon-edit.js';
+import { jobApiUrl } from './utils.js';
+
+var _bridgePts = [];
+var _bridgeVerts = [];
 var _bridgeGroup = null;
-var _bridgeStyledEls = [];  // Leaflet.draw handle elements coloured during picking
-var _splitReady = false;    // true when 2 pts on same polygon are picked → show Split button
+var _bridgeStyledEls = [];
+var _splitReady = false;
 
 function _currentSurveyGeom() {
-  return editedPoly || (previewData && previewData.survey) || null;
+  return st.editedPoly || (st.previewData && st.previewData.survey) || null;
 }
 
 function _geomFromEditLayers() {
@@ -61,8 +66,7 @@ function _nearestVertex(latlng, snapPx) {
   return best;
 }
 
-// Build an interactive vertex layer for geom (used by map-layers.js and polygon-edit.js).
-function _buildVertexLayer(geom) {
+export function _buildVertexLayer(geom) {
   var vg = L.layerGroup();
   var verts = _collectVerts(geom);
   var seen = {};
@@ -84,7 +88,6 @@ function _enterBridgeModeWithVertex(v) {
   _checkAndCommit();
 }
 
-// After each pick: auto-commit bridge (4 pts) or enter split-ready (2 pts same poly).
 function _checkAndCommit() {
   var unique = _bridgePts.map(function(p){return p.polyIdx;})
                          .filter(function(v,i,a){return a.indexOf(v)===i;});
@@ -98,10 +101,10 @@ function _checkAndCommit() {
 }
 
 function enterBridgeMode() {
-  if (!previewData) return;
-  _bridgeMode = true;
+  if (!st.previewData) return;
+  st._bridgeMode = true;
   _bridgePts = [];
-  _bridgeVerts = editMode ? _collectVertsFromEditLayers() : _collectVerts(_currentSurveyGeom());
+  _bridgeVerts = st.editMode ? _collectVertsFromEditLayers() : _collectVerts(_currentSurveyGeom());
   if (_bridgeGroup) map.removeLayer(_bridgeGroup);
   _bridgeGroup = L.layerGroup().addTo(map);
   map.boxZoom.disable();
@@ -109,7 +112,6 @@ function enterBridgeMode() {
   _updateBridgePreview();
 }
 
-// Find the nearest Leaflet.draw vertex handle element to a map container point.
 function _findEditIconAt(cp) {
   var mr = map.getContainer().getBoundingClientRect();
   var best = null, bestD = 30;
@@ -143,9 +145,9 @@ function _restoreBridgeVertices() {
   _bridgeStyledEls = [];
 }
 
-function exitBridgeMode() {
-  if (!_bridgeMode) return;
-  _bridgeMode = false;
+export function exitBridgeMode() {
+  if (!st._bridgeMode) return;
+  st._bridgeMode = false;
   _splitReady = false;
   _bridgePts = [];
   _bridgeVerts = [];
@@ -208,7 +210,7 @@ function _showBridgeError(msg) {
 
 async function _commitBridge() {
   _splitReady = false;
-  var geom = editMode ? _geomFromEditLayers() : _currentSurveyGeom();
+  var geom = st.editMode ? _geomFromEditLayers() : _currentSurveyGeom();
   if (!geom) { exitBridgeMode(); return; }
 
   var indices = _bridgePts.map(function(p){ return p.polyIdx; });
@@ -235,26 +237,22 @@ async function _commitBridge() {
     }
     var data = await res.json();
     exitBridgeMode();
-    if (editMode) {
-      editMode = false;
+    if (st.editMode) {
+      st.editMode = false;
       map.doubleClickZoom.enable();
       editLayers.clearLayers();
     }
     _detachEditListeners();
     _setEditedPoly(data.geometry); markDirty();
     document.getElementById('rstbtn').disabled = false;
-    _updateSurveyDisplay(data.geometry);
+    // _updateSurveyDisplay is in polygon-edit.js — import at runtime
+    import('./polygon-edit.js').then(function(m){ m._updateSurveyDisplay(data.geometry); });
   } catch(e) {
     exitBridgeMode();
     _showBridgeError('Network error: ' + e.message);
   }
 }
 
-// ── Polygon split ─────────────────────────────────────────────────────────────
-
-// Split polygon geom at two boundary vertices, returning [halfA, halfB].
-// halfA keeps any holes and, for MultiPolygon, all other parts.
-// Returns null if the split is degenerate (< 2 vertices on either side).
 function _computeSplitPolygons(geom, coordA, coordB, polyIdx) {
   var partCoords, otherParts = [];
   if (geom.type === 'Polygon') {
@@ -266,7 +264,7 @@ function _computeSplitPolygons(geom, coordA, coordB, polyIdx) {
     }
   }
   var ring = partCoords[0];
-  var N = ring.length - 1; // unique vertex count (ring is closed: last === first)
+  var N = ring.length - 1;
   var iA = -1, iB = -1;
   for (var i = 0; i < N; i++) {
     if (ring[i][0] === coordA[0] && ring[i][1] === coordA[1]) iA = i;
@@ -274,21 +272,18 @@ function _computeSplitPolygons(geom, coordA, coordB, polyIdx) {
   }
   if (iA === -1 || iB === -1 || iA === iB) return null;
   if (iA > iB) { var t = iA; iA = iB; iB = t; }
-  // Require at least 2 vertices on each side (3-point ring minimum per half)
   if (iB - iA < 2 || N - (iB - iA) < 2) return null;
 
-  // Half A: ring[iA] → ring[iB] (forward)
   var r1 = [];
   for (var i = iA; i <= iB; i++) r1.push(ring[i]);
   r1.push(ring[iA]);
 
-  // Half B: ring[iB] → ring[N-1] → ring[0] → ring[iA] (wrapping)
   var r2 = [];
   for (var i = iB; i < N; i++) r2.push(ring[i]);
   for (var i = 0; i <= iA; i++) r2.push(ring[i]);
   r2.push(ring[iB]);
 
-  var holesA = partCoords.slice(1); // interior rings → stay with existing job
+  var holesA = partCoords.slice(1);
   var coordsA = [r1].concat(holesA);
   var coordsB = [r2];
 
@@ -306,10 +301,10 @@ function _computeSplitPolygons(geom, coordA, coordB, polyIdx) {
   return [halfA, halfB];
 }
 
-async function commitSplit() {
-  if (!_activeJob) { _showBridgeError('Save the job first before splitting'); return; }
+export async function commitSplit() {
+  if (!st._activeJob) { _showBridgeError('Save the job first before splitting'); return; }
   if (!_splitReady || _bridgePts.length !== 2) return;
-  var geom = editMode ? _geomFromEditLayers() : _currentSurveyGeom();
+  var geom = st.editMode ? _geomFromEditLayers() : _currentSurveyGeom();
   if (!geom) { exitBridgeMode(); return; }
   var halves = _computeSplitPolygons(geom, _bridgePts[0].coord, _bridgePts[1].coord, _bridgePts[0].polyIdx);
   if (!halves) {
@@ -317,15 +312,15 @@ async function commitSplit() {
     return;
   }
   exitBridgeMode();
-  if (editMode) {
-    editMode = false;
+  if (st.editMode) {
+    st.editMode = false;
     map.doubleClickZoom.enable();
     editLayers.clearLayers();
     _detachEditListeners();
   }
   try {
-    _ownSavedJob = _activeJob; // suppress ext-modified notice from our own write
-    var r = await fetch(jobApiUrl(_activeJob, '/split'), {
+    st._ownSavedJob = st._activeJob;
+    var r = await fetch(jobApiUrl(st._activeJob, '/split'), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({polygon_a: halves[0], polygon_b: halves[1]})
@@ -335,10 +330,38 @@ async function commitSplit() {
       _showBridgeError(err.detail || 'Split failed');
       return;
     }
-    _dirty = false;
+    st._dirty = false;
+    var { loadJobsList } = await import('./jobs-panel.js');
+    var { openJob } = await import('./job-ops.js');
     await loadJobsList();
-    openJob(_activeJob);
+    openJob(st._activeJob);
   } catch(e) {
     _showBridgeError('Network error: ' + e.message);
   }
 }
+
+// Called from polygon-edit.js event handler for bridge pick clicks
+export function _pickBridgeClick(e) {
+  if (!st._bridgeMode || e.button !== 0) return;
+  if (_splitReady) {
+    if (!e.target.classList.contains('bridge-split-btn') && !e.target.classList.contains('bridge-cancel-x'))
+      e.stopPropagation();
+    return;
+  }
+  e.stopPropagation();
+  var latlng = map.mouseEventToLatLng(e);
+  var v = _nearestVertex(latlng, 28);
+  if (!v) {
+    var h = document.getElementById('bridge-hint');
+    h.style.color = '#fca5a5';
+    setTimeout(function(){ h.style.color = ''; }, 400);
+    return;
+  }
+  var dup = _bridgePts.some(function(p){ return p.coord[0]===v.coord[0]&&p.coord[1]===v.coord[1]; });
+  if (dup) return;
+  _bridgePts.push(v);
+  _highlightBridgeVertex(v);
+  _checkAndCommit();
+}
+
+export { enterBridgeMode, _enterBridgeModeWithVertex, _collectVertsFromEditLayers, _collectVerts };

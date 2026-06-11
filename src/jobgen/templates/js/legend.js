@@ -1,16 +1,22 @@
 // ── Warning rings ─────────────────────────────────────────────────────────────
-function redrawRings() {
+
+import { st } from './state.js';
+import { map, lrs } from './map-init.js';
+// centroid is imported at runtime (circular dep is safe — only called at runtime)
+import { centroid } from './map-layers.js';
+
+export function redrawRings() {
   if (lrs.rings) { map.removeLayer(lrs.rings); lrs.rings = null; }
   var warnR = parseFloat(document.getElementById('warn-radius').value) || 0;
   var row = document.getElementById('leg-rings-row');
   var lbl = document.getElementById('leg-rings-label');
-  if (!previewData || !previewData.buildings || !warnR) {
+  if (!st.previewData || !st.previewData.buildings || !warnR) {
     if (row) row.style.display = 'none';
     return;
   }
   var wg = L.layerGroup();
   var count = 0;
-  previewData.buildings.forEach(function(b) {
+  st.previewData.buildings.forEach(function(b) {
     if (!b.is_keepout) return;
     var pt = centroid(b.geojson);
     if (!pt) return;
@@ -32,10 +38,12 @@ function redrawRings() {
 
 // Persisted user eye-toggle choices — survives preview refreshes and job switches.
 // Keys are lrKey strings; values are booleans (true = visible).
-var _legendUserVis = {};
+export const _legendUserVis = {};
+
+var _legendRows;
 
 (function initLegend() {
-  var rows = [
+  _legendRows = [
     {btnId:'leg-dsm',      lrKey:'dsm',      rowId:'leg-dsm-row',   startOff:true},
     {btnId:'leg-areas',    lrKey:'areas',    rowId:null},
     {btnId:'leg-survey',   lrKey:'survey',   rowId:null},
@@ -49,7 +57,7 @@ var _legendUserVis = {};
     {btnId:'leg-route',    lrKey:'route',    rowId:'leg-route-row'},
     {btnId:'leg-coverage', lrKey:'coverage', rowId:'leg-coverage-row', startOff:true},
   ];
-  rows.forEach(function(r) {
+  _legendRows.forEach(function(r) {
     document.getElementById(r.btnId).addEventListener('click', function() {
       var layer = lrs[r.lrKey];
       if (!layer) return;
@@ -59,13 +67,12 @@ var _legendUserVis = {};
     });
   });
   document.getElementById('legend').classList.add('inactive');
-  window._legendRows = rows;
 })();
 
 // savedVis: optional {lrKey: bool} map of user-chosen visibility to restore.
 // When omitted (e.g. first render, open-job), defaults are applied (startOff for DSM).
-function resetLegend(savedVis) {
-  window._legendRows.forEach(function(r) {
+export function resetLegend(savedVis) {
+  _legendRows.forEach(function(r) {
     var btn = document.getElementById(r.btnId);
     var hasLayer = !!lrs[r.lrKey];
     if (r.rowId) {

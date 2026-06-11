@@ -3,6 +3,9 @@
 // Shift modifier: draw a radius line + unfilled circle instead.
 // Measurements persist until cleared. Does not activate in edit / bridge mode.
 
+import { st } from './state.js';
+import { map } from './map-init.js';
+
 var _measItems   = [];      // [{startLL, endLL, shift}] committed measurements
 var _measTemp    = null;    // {startLL, endLL, shift} during current drag
 var _measSvg     = null;    // <svg> overlay element inside #map
@@ -39,7 +42,7 @@ function _initMeasEvents() {
 
   container.addEventListener('mousedown', function(e) {
     if (e.button !== 2 || !e.ctrlKey) return;
-    if (editMode || _bridgeMode) return;
+    if (st.editMode || st._bridgeMode) return;
     _measStartPx = {x: e.clientX, y: e.clientY};
     _measShift   = e.shiftKey;
     _measDragged = false;
@@ -48,7 +51,7 @@ function _initMeasEvents() {
 
   document.addEventListener('mousemove', function(e) {
     if (!_measStartPx) return;
-    if (editMode || _bridgeMode) { _measStartPx = null; return; }
+    if (st.editMode || st._bridgeMode) { _measStartPx = null; return; }
     var dx = e.clientX - _measStartPx.x;
     var dy = e.clientY - _measStartPx.y;
     if (!_measDragged && Math.sqrt(dx*dx + dy*dy) > 5) {
@@ -98,7 +101,7 @@ function _initMeasEvents() {
   }, true);
 }
 
-function clearMeasurements() {
+export function clearMeasurements() {
   _measItems  = [];
   _measTemp   = null;
   _measActive = false;

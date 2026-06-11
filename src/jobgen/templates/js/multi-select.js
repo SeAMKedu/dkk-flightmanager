@@ -1,9 +1,16 @@
 // ── Multi-select & bulk operations ────────────────────────────────────────────
 
-var _selectedJobs = new Set();   // Set of job path strings
-var _selectedMeta = new Map();   // path → job card object (for merge/move)
+import { escHtml } from './utils.js';
+import { showError } from './form-controls.js';
+import { loadJobsList } from './jobs-panel.js';
+// Circular — only called at runtime:
+import { getMvMode, getMvLayers, _mvToggleSel, mvClearSel } from './map-view.js';
+import { openJob } from './job-ops.js';
 
-function toggleJobSelection(j, selected) {
+export var _selectedJobs = new Set();
+export var _selectedMeta = new Map();
+
+export function toggleJobSelection(j, selected) {
   if (selected) {
     _selectedJobs.add(j.path);
     _selectedMeta.set(j.path, j);
@@ -13,22 +20,18 @@ function toggleJobSelection(j, selected) {
   }
   var card = document.querySelector('.jcard[data-path="' + CSS.escape(j.path) + '"]');
   if (card) card.classList.toggle('selected', selected);
-  if (_mvMode) {
+  if (getMvMode()) {
     if (selected) {
-      _mvSelected.add(j.path);
-      var item = _mvLayers.find(function(i){ return i.path === j.path; });
-      if (item) item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
+      _mvToggleSel(j.path); // will add to _mvSelected and style
     } else {
-      _mvSelected.delete(j.path);
-      var item = _mvLayers.find(function(i){ return i.path === j.path; });
-      if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
+      _mvToggleSel(j.path); // will remove from _mvSelected and style
     }
-    _mvUpdateSelBar();
+    // _mvUpdateSelBar is called by _mvToggleSel internally
   }
   _updateSelBar();
 }
 
-function clearSelection() {
+export function clearSelection() {
   _selectedJobs.clear();
   _selectedMeta.clear();
   document.querySelectorAll('.jcard.selected').forEach(function(c) {
@@ -36,18 +39,13 @@ function clearSelection() {
     var chk = c.querySelector('.jcard-chk');
     if (chk) chk.checked = false;
   });
-  if (_mvMode) {
-    _mvSelected.forEach(function(path) {
-      var item = _mvLayers.find(function(i){ return i.path === path; });
-      if (item) { var c = item.feature.properties.color || _DEFAULT_COLOR; item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
-    });
-    _mvSelected.clear();
-    _mvUpdateSelBar();
+  if (getMvMode()) {
+    mvClearSel();
   }
   _updateSelBar();
 }
 
-function _updateSelBar() {
+export function _updateSelBar() {
   var n = _selectedJobs.size;
   var bar = document.getElementById('jp-sel-bar');
   bar.classList.toggle('visible', n > 0);
@@ -55,8 +53,7 @@ function _updateSelBar() {
   document.getElementById('sel-merge-btn').disabled = n < 2;
 }
 
-// ── Merge modal ───────────────────────────────────────────────────────────────
-function openMergeModal() {
+export function openMergeModal() {
   if (_selectedJobs.size < 2) return;
   var jobs = Array.from(_selectedMeta.values());
   var names = jobs.map(function(j){ return j.name; });
@@ -74,11 +71,11 @@ function openMergeModal() {
   setTimeout(function(){ document.getElementById('merge-name').focus(); document.getElementById('merge-name').select(); }, 50);
 }
 
-function closeMergeModal() {
+export function closeMergeModal() {
   document.getElementById('merge-modal').classList.remove('open');
 }
 
-async function submitMerge() {
+export async function submitMerge() {
   var newName = document.getElementById('merge-name').value.trim();
   if (!newName) { document.getElementById('merge-name').focus(); return; }
   var folder = document.getElementById('merge-folder').value.trim() || null;

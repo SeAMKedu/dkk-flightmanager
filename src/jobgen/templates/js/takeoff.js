@@ -1,5 +1,7 @@
 // ── Takeoff marker & VLOS rings ───────────────────────────────────────────────
 
+import { map } from './map-init.js';
+
 var _takeoffAuto = null;        // [lng, lat] suggested by server
 var _takeoffPt   = null;        // [lng, lat] current (auto or user-dragged)
 var _takeoffUserMoved = false;  // true once user drags the marker
@@ -8,6 +10,20 @@ var _vlosRange   = 300;         // metres, set from /api/config
 var _vlosOuter   = null;        // L.circle — full VLOS range ring
 var _vlosInner   = null;        // L.circle — half VLOS range ring
 var _vlosVisible = false;       // toggled by click on marker
+
+export function getTakeoffAuto() { return _takeoffAuto; }
+export function setTakeoffAuto(v) { _takeoffAuto = v; }
+export function getTakeoffPt() { return _takeoffPt; }
+export function setTakeoffPt(v) { _takeoffPt = v; }
+export function getTakeoffUserMoved() { return _takeoffUserMoved; }
+export function setTakeoffUserMoved(v) { _takeoffUserMoved = v; }
+export function setVlosRange(v) { _vlosRange = v; }
+
+// Helper for map-view.js to clear takeoff without importing private vars
+export function clearTakeoffForMapView() {
+  if (_takeoffMarker) map.removeLayer(_takeoffMarker);
+  _hideVlos();
+}
 
 function _vlosCircleOpts(full) {
   return full
@@ -21,7 +37,7 @@ function _showVlos(ll) {
   _vlosInner = L.circle(ll, _vlosCircleOpts(false)).addTo(map);
 }
 
-function _hideVlos() {
+export function _hideVlos() {
   if (_vlosOuter) { map.removeLayer(_vlosOuter); _vlosOuter = null; }
   if (_vlosInner) { map.removeLayer(_vlosInner); _vlosInner = null; }
   _vlosVisible = false;
@@ -32,7 +48,7 @@ function _moveVlos(ll) {
   if (_vlosInner) _vlosInner.setLatLng(ll);
 }
 
-function _renderTakeoffMarker(lngLat) {
+export function _renderTakeoffMarker(lngLat) {
   if (_takeoffMarker) { map.removeLayer(_takeoffMarker); _takeoffMarker = null; }
   _hideVlos();
   var row = document.getElementById('leg-takeoff-row');
@@ -69,13 +85,13 @@ function _renderTakeoffMarker(lngLat) {
   if (btn && btn.classList.contains('off')) map.removeLayer(_takeoffMarker);
 }
 
-function recalcTakeoff() {
+export function recalcTakeoff() {
   if (!_takeoffAuto) return;
   _takeoffUserMoved = false;
   _renderTakeoffMarker(_takeoffAuto);
 }
 
-function _clearTakeoff() {
+export function _clearTakeoff() {
   _takeoffAuto = null; _takeoffPt = null; _takeoffUserMoved = false;
   _renderTakeoffMarker(null);
   document.getElementById('takeoff-recalc-btn').disabled = true;

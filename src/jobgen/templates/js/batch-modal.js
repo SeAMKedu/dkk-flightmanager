@@ -1,8 +1,13 @@
 // ── Batch dialog ──────────────────────────────────────────────────────────────
 
+import { st } from './state.js';
+import { escHtml } from './utils.js';
+import { loadJobsList } from './jobs-panel.js';
+import { closeFolderDialog, submitFolder } from './card-menu.js';
+
 var _batchType = 'parcels';
 
-function openBatchDialog() {
+export function openBatchDialog() {
   var today = new Date();
   var iso = today.getFullYear() + '-'
     + String(today.getMonth()+1).padStart(2,'0') + '-'
@@ -15,7 +20,7 @@ function openBatchDialog() {
     var defOpt = document.createElement('option');
     defOpt.value = ''; defOpt.textContent = '(default)';
     bdr.appendChild(defOpt);
-    drones.forEach(function(d) {
+    st.drones.forEach(function(d) {
       var o = document.createElement('option');
       o.value = d.name; o.textContent = d.name;
       bdr.appendChild(o);
@@ -28,7 +33,7 @@ function openBatchDialog() {
   _updateBatchCount();
 }
 
-function closeBatchDialog() {
+export function closeBatchDialog() {
   document.getElementById('batch-modal').classList.remove('open');
 }
 
@@ -37,7 +42,7 @@ var _batchPlaceholders = {
   properties: 'One property ID per line\n214-407-3-22\n214-407-3-23\n\nOr paste comma-separated'
 };
 
-function setBatchType(type) {
+export function setBatchType(type) {
   _batchType = type;
   document.getElementById('btype-parcels').classList.toggle('active', type === 'parcels');
   document.getElementById('btype-props').classList.toggle('active', type === 'properties');
@@ -82,7 +87,7 @@ document.getElementById('batch-file-input').addEventListener('change', function(
   e.target.value = '';
 });
 
-async function submitBatch() {
+export async function submitBatch() {
   var ids = _parseBatchIds();
   if (!ids.length) return;
 
@@ -169,7 +174,6 @@ function _batchError(msg) {
   document.getElementById('batch-prog-close').disabled = false;
 }
 
-// Modal backdrop / keyboard handlers
 document.getElementById('batch-modal').addEventListener('click', function(e) {
   if (e.target === this) closeBatchDialog();
 });

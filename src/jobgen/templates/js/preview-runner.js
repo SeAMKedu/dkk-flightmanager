@@ -1,35 +1,51 @@
 // ── Preview & Export runners ──────────────────────────────────────────────────
 
-async function startPreview() {
-  if (isRunning || editMode) return;  // don't preview while editing — renderMap clears editLayers
+import { st } from './state.js';
+import { map } from './map-init.js';
+import { getParams, showError, clearError, updateFolderHint, getFitBoundsFlag } from './form-controls.js';
+import { _legendUserVis, resetLegend } from './legend.js';
+import { setTakeoffAuto, getTakeoffUserMoved, _renderTakeoffMarker } from './takeoff.js';
+import { renderMap, onPreviewDone } from './map-layers.js';
+import { renderStatus } from './status-panel.js';
+import { loadJobsList, setJpOpen } from './jobs-panel.js';
+import { updateRouteStats } from './route-planner.js';
+
+export async function startPreview() {
+  if (st.isRunning || st.editMode) return;  // don't preview while editing — renderMap clears editLayers
   clearError();
   var p = getParams();
-  if (polyModified) p.custom_polygon = editedPoly;
+  if (st.polyModified) p.custom_polygon = st.editedPoly;
   if (!p.parcel_ids.length && !p.property_ids.length && !p.custom_polygon) {
     showError('Enter at least one parcel ID or property ID.'); return;
   }
   await runJob('/api/preview', p, 'Preview', onPreviewDone);
 }
 
-async function startExport() {
-  if (isRunning) return;
+export async function startExport() {
+  if (st.isRunning) return;
   clearError();
   var jn = document.getElementById('jname').value.trim();
   if (!jn) { showError('Enter a job name.'); return; }
-  if (editMode) saveEdit();  // commit any pending vertex edits before saving
+  if (st.editMode) {
+    // import saveEdit at runtime to avoid circular issues
+    var pe = await import('./polygon-edit.js');
+    pe.saveEdit();  // commit any pending vertex edits before saving
+  }
   var colorEl = document.getElementById('job-color');
   var p = Object.assign(getParams(), {
     job_name: jn,
-    folder: _activeJobFolder || null,
+    folder: st._activeJobFolder || null,
     color: colorEl.value !== _DEFAULT_JOB_COLOR ? colorEl.value : null,
-    custom_polygon: polyModified ? editedPoly : null,
-    takeoff_point_4326: _takeoffPt || null
+    custom_polygon: st.polyModified ? st.editedPoly : null,
+    takeoff_point_4326: (await import('./takeoff.js')).getTakeoffPt() || null
   });
   await runJob('/api/export', p, 'Saving…', onSaveDone);
 }
 
+var _DEFAULT_JOB_COLOR = '#3b82f6';
+
 async function runJob(endpoint, params, label, onDone) {
-  isRunning = true;
+  st.isRunning = true;
   document.getElementById('xb').disabled = true;
   showToast(label + '…', 0, 'Starting…');
   showPg(true, 0, 'Starting…');
@@ -51,28 +67,28 @@ async function runJob(endpoint, params, label, onDone) {
   var jid = data.job_id;
   console.log('[' + label + '] job_id=' + jid);
 
-  if (currentSSE) currentSSE.close();
-  currentSSE = new EventSource('/api/progress/' + jid);
+  if (st.currentSSE) st.currentSSE.close();
+  st.currentSSE = new EventSource('/api/progress/' + jid);
 
-  currentSSE.onmessage = function(e) {
+  st.currentSSE.onmessage = function(e) {
     var d;
     try { d = JSON.parse(e.data); } catch(ex) { console.error('SSE parse error', e.data); return; }
     console.log('[sse]', d.stage, d.pct + '%', d.msg || '');
     if (d.stage === 'keepalive') return;
     if (d.stage === 'error') {
-      currentSSE.close(); onErr(d.msg);
+      st.currentSSE.close(); onErr(d.msg);
     } else if (d.stage === 'done') {
-      currentSSE.close(); finishRun(); onDone(d.payload);
+      st.currentSSE.close(); finishRun(); onDone(d.payload);
     } else {
       showPg(true, d.pct, d.msg);
       showToast(null, d.pct, d.msg);
     }
   };
 
-  currentSSE.onerror = function(ev) {
-    console.error('[sse] onerror', ev, 'readyState='+currentSSE.readyState);
-    if (currentSSE.readyState === EventSource.CLOSED) return;
-    currentSSE.close();
+  st.currentSSE.onerror = function(ev) {
+    console.error('[sse] onerror', ev, 'readyState='+st.currentSSE.readyState);
+    if (st.currentSSE.readyState === EventSource.CLOSED) return;
+    st.currentSSE.close();
     onErr('SSE connection lost (check server terminal for details).');
   };
 }
@@ -92,30 +108,31 @@ function showToast(title, pct, msg) {
   document.getElementById('tmsg').textContent = msg || '';
 }
 function finishRun() {
-  isRunning = false;
+  st.isRunning = false;
   // xb state is owned by each completion callback (onPreviewDone/onSaveDone/onErr)
   document.getElementById('toast').style.display = 'none';
   showPg(false, 0, '');
-  if (_pendingPreview) { _pendingPreview = false; startPreview(); }
+  if (st._pendingPreview) { st._pendingPreview = false; startPreview(); }
 }
 function onErr(msg) {
   console.error('[err]', msg);
   finishRun();
-  document.getElementById('xb').disabled = !previewData;
+  document.getElementById('xb').disabled = !st.previewData;
   document.getElementById('toast').style.display = 'none';
   showError(msg);
 }
 
 // ── Save completion callback ──────────────────────────────────────────────────
-function onSaveDone(payload) {
+async function onSaveDone(payload) {
   console.log('[save done]', payload);
   document.getElementById('xb').disabled = false;
-  _activeJob = payload.job_name ? (payload.folder ? payload.folder + '/' + payload.job_name : payload.job_name) : null;
-  _activeJobFolder = payload.folder || null;
-  _ownSavedJob = _activeJob;
-  _dirty = false;
+  st._activeJob = payload.job_name ? (payload.folder ? payload.folder + '/' + payload.job_name : payload.job_name) : null;
+  st._activeJobFolder = payload.folder || null;
+  st._ownSavedJob = st._activeJob;
+  st._dirty = false;
   if (payload.stats) renderStatus(payload.stats);
   // renderStatus rebuilds the DOM — restore route stats the pipeline doesn't include
+  var _lastRouteStats = (await import('./route-planner.js'))._getLastRouteStats();
   if (_lastRouteStats) updateRouteStats(_lastRouteStats);
   setJpOpen(true);
   loadJobsList();

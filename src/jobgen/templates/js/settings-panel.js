@@ -6,7 +6,7 @@ var _cfgOrigValues = {};   // key → value as loaded from server
 var _cfgActiveSid  = null; // active section id
 var _cfgSearchQ    = '';   // current search query
 
-async function openSettings() {
+export async function openSettings() {
   var overlay = document.getElementById('cfg-overlay');
   overlay.style.display = 'flex';
   document.getElementById('cfg-search').value = '';
@@ -30,12 +30,12 @@ async function openSettings() {
   }
 }
 
-function closeSettings() {
+export function closeSettings() {
   if (_cfgIsDirty() && !confirm('Discard unsaved changes?')) return;
   _cfgClose();
 }
 
-function discardSettings() { closeSettings(); }
+export function discardSettings() { closeSettings(); }
 
 function _cfgClose() {
   document.getElementById('cfg-overlay').style.display = 'none';
@@ -112,7 +112,7 @@ function _cfgActivate(sid) {
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
-function cfgSearch(q) {
+export function cfgSearch(q) {
   _cfgSearchQ = q.trim().toLowerCase();
   if (!_cfgSearchQ) {
     _cfgActivate(_cfgActiveSid);
@@ -278,7 +278,7 @@ function _cfgMarkModified(input, key) {
 }
 
 // ── Save / Reset ──────────────────────────────────────────────────────────────
-async function saveSettings() {
+export async function saveSettings() {
   var changes = {};
   for (var key of Object.keys(_cfgValues)) {
     if (!_cfgValEq(_cfgValues[key], _cfgOrigValues[key])) {
@@ -383,7 +383,7 @@ function _renderStats(data) {
   el.innerHTML = html;
 }
 
-async function openAbout() {
+export async function openAbout() {
   var modal = document.getElementById('about-modal');
   modal.style.display = 'flex';
   try {
@@ -398,6 +398,6 @@ async function openAbout() {
   } catch(e) {}
 }
 
-function closeAbout() {
+export function closeAbout() {
   document.getElementById('about-modal').style.display = 'none';
 }

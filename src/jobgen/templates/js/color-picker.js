@@ -1,5 +1,7 @@
 // ── Canvas-based HSV color picker ─────────────────────────────────────────────
 
+import { st } from './state.js';
+
 var _cpH = 210, _cpS = 0.71, _cpV = 0.96; // default: #3b82f6
 var _cpDraggingSV = false, _cpDraggingHue = false;
 
@@ -77,11 +79,19 @@ function _cpUpdateDisplay() {
   _syncPaletteActive(hex);
 }
 
-function _cpSetFromHex(hex) {
+export function _cpSetFromHex(hex) {
   var rgb=_hexToRgb(hex); if(!rgb) return;
   var hsv=_rgbToHsv(rgb[0],rgb[1],rgb[2]);
   _cpH=hsv[0]; _cpS=hsv[1]; _cpV=hsv[2];
   _cpUpdateDisplay();
+}
+
+// Sync swatch active state — moved here from job-ops.js to break circular dep
+export function _syncPaletteActive(hex) {
+  var norm = (hex || '').toLowerCase();
+  document.querySelectorAll('.color-swatch').forEach(function(s) {
+    s.classList.toggle('active', s.dataset.color === norm);
+  });
 }
 
 function _cpCommit() {

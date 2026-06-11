@@ -1,7 +1,10 @@
 // ── Status panel ──────────────────────────────────────────────────────────────
+
+import { st } from './state.js';
+
 var _dash = '<span style="color:#cbd5e1">—</span>';
 
-function renderStatus(s) {
+export function renderStatus(s) {
   document.getElementById('sp').classList.toggle('sp-visible', !!s);
   var sh = !s ? ''
     : s.flight_ready ? '<div class="sh"><span class="sok">&#10003; FLIGHT READY</span></div>'
@@ -20,8 +23,8 @@ function renderStatus(s) {
   }).join('') : '';
   // Client-side altitude cap warning
   var curH = parseFloat(document.getElementById('hgt').value);
-  if (_altCap !== null && !isNaN(curH) && curH >= _altCap) {
-    rh += '<div class="ritem" style="color:#f97316">&#9888; Height '+curH.toFixed(0)+' m is at or above zone floor '+Math.round(_altCap)+' m AGL — fly below '+Math.round(_altCap)+' m or obtain authorisation</div>';
+  if (st._altCap !== null && !isNaN(curH) && curH >= st._altCap) {
+    rh += '<div class="ritem" style="color:#f97316">&#9888; Height '+curH.toFixed(0)+' m is at or above zone floor '+Math.round(st._altCap)+' m AGL — fly below '+Math.round(st._altCap)+' m or obtain authorisation</div>';
   }
   document.getElementById('spcontent').innerHTML =
     sh

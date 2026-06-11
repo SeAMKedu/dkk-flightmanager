@@ -1,8 +1,18 @@
 // ── Card menu & folder operations ─────────────────────────────────────────────
 
-var _openMenu = null;
+import { st } from './state.js';
+import { escHtml, jobApiUrl } from './utils.js';
+import { showError } from './form-controls.js';
+import { loadJobsList } from './jobs-panel.js';
+// Circular — only called at runtime:
+import { openJob } from './job-ops.js';
+import { revealJob, startRename, confirmDeleteJob } from './job-ops.js';
 
-function toggleCardMenu(e, j) {
+var _openMenu = null;
+export function getOpenMenu() { return _openMenu; }
+export function setOpenMenu(m) { _openMenu = m; }
+
+export function toggleCardMenu(e, j) {
   e.stopPropagation();
   closeCardMenu();
   var btn = e.currentTarget;
@@ -14,7 +24,7 @@ function toggleCardMenu(e, j) {
         ['Open',            function(){ openJob(j.path); }],
         ['Show folder',     function(){ revealJob(j.path); }],
         ['Move to Folder',  function(){ showMoveMenu(btn, j); }],
-        ['Clone',           function(){ cloneJob(j.path); }],
+        ['Clone',           function(){ import('./job-ops.js').then(function(m){ m.cloneJob(j.path); }); }],
         ['Rename',          function(){ startRename(j); }],
         ['Delete',          function(){ confirmDeleteJob(j); }],
       ];
@@ -29,12 +39,12 @@ function toggleCardMenu(e, j) {
   _openMenu = menu;
   setTimeout(function() { document.addEventListener('click', closeCardMenu, {once:true}); }, 0);
 }
-function closeCardMenu() {
+
+export function closeCardMenu() {
   if (_openMenu) { _openMenu.remove(); _openMenu = null; }
 }
 
-// ── Move to folder ────────────────────────────────────────────────────────────
-function showMoveMenu(btn, j) {
+export function showMoveMenu(btn, j) {
   closeCardMenu();
   var folderNames = [];
   document.querySelectorAll('.jfolder-name').forEach(function(el){
@@ -67,7 +77,7 @@ function showMoveMenu(btn, j) {
   setTimeout(function(){ document.addEventListener('click', function(){ sub.remove(); }, {once:true}); }, 0);
 }
 
-async function doMoveJob(j, toFolder) {
+export async function doMoveJob(j, toFolder) {
   try {
     var r = await fetch(jobApiUrl(j.path, '/move'), {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -78,26 +88,25 @@ async function doMoveJob(j, toFolder) {
       showError(err.detail || 'Move failed'); return;
     }
     var data = await r.json();
-    if (_activeJob === j.path) {
-      _activeJob = data.path;
-      _activeJobFolder = data.folder || null;
+    if (st._activeJob === j.path) {
+      st._activeJob = data.path;
+      st._activeJobFolder = data.folder || null;
     }
     await loadJobsList();
   } catch(e) { showError('Move failed: ' + e.message); }
 }
 
-// ── Folder dialog ─────────────────────────────────────────────────────────────
-function createFolder() {
+export function createFolder() {
   document.getElementById('folder-name-input').value = '';
   document.getElementById('folder-modal').classList.add('open');
   setTimeout(function(){ document.getElementById('folder-name-input').focus(); }, 50);
 }
 
-function closeFolderDialog() {
+export function closeFolderDialog() {
   document.getElementById('folder-modal').classList.remove('open');
 }
 
-async function submitFolder() {
+export async function submitFolder() {
   var name = document.getElementById('folder-name-input').value.trim();
   if (!name) return;
   var errEl = document.getElementById('folder-error');
@@ -123,7 +132,7 @@ async function submitFolder() {
   } finally { btn.disabled = false; }
 }
 
-async function promptNewFolderForJob(j) {
+export async function promptNewFolderForJob(j) {
   var name = window.prompt('New folder name:');
   if (!name || !name.trim()) return;
   name = name.trim();

@@ -1,28 +1,40 @@
 // ── Map rendering ─────────────────────────────────────────────────────────────
 
-function onPreviewDone(payload) {
+import { st } from './state.js';
+import { map, lrs, editLayers, resetLrs } from './map-init.js';
+import { _legendUserVis, resetLegend, redrawRings } from './legend.js';
+import { getFitBoundsFlag, setFitBoundsFlag, getLastPreviewedIds, setLastPreviewedIds,
+         getRadiusLinked, setRadiusLinked, idsKey, updateGsd, clearAreaFocus, showError } from './form-controls.js';
+import { getTakeoffAuto, setTakeoffAuto, getTakeoffUserMoved, _renderTakeoffMarker } from './takeoff.js';
+import { renderStatus } from './status-panel.js';
+import { _buildVertexLayer, exitBridgeMode } from './polygon-bridge.js';
+import { updateRouteOverlay, updateRouteStats, _renderAngleControl } from './route-planner.js';
+// toggleEdit — circular but runtime-safe (only called in event handlers)
+import { toggleEdit } from './polygon-edit.js';
+
+export function onPreviewDone(payload) {
   console.log('[preview done]', payload.stats);
-  previewData = payload;
-  _lastPreviewedIds = idsKey();
+  st.previewData = payload;
+  setLastPreviewedIds(idsKey());
   clearAreaFocus();
   document.getElementById('xb').disabled = false;
   document.getElementById('rstbtn').disabled = false;
   // Compute the lowest zone floor across zones that directly intersect the survey area.
   // Buffer-only and context-only zones are excluded — they don't constrain the flight altitude.
-  _altCap = null;
+  st._altCap = null;
   (payload.zone_hits||[]).forEach(function(z) {
     if (z.context_only || z.buffer_only) return;
     if (z.lower_ref === 'AGL' && z.lower_limit != null && z.lower_limit > 0) {
       var m = z.lower_uom === 'FT' ? z.lower_limit * 0.3048 : parseFloat(z.lower_limit);
-      if (!isNaN(m) && (_altCap === null || m < _altCap)) _altCap = m;
+      if (!isNaN(m) && (st._altCap === null || m < st._altCap)) st._altCap = m;
     }
   });
-  if (_altCap !== null) {
+  if (st._altCap !== null) {
     var currentH = parseFloat(document.getElementById('hgt').value);
-    if (isNaN(currentH) || currentH > _altCap) {
-      document.getElementById('hgt').value = _altCap;
+    if (isNaN(currentH) || currentH > st._altCap) {
+      document.getElementById('hgt').value = st._altCap;
       updateGsd();
-      if (_radiusLinked) setRadiusLinked(true);
+      if (getRadiusLinked()) setRadiusLinked(true);
     }
   }
   try {
@@ -36,7 +48,7 @@ function onPreviewDone(payload) {
     // Draw route BEFORE resetLegend so lrs.route is populated and visibility
     // can be applied correctly — route is computed after renderMap clears lrs.
     if (payload.stats && payload.stats.route_angle_deg_auto != null) {
-      _routeAngleAuto = payload.stats.route_angle_deg_auto;
+      st._routeAngleAuto = payload.stats.route_angle_deg_auto;
       _renderAngleControl();
     }
     updateRouteOverlay();
@@ -45,8 +57,8 @@ function onPreviewDone(payload) {
     resetLegend(_legendUserVis);
     renderStatus(payload.stats);
     if (payload.takeoff_point_4326) {
-      _takeoffAuto = payload.takeoff_point_4326;
-      if (!_takeoffUserMoved) _renderTakeoffMarker(_takeoffAuto);
+      setTakeoffAuto(payload.takeoff_point_4326);
+      if (!getTakeoffUserMoved()) _renderTakeoffMarker(getTakeoffAuto());
     }
     if (payload.stats) {
       updateRouteStats({
@@ -62,7 +74,7 @@ function onPreviewDone(payload) {
 }
 
 // Convert a GeoJSON geometry (Polygon or MultiPolygon) to an array of L.polygon layers.
-function geomToPolys(geom, style) {
+export function geomToPolys(geom, style) {
   var out = [];
   if (!geom) return out;
   if (geom.type === 'Polygon') {
@@ -77,12 +89,12 @@ function geomToPolys(geom, style) {
   return out;
 }
 
-function renderMap(data) {
+export function renderMap(data) {
   exitBridgeMode();
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, plines:null, plko:null, zones:null, route:null, coverage:null};
+  resetLrs();
   editLayers.clearLayers();
-  if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
+  if (st._dataAttribution) { map.attributionControl.removeAttribution(st._dataAttribution); st._dataAttribution = ''; }
 
   // DSM grayscale overlay
   if (data.dsm_b64 && data.dsm_bounds) {
@@ -233,10 +245,10 @@ function renderMap(data) {
   if (surveyPolys.length) {
     lrs.survey = L.featureGroup(surveyPolys).addTo(map);
     lrs.survey.eachLayer(function(l) {
-      l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!editMode && !_bridgeMode) toggleEdit(); });
+      l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!st.editMode && !st._bridgeMode) toggleEdit(); });
     });
     console.log('[renderMap] survey bounds', lrs.survey.getBounds());
-    if (_fitBoundsOnNextRender) { _fitBoundsOnNextRender = false; map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]}); }
+    if (getFitBoundsFlag()) { setFitBoundsFlag(false); map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]}); }
   } else {
     console.warn('[renderMap] no survey polygons rendered, survey type:', data.survey && data.survey.type);
   }
@@ -251,10 +263,10 @@ function renderMap(data) {
   if (s.has_properties) attrs.push('Properties &copy; <a href="https://maanmittauslaitos.fi" target="_blank">MML</a>');
   if (data.buildings && data.buildings.length || data.power_lines && data.power_lines.length) attrs.push('Topographic DB &amp; DEM &copy; <a href="https://maanmittauslaitos.fi" target="_blank">MML</a>');
   if (data.zone_hits) attrs.push('UAS zones &copy; <a href="https://traficom.fi" target="_blank">Traficom</a>');
-  if (attrs.length) { _dataAttribution = attrs.join(' | '); map.attributionControl.addAttribution(_dataAttribution); }
+  if (attrs.length) { st._dataAttribution = attrs.join(' | '); map.attributionControl.addAttribution(st._dataAttribution); }
 }
 
-function centroid(geom) {
+export function centroid(geom) {
   try {
     if (geom.type==='Point') return [geom.coordinates[1], geom.coordinates[0]];
     if (geom.type==='Polygon') {

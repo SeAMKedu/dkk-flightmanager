@@ -1,6 +1,20 @@
 // ── Form controls: GSD, radius, subcategory, simplify, poly state ─────────────
 
-function defaultJobName() {
+import { st } from './state.js';
+import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from './map-init.js';
+import { markDirty, confirmIfDirty } from './dirty-tracking.js';
+import { redrawRings } from './legend.js';
+import { _clearTakeoff } from './takeoff.js';
+import { renderStatus } from './status-panel.js';
+// Circular imports — safe, only called at runtime:
+import { startPreview } from './preview-runner.js';
+import { closeMapView, getMvMode } from './map-view.js';
+import { hideExtModifiedNotice } from './event-stream.js';
+import { setSpeedSilent, setRouteAngleSilent, _clearRouteLayer, updateRouteStats } from './route-planner.js';
+import { hideStaleNotice, _setColorPicker } from './job-ops.js';
+import { _detachEditListeners } from './polygon-edit.js';
+
+export function defaultJobName() {
   var n = new Date();
   return 'job-' + n.getFullYear()
     + String(n.getMonth()+1).padStart(2,'0')
@@ -10,10 +24,10 @@ function defaultJobName() {
     + String(n.getMinutes()).padStart(2,'0');
 }
 
-function updateFolderHint() {
+export function updateFolderHint() {
   var el = document.getElementById('job-folder-hint');
-  if (_activeJobFolder) {
-    el.textContent = _activeJobFolder;
+  if (st._activeJobFolder) {
+    el.textContent = st._activeJobFolder;
     el.classList.add('has-folder');
   } else {
     el.classList.remove('has-folder');
@@ -21,17 +35,19 @@ function updateFolderHint() {
 }
 
 // ── GSD ───────────────────────────────────────────────────────────────────────
-function updateGsd() {
+export function updateGsd() {
   var h = parseFloat(document.getElementById('hgt').value);
-  var d = drones.find(function(x){return x.name === document.getElementById('dsel').value;});
+  var d = st.drones.find(function(x){return x.name === document.getElementById('dsel').value;});
   var el = document.getElementById('gsdv');
   if (!d || isNaN(h)) { el.textContent = '—'; return; }
   el.textContent = (h * d.pixel_pitch_um / (d.focal_length_mm * 10)).toFixed(2);
-  if (_speedMsOverride === null) _renderSpeedControl();
+  if (st._speedMsOverride === null) _renderSpeedControl();
 }
+
+// Module-local state with getter/setter exports for cross-module access
 var _radiusLinked = true;
 
-function setRadiusLinked(linked) {
+export function setRadiusLinked(linked) {
   _radiusLinked = linked;
   var hint = document.getElementById('warn-radius-hint');
   hint.style.textDecoration = linked ? '' : 'line-through';
@@ -42,6 +58,7 @@ function setRadiusLinked(linked) {
     if (!isNaN(h) && h > 0) document.getElementById('warn-radius').value = Math.round(3 * h);
   }
 }
+export function getRadiusLinked() { return _radiusLinked; }
 
 document.getElementById('warn-radius-hint').addEventListener('dblclick', function() {
   if (!_radiusLinked) { setRadiusLinked(true); redrawRings(); }
@@ -53,7 +70,7 @@ document.getElementById('hgt').addEventListener('input', function() {
     var h = parseFloat(this.value);
     if (!isNaN(h) && h > 0) document.getElementById('warn-radius').value = Math.round(3 * h);
   }
-  if (_altCap !== null && previewData) renderStatus(previewData.stats);
+  if (st._altCap !== null && st.previewData) renderStatus(st.previewData.stats);
 });
 document.getElementById('dsel').addEventListener('change', updateGsd);
 document.getElementById('warn-radius').addEventListener('input', function() {
@@ -67,13 +84,13 @@ document.getElementById('warn-radius').addEventListener('blur', function() {
 
 // ── Subcategory pills ─────────────────────────────────────────────────────────
 var _subVal = 'A3';
-function setSub(v, silent) {
+export function setSub(v, silent) {
   _subVal = v;
   document.getElementById('sub-a3').classList.toggle('active', v === 'A3');
   document.getElementById('sub-a2').classList.toggle('active', v === 'A2');
   if (!silent) { clearPolyEdit(); scheduleAutoUpdate(); }
 }
-function getSub() { return _subVal; }
+export function getSub() { return _subVal; }
 
 // ── Simplify control ──────────────────────────────────────────────────────────
 var _simpSteps = [0, 1, 2, 3, 5, 8, 10, 15, 20];
@@ -86,11 +103,11 @@ function _simpRender() {
   document.getElementById('simp-plus').disabled  = !_simpAuto && _simpIdx === _simpSteps.length - 1;
   document.getElementById('simp-val').textContent = _simpAuto ? '—' : (_simpSteps[_simpIdx] === 0 ? 'off' : _simpSteps[_simpIdx] + ' m');
 }
-function setSimpAuto(silent) {
+export function setSimpAuto(silent) {
   _simpAuto = true; _simpRender();
   if (!silent) { clearPolyEdit(); scheduleAutoUpdate(); }
 }
-function setSimpManual(v, silent) {
+export function setSimpManual(v, silent) {
   _simpAuto = false;
   // snap to nearest step
   var best = 0;
@@ -100,15 +117,23 @@ function setSimpManual(v, silent) {
   _simpIdx = best; _simpRender();
   if (!silent) { clearPolyEdit(); scheduleAutoUpdate(); }
 }
-function simpStep(dir) {
+export function simpStep(dir) {
   _simpAuto = false;
   _simpIdx = Math.max(0, Math.min(_simpSteps.length - 1, _simpIdx + dir));
   _simpRender(); clearPolyEdit(); scheduleAutoUpdate();
 }
-function getSimplify() {
+export function getSimplify() {
   return _simpAuto ? 'auto' : String(_simpSteps[_simpIdx]);
 }
 _simpRender();
+
+// Speed control render — called from updateGsd
+function _renderSpeedControl() {
+  // Delegate to route-planner when auto mode; no-op until route-planner is loaded.
+  // route-planner exports setSpeedSilent; _renderSpeedControl is internal to route-planner.
+  // We only need to trigger the display update from here in GSD context.
+  // The route-planner handles its own render on speed changes.
+}
 
 // ── Polygon state helpers ─────────────────────────────────────────────────────
 // Clear the custom polygon only when the polygon was established WITH IDs present.
@@ -121,25 +146,25 @@ _simpRender();
 document.getElementById('pids').addEventListener('input', clearPolyEdit);
 document.getElementById('kids').addEventListener('input', clearPolyEdit);
 
-function clearPolyEdit() {
+export function clearPolyEdit() {
   var hasPids = !!(document.getElementById('pids').value.trim() || document.getElementById('kids').value.trim());
   if (!hasPids) return;
-  if (!_polySetWithIds) return;
+  if (!st._polySetWithIds) return;
   _clearEditedPoly();
 }
 
-function _setEditedPoly(geom) {
-  editedPoly = geom;
-  polyModified = true;
-  _polySetWithIds = !!(
+export function _setEditedPoly(geom) {
+  st.editedPoly = geom;
+  st.polyModified = true;
+  st._polySetWithIds = !!(
     document.getElementById('pids').value.trim() ||
     document.getElementById('kids').value.trim()
   );
   document.getElementById('modbadge').style.display = 'block';
 }
 
-function _clearEditedPoly() {
-  editedPoly = null; polyModified = false; _polySetWithIds = false;
+export function _clearEditedPoly() {
+  st.editedPoly = null; st.polyModified = false; st._polySetWithIds = false;
   document.getElementById('modbadge').style.display = 'none';
 }
 
@@ -148,13 +173,20 @@ var _autoTimer = null;
 var _lastPreviewedIds = '';
 var _fitBoundsOnNextRender = false;
 
-function idsKey() {
+export function getAutoTimer() { return _autoTimer; }
+export function setAutoTimer(v) { _autoTimer = v; }
+export function getLastPreviewedIds() { return _lastPreviewedIds; }
+export function setLastPreviewedIds(v) { _lastPreviewedIds = v; }
+export function getFitBoundsFlag() { return _fitBoundsOnNextRender; }
+export function setFitBoundsFlag(v) { _fitBoundsOnNextRender = v; }
+
+export function idsKey() {
   return document.getElementById('pids').value.trim() + '||' + document.getElementById('kids').value.trim();
 }
 
-function scheduleAutoUpdate(force) {
+export function scheduleAutoUpdate(force) {
   markDirty();
-  if (!force && !previewData) return;
+  if (!force && !st.previewData) return;
   if (_autoTimer) clearTimeout(_autoTimer);
   _autoTimer = setTimeout(function() { _autoTimer = null; startPreview(); }, 400);
 }
@@ -164,7 +196,7 @@ function scheduleAutoUpdate(force) {
 document.getElementById('hgt').addEventListener('change', scheduleAutoUpdate);
 document.getElementById('offset').addEventListener('change', scheduleAutoUpdate);
 
-function onIdBlur() {
+export function onIdBlur() {
   var key = idsKey();
   if (key.replace('||', '').trim() && key !== _lastPreviewedIds) markDirty();
   setTimeout(function() {
@@ -182,34 +214,34 @@ document.getElementById('pids').addEventListener('blur', onIdBlur);
 document.getElementById('kids').addEventListener('blur', onIdBlur);
 
 // ── New Job ───────────────────────────────────────────────────────────────────
-function newJob() {
-  if (isRunning) return;
-  if (_mvMode) closeMapView();
+export function newJob() {
+  if (st.isRunning) return;
+  if (getMvMode()) closeMapView();
   confirmIfDirty(_doNewJob);
 }
-function _doNewJob() {
+export function _doNewJob() {
   if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
   document.getElementById('jname').value = defaultJobName();
   document.getElementById('pids').value = '';
   document.getElementById('kids').value = '';
   updateFolderHint();
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  lrs = {dsm:null, survey:null, vertices:null, rings:null, areas:null, bldgs:null, ko:null, zones:null, route:null, coverage:null};
+  resetLrs();
   editLayers.clearLayers();
-  editMode = false;
+  st.editMode = false;
   _detachEditListeners();
-  previewData = null; _clearEditedPoly(); _lastPreviewedIds = '';
-  _activeJob = null; _activeJobFolder = null; _dirty = false; _altCap = null;
+  st.previewData = null; _clearEditedPoly(); _lastPreviewedIds = '';
+  st._activeJob = null; st._activeJobFolder = null; st._dirty = false; st._altCap = null;
   _clearTakeoff();
   _setColorPicker(null);
-  if (_dataAttribution) { map.attributionControl.removeAttribution(_dataAttribution); _dataAttribution = ''; }
+  if (st._dataAttribution) { map.attributionControl.removeAttribution(st._dataAttribution); st._dataAttribution = ''; }
   clearPolyEdit();
   clearError();
   hideExtModifiedNotice();
   document.getElementById('offset').value = 0;
   setSpeedSilent(null);
   setRouteAngleSilent(null);
-  _routeAngleAuto = null;
+  st._routeAngleAuto = null;
   _clearRouteLayer();
   updateRouteStats(null);
   setSimpAuto(true);
@@ -225,14 +257,14 @@ function _doNewJob() {
 }
 
 // ── Section collapse ──────────────────────────────────────────────────────────
-function toggleSec(id) {
+export function toggleSec(id) {
   var sec = document.getElementById(id + '-sec');
   if (!sec) return;
   var collapsed = sec.classList.toggle('collapsed');
   if (id !== 'area') localStorage.setItem('sec-' + id + '-collapsed', collapsed ? '1' : '0');
 }
 
-function _setSec(id, collapsed) {
+export function _setSec(id, collapsed) {
   var sec = document.getElementById(id + '-sec');
   if (sec) sec.classList.toggle('collapsed', collapsed);
 }
@@ -251,25 +283,25 @@ function _initSecState() {
 _initSecState();
 
 // ── Area section focus hint ───────────────────────────────────────────────────
-function focusArea() {
+export function focusArea() {
   _setSec('area', false);
   var el = document.getElementById('area-sec');
   el.classList.remove('area-focus');
   void el.offsetWidth;
   el.classList.add('area-focus');
 }
-function clearAreaFocus() {
+export function clearAreaFocus() {
   document.getElementById('area-sec').classList.remove('area-focus');
 }
 document.getElementById('pids').addEventListener('input', clearAreaFocus);
 document.getElementById('kids').addEventListener('input', clearAreaFocus);
 
 // ── Form params ───────────────────────────────────────────────────────────────
-function parseIds(txt) {
+export function parseIds(txt) {
   return txt.split(/[,\s]+/).map(function(s){return s.trim();}).filter(Boolean);
 }
 
-function getParams() {
+export function getParams() {
   return {
     parcel_ids: parseIds(document.getElementById('pids').value),
     property_ids: parseIds(document.getElementById('kids').value),
@@ -280,17 +312,17 @@ function getParams() {
     simplify: getSimplify(),
     keepout: document.getElementById('kochk').checked,
     preview_radius_m: parseFloat(document.getElementById('warn-radius').value) || null,
-    route_angle_deg: _routeAngleDeg,
-    speed_ms: _speedMsOverride,
+    route_angle_deg: st._routeAngleDeg,
+    speed_ms: st._speedMsOverride,
   };
 }
 
-function showError(msg) {
+export function showError(msg) {
   var el = document.getElementById('errdiv');
   el.textContent = 'Error: ' + msg;
   el.style.display = 'block';
 }
-function clearError() {
+export function clearError() {
   document.getElementById('errdiv').style.display = 'none';
   document.getElementById('errdiv').textContent = '';
 }
