@@ -16,7 +16,7 @@
 #jp-tog:hover{color:#f8fafc}
 .jcard{background:#1e293b;border:1px solid #334155;border-radius:5px;margin-bottom:5px;display:flex;align-items:center;gap:0;cursor:pointer;transition:border-color .12s,background .12s;overflow:visible;position:relative}
 .jcard:hover{border-color:#475569;background:#263548}
-.jcard.active{border-color:#3b82f6;border-left:3px solid #3b82f6}
+.jcard.active{border-color:#3b82f6;border-left:3px solid #3b82f6;display:flex}
 .jcard.failed{opacity:.55;cursor:default}
 .jcard-thumb{width:48px;height:48px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:3px;background:#0f172a;border-radius:4px 0 0 4px;overflow:hidden}
 .jcard-thumb svg{width:42px;height:42px;border-radius:3px}
