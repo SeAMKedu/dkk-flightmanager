@@ -284,28 +284,35 @@ function _mvOpenHoverPopup(latlng, p) {
   var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
     : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
     : p.untouched ? '<span style="color:#64748b">New</span>' : '<span>—</span>';
-  var area = p.area_ha != null ? p.area_ha.toFixed(1) + ' ha' : '';
-  var areaLost = '';
-  if (p.area_lost_pct != null && Math.abs(p.area_lost_pct) >= 0.05) {
-    var sign = p.area_lost_pct > 0 ? '−' : '+';
-    var col  = p.area_lost_pct > 0 ? '#fb923c' : '#4ade80';
-    areaLost = ' <span style="color:' + col + '">' + sign + Math.abs(p.area_lost_pct).toFixed(1) + '%</span>';
-  }
   var _ic = function(id, col) {
     return '<svg class="mv-ic"' + (col ? ' style="color:' + col + ';opacity:1"' : '') + '><use href="#' + id + '"/></svg>';
   };
+  var areaLostHtml = '';
+  if (p.area_lost_pct != null && Math.abs(p.area_lost_pct) >= 0.05) {
+    var sign = p.area_lost_pct > 0 ? '−' : '+';
+    var col  = p.area_lost_pct > 0 ? '#fb923c' : '#4ade80';
+    areaLostHtml = ' <span style="color:' + col + '">' + sign + Math.abs(p.area_lost_pct).toFixed(1) + '%</span>';
+  }
+  var _stat = function(content) { return '<span style="white-space:nowrap">' + content + '</span>'; };
   var flightParts = [];
-  if (p.height_m != null)      flightParts.push(_ic('ic-altitude') + ' ' + p.height_m.toFixed(0) + ' m');
-  if (p.strip_speed_ms != null) flightParts.push(_ic('ic-gauge') + ' ' + (p.strip_speed_ms * 3.6).toFixed(1) + ' km/h');
-  if (p.flight_time_min != null) flightParts.push(_ic('ic-timer') + ' ' + Math.round(p.flight_time_min) + ' min');
-  if (p.over_one_battery)       flightParts.push(_ic('ic-battery-warn', '#fb923c') + ' <span style="color:#fb923c">2+ bat</span>');
+  if (p.area_ha != null)        flightParts.push(_stat(_ic('ic-area') + ' ' + p.area_ha.toFixed(1) + ' ha' + areaLostHtml));
+  if (p.waypoint_mode && p.adv_min_height_m != null && p.adv_max_height_m != null)
+    flightParts.push(_stat(_ic('ic-altitude') + ' ' + Math.round(p.adv_min_height_m) + '–' + Math.round(p.adv_max_height_m) + ' m'));
+  else if (p.height_m != null)
+    flightParts.push(_stat(_ic('ic-altitude') + ' ' + p.height_m.toFixed(0) + ' m'));
+  if (p.strip_speed_ms != null) flightParts.push(_stat(_ic('ic-gauge') + ' ' + (p.strip_speed_ms * 3.6).toFixed(1) + ' km/h'));
+  if (p.flight_time_min != null) flightParts.push(_stat(_ic('ic-timer') + ' ' + Math.round(p.flight_time_min) + ' min'));
+  if (p.over_one_battery)       flightParts.push(_stat(_ic('ic-battery-warn', '#fb923c') + ' <span style="color:#fb923c">2+ bat</span>'));
   var flightInfo = flightParts.join('<span style="color:#475569"> · </span>');
-  var photoInfo = p.photo_count != null ? _ic('ic-camera') + ' ' + p.photo_count + ' photos' : '';
+  var photoInfo = p.photo_count != null ? _stat(_ic('ic-camera') + ' ' + p.photo_count + ' photos') : '';
+  var routeIndex = (p.sort_order != null && !p.skipped)
+    ? '<span style="display:inline-flex;align-items:center;justify-content:center;background:#f59e0b;color:#000;font-size:9px;font-weight:700;width:16px;height:16px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.25);box-shadow:0 1px 2px rgba(0,0,0,.5);vertical-align:middle;line-height:1;flex-shrink:0">' + (p.sort_order + 1) + '</span>'
+    : '';
   var skipLabel = p.skipped ? '⊘ Unskip' : '⊘ Skip';
   var html = '<div class="mv-tt-inner">'
     + '<div class="mv-tt-name">' + (p.skipped ? '⊘ ' : '') + escHtml(p.name)
     + (p.folder ? ' <span class="mv-tt-folder">(' + escHtml(p.folder) + ')</span>' : '') + '</div>'
-    + '<div class="mv-tt-meta">' + statusChip + (area ? ' · ' + area : '') + areaLost + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
+    + '<div class="mv-tt-meta">' + (routeIndex ? routeIndex + ' · ' : '') + statusChip + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
     + (flightInfo ? '<div class="mv-tt-flight">' + flightInfo + '</div>' : '')
     + (photoInfo ? '<div class="mv-tt-flight">' + photoInfo + '</div>' : '')
     + '<div class="mv-tt-actions">'
