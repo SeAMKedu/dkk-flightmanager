@@ -197,17 +197,11 @@ def compute_route(
     strip_spacing_m: float,
     photo_spacing_m: float,
     *,
-    footprint_width_m: float | None = None,
     home_3067: tuple[float, float] | None = None,
 ) -> RouteResult:
     """Compute lawnmower strip pattern clipped to *polygon_3067*.
 
     *angle_deg*       — flight heading in degrees from North, CW (0=N, 90=E).
-    *footprint_width_m* — camera footprint width perpendicular to strips.
-                          When supplied the first/last strips are placed at
-                          footprint_width_m/2 from the boundary (matching DJI
-                          Pilot 2's margin=0 behaviour).  Falls back to
-                          strip_spacing_m/2 when None (legacy).
     *home_3067*       — optional (x, y) takeoff point for nearest-corner-first ordering.
 
     Inter-strip transitions that would exit the polygon are automatically rerouted
@@ -228,10 +222,11 @@ def compute_route(
     ring = list(rotated.exterior.coords)
     _, miny, _, maxy = rotated.bounds
 
-    # First/last strip centres at half-footprint from the boundary (DJI margin=0 convention).
-    # With overlap_side > 50 % the footprint/2 offset guarantees edge coverage even when
-    # the last strip lands up to strip_spacing before maxy.
-    first_offset_m = (footprint_width_m / 2.0) if footprint_width_m is not None else (strip_spacing_m / 2.0)
+    # First/last strip centres at half a strip-spacing from the boundary so that the
+    # polygon edge falls within the overlap zone of the two outermost strips.
+    # Outer footprint extends fw*overlap/2 outside the boundary; for overlap > 50 %
+    # (always true in practice) the second strip also reaches the edge.
+    first_offset_m = strip_spacing_m / 2.0
 
     strips_y: list[float] = []
     y = miny + first_offset_m

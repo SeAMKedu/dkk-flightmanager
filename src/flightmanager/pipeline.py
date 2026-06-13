@@ -828,8 +828,7 @@ def _compute_route_geojson(
               "strips_geojson": None, "transits_geojson": None}
     try:
         angle = _route.compute_auto_angle(survey_3067)
-        rr = _route.compute_route(survey_3067, angle, sm, pm,
-                                  footprint_width_m=fp_w, home_3067=home_3067)
+        rr = _route.compute_route(survey_3067, angle, sm, pm, home_3067=home_3067)
         ft = _route.estimate_flight_time(
             rr,
             flight_height_m=H,

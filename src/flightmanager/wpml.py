@@ -230,7 +230,6 @@ def _build_advanced_files(
         angle_deg=angle_deg,
         strip_spacing_m=max(1.0, strip_m),
         photo_spacing_m=max(0.5, photo_m),
-        footprint_width_m=fp_w_m,
     )
 
     if route.strip_count == 0:

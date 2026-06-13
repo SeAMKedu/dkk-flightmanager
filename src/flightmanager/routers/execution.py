@@ -452,7 +452,7 @@ async def route_estimate(req: RouteEstimateRequest):
         home_3067 = (hp.x, hp.y)
 
     result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m,
-                                  footprint_width_m=footprint_m, home_3067=home_3067)
+                                  home_3067=home_3067)
     flight_time = _route.estimate_flight_time(
         result,
         flight_height_m=H,
