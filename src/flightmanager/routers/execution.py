@@ -347,6 +347,74 @@ async def start_batch(req: BatchRequest):
     return {"job_id": job_id}
 
 
+def _build_altitude_profile(req, result, H, ovf, ovs, drone, reproject_to_3067):
+    """Build per-strip altitude profile for advanced mode from last preview obstacles.
+
+    Falls back to the uniform H profile silently on any error, so a failed
+    building/powerline lookup never crashes the route_estimate endpoint.
+    """
+    from flightmanager.obstacle_heights import compute_altitude_profile
+    from flightmanager.buildings import Building
+    from flightmanager.powerlines import PowerLine
+    from shapely.geometry import shape as _shape_geom
+
+    default = [H] * len(result.strips_3067)
+    try:
+        preview = _st.last_preview_result or {}
+        buildings: list[Building] = []
+        for bd in preview.get("buildings", []):
+            try:
+                geom_3067 = reproject_to_3067(_shape_geom(bd["geojson"]))
+                buildings.append(Building(
+                    mtk_id=0,
+                    kohdeluokka=bd.get("kohdeluokka", 42210),
+                    kayttotarkoitus=None,
+                    geometry=geom_3067,
+                    alkupvm=None,
+                    kerrosluku=None,
+                ))
+            except Exception:
+                pass
+
+        power_lines: list[PowerLine] = []
+        for pl in preview.get("power_lines", []):
+            try:
+                geom_3067 = reproject_to_3067(_shape_geom(pl["geojson"]))
+                power_lines.append(PowerLine(
+                    mtk_id=0,
+                    kohdeluokka=22312,
+                    is_overhead=bool(pl.get("is_overhead", True)),
+                    geometry=geom_3067,
+                    alkupvm=None,
+                ))
+            except Exception:
+                pass
+
+        cfg_flight = _st.config.flight
+        min_h     = req.adv_min_height_m         or cfg_flight.adv_min_height_m
+        max_h     = req.adv_max_height_m          or H
+        clearance = req.adv_powerline_clearance_m or cfg_flight.adv_powerline_clearance_m
+        slope_f   = req.adv_slope_f               or cfg_flight.adv_slope_f
+
+        return compute_altitude_profile(
+            result,
+            buildings=buildings,
+            power_lines=power_lines,
+            flight_height_m=max_h,
+            min_h=min_h,
+            powerline_clearance_m=clearance,
+            overlap_front_pct=ovf,
+            overlap_side_pct=ovs,
+            slope_f=slope_f,
+            drone=drone,
+        )
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        print(f"[route_estimate] altitude profile failed: {exc}")
+        return default
+
+
 @router.post("/api/route_estimate")
 async def route_estimate(req: RouteEstimateRequest):
     """Quick route estimate: actual strip intersections, no pipeline needed."""
@@ -397,66 +465,9 @@ async def route_estimate(req: RouteEstimateRequest):
     # Altitude profile — uniform unless advanced_mode is active
     altitude_profile: list[float] = [H] * len(result.strips_3067)
     if req.advanced_mode and result.strips_3067:
-        try:
-            from flightmanager.obstacle_heights import compute_altitude_profile
-            from flightmanager.buildings import Building
-            from flightmanager.powerlines import PowerLine
-            from shapely.geometry import shape as _shape_geom
-
-            preview = _st.last_preview_result or {}
-            buildings: list[Building] = []
-            for bd in preview.get("buildings", []):
-                try:
-                    geom_4326 = _shape_geom(bd["geojson"])
-                    geom_3067 = reproject_to_3067(geom_4326)
-                    buildings.append(Building(
-                        mtk_id=0,
-                        kohdeluokka=bd.get("kohdeluokka", 42210),
-                        kayttotarkoitus=None,
-                        geometry=geom_3067,
-                        alkupvm=None,
-                        kerrosluku=None,
-                    ))
-                except Exception:
-                    pass
-
-            power_lines: list[PowerLine] = []
-            for pl in preview.get("power_lines", []):
-                try:
-                    geom_4326 = _shape_geom(pl["geojson"])
-                    geom_3067 = reproject_to_3067(geom_4326)
-                    power_lines.append(PowerLine(
-                        mtk_id=0,
-                        kohdeluokka=22312,
-                        is_overhead=bool(pl.get("is_overhead", True)),
-                        geometry=geom_3067,
-                        alkupvm=None,
-                    ))
-                except Exception:
-                    pass
-
-            cfg_flight = _st.config.flight
-            min_h      = req.adv_min_height_m          or cfg_flight.adv_min_height_m
-            max_h      = req.adv_max_height_m           or H
-            clearance  = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
-            slope_f    = req.adv_slope_f                or cfg_flight.adv_slope_f
-
-            altitude_profile = compute_altitude_profile(
-                result,
-                buildings=buildings,
-                power_lines=power_lines,
-                flight_height_m=max_h,
-                min_h=min_h,
-                powerline_clearance_m=clearance,
-                overlap_front_pct=ovf,
-                overlap_side_pct=ovs,
-                slope_f=slope_f,
-                drone=drone,
-            )
-        except Exception as _adv_exc:
-            import traceback
-            traceback.print_exc()
-            print(f"[route_estimate] altitude profile failed: {_adv_exc}")
+        altitude_profile = _build_altitude_profile(
+            req, result, H, ovf, ovs, drone, reproject_to_3067
+        )
 
     def _seg_to_feature(x1, y1, x2, y2, alt: float, strip_speed: float):
         line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
@@ -522,6 +533,29 @@ def _acquire_pipeline_lock(job_id: str, loop, queue, label: str):
         return None
 
 
+def _apply_template_settings(cfg, ts: dict) -> None:
+    """Apply template_settings dict fields (overlaps, safety, advanced mode) to cfg in-place."""
+    if ts.get("overlap_front_pct") is not None:
+        cfg.flight.overlap_front_pct = int(ts["overlap_front_pct"])
+    if ts.get("overlap_side_pct") is not None:
+        cfg.flight.overlap_side_pct = int(ts["overlap_side_pct"])
+    if ts.get("takeoff_security_height_m") is not None:
+        cfg.flight.takeoff_security_height_m = float(ts["takeoff_security_height_m"])
+    if ts.get("rth_height_m") is not None:
+        cfg.flight.rth_height_m = float(ts["rth_height_m"])
+    if ts.get("rc_lost_action") is not None:
+        cfg.flight.rc_lost_action = str(ts["rc_lost_action"])
+    if ts.get("finish_action") is not None:
+        cfg.flight.finish_action = str(ts["finish_action"])
+    cfg.flight.advanced_mode = bool(ts.get("advanced_mode", False))
+    if ts.get("adv_min_height_m") is not None:
+        cfg.flight.adv_min_height_m = float(ts["adv_min_height_m"])
+    if ts.get("adv_powerline_clearance_m") is not None:
+        cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
+    if ts.get("adv_slope_f") is not None:
+        cfg.flight.adv_slope_f = float(ts["adv_slope_f"])
+
+
 def _prepare_config(req: PreviewRequest):
     import copy
 
@@ -561,26 +595,7 @@ def _prepare_config(req: PreviewRequest):
     if req.speed_ms is not None and req.speed_ms > 0:
         cfg.flight.auto_flight_speed_ms = req.speed_ms
 
-    ts = req.template_settings or {}
-    if ts.get("overlap_front_pct") is not None:
-        cfg.flight.overlap_front_pct = int(ts["overlap_front_pct"])
-    if ts.get("overlap_side_pct") is not None:
-        cfg.flight.overlap_side_pct = int(ts["overlap_side_pct"])
-    if ts.get("takeoff_security_height_m") is not None:
-        cfg.flight.takeoff_security_height_m = float(ts["takeoff_security_height_m"])
-    if ts.get("rth_height_m") is not None:
-        cfg.flight.rth_height_m = float(ts["rth_height_m"])
-    if ts.get("rc_lost_action") is not None:
-        cfg.flight.rc_lost_action = str(ts["rc_lost_action"])
-    if ts.get("finish_action") is not None:
-        cfg.flight.finish_action = str(ts["finish_action"])
-    cfg.flight.advanced_mode = bool(ts.get("advanced_mode", False))
-    if ts.get("adv_min_height_m") is not None:
-        cfg.flight.adv_min_height_m = float(ts["adv_min_height_m"])
-    if ts.get("adv_powerline_clearance_m") is not None:
-        cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
-    if ts.get("adv_slope_f") is not None:
-        cfg.flight.adv_slope_f = float(ts["adv_slope_f"])
+    _apply_template_settings(cfg, req.template_settings or {})
 
     return cfg
 

@@ -115,6 +115,82 @@ def _boundary_route(
     return min(candidates, key=plen)
 
 
+def _clip_strips_to_polygon(
+    ring: list[tuple[float, float]],
+    strips_y: list[float],
+) -> list[tuple[float, float, float]]:
+    """Intersect horizontal scan lines with a rotated polygon ring.
+
+    Returns a list of (y, x_enter, x_exit) for each valid strip segment.
+    Segments shorter than 1 m are discarded to avoid artefacts from arc tangencies.
+    """
+    n_ring = len(ring)
+    raw_segs: list[tuple[float, float, float]] = []
+    for y_strip in strips_y:
+        xs: list[float] = []
+        for i in range(n_ring - 1):
+            ax, ay = ring[i]
+            bx, by = ring[i + 1]
+            if (ay <= y_strip < by) or (by <= y_strip < ay):
+                t = (y_strip - ay) / (by - ay)
+                xs.append(ax + t * (bx - ax))
+        xs.sort()
+        for i in range(0, len(xs) - 1, 2):
+            if xs[i + 1] > xs[i] + 1.0:
+                raw_segs.append((y_strip, xs[i], xs[i + 1]))
+    return raw_segs
+
+
+def _greedy_nn_order(
+    raw_segs: list[tuple[float, float, float]],
+    home_rot_x: float,
+    home_rot_y: float,
+    back_fn,
+) -> list[tuple[float, float, float, float]]:
+    """Greedy nearest-neighbour strip ordering in rotated space.
+
+    At each step the drone extends the route to the unvisited strip whose
+    closest endpoint is nearest to the current position (in rotated space),
+    entering from that end.  For simple rectangular polygons this degenerates
+    to standard boustrophedon; on C/U-shaped polygons it avoids repeated
+    long gap-crossing transits by naturally grouping same-arm strips.
+
+    *back_fn* converts (x, y) in rotated space back to EPSG:3067.
+    Returns strips_3067 as list of (x1, y1, x2, y2).
+    """
+    n_strips = len(raw_segs)
+    visited = [False] * n_strips
+
+    def _rot_ep(i: int) -> tuple[tuple[float, float], tuple[float, float]]:
+        y_s, x0_s, x1_s = raw_segs[i]
+        return (x0_s, y_s), (x1_s, y_s)
+
+    def _nearest_ep_dist(i: int, pos: tuple[float, float]) -> float:
+        e1, e2 = _rot_ep(i)
+        return min(math.hypot(e1[0] - pos[0], e1[1] - pos[1]),
+                   math.hypot(e2[0] - pos[0], e2[1] - pos[1]))
+
+    cur_rot: tuple[float, float] = (home_rot_x, home_rot_y)
+    cur_strip = min(range(n_strips), key=lambda i: _nearest_ep_dist(i, cur_rot))
+
+    strips_3067: list[tuple] = []
+    while len(strips_3067) < n_strips:
+        visited[cur_strip] = True
+        ep_l, ep_r = _rot_ep(cur_strip)
+        dl = math.hypot(ep_l[0] - cur_rot[0], ep_l[1] - cur_rot[1])
+        dr = math.hypot(ep_r[0] - cur_rot[0], ep_r[1] - cur_rot[1])
+        a_rot, b_rot = (ep_l, ep_r) if dl <= dr else (ep_r, ep_l)
+        a = back_fn(a_rot[0], a_rot[1])
+        b = back_fn(b_rot[0], b_rot[1])
+        strips_3067.append((a[0], a[1], b[0], b[1]))
+        cur_rot = b_rot
+        remaining = [i for i in range(n_strips) if not visited[i]]
+        if remaining:
+            cur_strip = min(remaining, key=lambda i: _nearest_ep_dist(i, cur_rot))
+
+    return strips_3067
+
+
 def compute_route(
     polygon_3067,
     angle_deg: float,
@@ -150,7 +226,6 @@ def compute_route(
 
     rotated = rotate(polygon_3067, rot_angle, origin=(cx, cy), use_radians=False)
     ring = list(rotated.exterior.coords)
-    n_ring = len(ring)
     _, miny, _, maxy = rotated.bounds
 
     # First/last strip centres at half-footprint from the boundary (DJI margin=0 convention).
@@ -164,19 +239,7 @@ def compute_route(
         strips_y.append(y)
         y += strip_spacing_m
 
-    raw_segs: list[tuple[float, float, float]] = []  # (y, x_enter, x_exit)
-    for y_strip in strips_y:
-        xs: list[float] = []
-        for i in range(n_ring - 1):
-            ax, ay = ring[i]
-            bx, by = ring[i + 1]
-            if (ay <= y_strip < by) or (by <= y_strip < ay):
-                t = (y_strip - ay) / (by - ay)
-                xs.append(ax + t * (bx - ax))
-        xs.sort()
-        for i in range(0, len(xs) - 1, 2):
-            if xs[i + 1] > xs[i] + 1.0:  # discard sub-metre artefacts from arc tangencies
-                raw_segs.append((y_strip, xs[i], xs[i + 1]))
+    raw_segs = _clip_strips_to_polygon(ring, strips_y)
 
     if not raw_segs:
         return RouteResult(
@@ -210,47 +273,7 @@ def compute_route(
         dx, dy = px - cx, py - cy
         return cx + dx * cos_b - dy * sin_b, cy + dx * sin_b + dy * cos_b
 
-    # Greedy nearest-neighbour strip ordering.
-    #
-    # Each scanline segment is an independent strip.  At each step the drone
-    # extends the route to the unvisited strip whose closest endpoint is nearest
-    # to the current position (in rotated space), entering it from that end.
-    #
-    # This groups strips that share the same spatial arm together naturally,
-    # eliminating the repeated long gap-crossing transits that boustrophedon-by-
-    # y-row produces on C/U-shaped polygons where a building keepout hole splits
-    # individual scanline rows into disconnected pieces.  For simple rectangular
-    # polygons it degenerates to a standard boustrophedon (each strip is adjacent
-    # to the previous one in y).
-    n_strips = len(raw_segs)
-    visited_strip = [False] * n_strips
-
-    def _rot_ep(i: int) -> tuple[tuple[float, float], tuple[float, float]]:
-        y_s, x0_s, x1_s = raw_segs[i]
-        return (x0_s, y_s), (x1_s, y_s)
-
-    def _nearest_ep_dist(i: int, pos: tuple[float, float]) -> float:
-        e1, e2 = _rot_ep(i)
-        return min(math.hypot(e1[0] - pos[0], e1[1] - pos[1]),
-                   math.hypot(e2[0] - pos[0], e2[1] - pos[1]))
-
-    cur_rot: tuple[float, float] = (home_rot_x, home_rot_y)
-    cur_strip = min(range(n_strips), key=lambda i: _nearest_ep_dist(i, cur_rot))
-
-    strips_3067: list[tuple] = []
-    while len(strips_3067) < n_strips:
-        visited_strip[cur_strip] = True
-        ep_l, ep_r = _rot_ep(cur_strip)
-        dl = math.hypot(ep_l[0] - cur_rot[0], ep_l[1] - cur_rot[1])
-        dr = math.hypot(ep_r[0] - cur_rot[0], ep_r[1] - cur_rot[1])
-        a_rot, b_rot = (ep_l, ep_r) if dl <= dr else (ep_r, ep_l)
-        a = _back(a_rot[0], a_rot[1])
-        b = _back(b_rot[0], b_rot[1])
-        strips_3067.append((a[0], a[1], b[0], b[1]))
-        cur_rot = b_rot
-        remaining = [i for i in range(n_strips) if not visited_strip[i]]
-        if remaining:
-            cur_strip = min(remaining, key=lambda i: _nearest_ep_dist(i, cur_rot))
+    strips_3067 = _greedy_nn_order(raw_segs, home_rot_x, home_rot_y, _back)
 
     strip_dist_m = sum(math.hypot(x2 - x1, y2 - y1) for x1, y1, x2, y2 in strips_3067)
 

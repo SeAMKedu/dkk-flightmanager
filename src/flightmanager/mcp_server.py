@@ -517,25 +517,8 @@ def export_existing_job(
 
     # Apply stored template settings (overlap, safety, advanced mode)
     if stored_ts:
-        if stored_ts.get("overlap_front_pct") is not None:
-            cfg.flight.overlap_front_pct = int(stored_ts["overlap_front_pct"])
-        if stored_ts.get("overlap_side_pct") is not None:
-            cfg.flight.overlap_side_pct = int(stored_ts["overlap_side_pct"])
-        if stored_ts.get("takeoff_security_height_m") is not None:
-            cfg.flight.takeoff_security_height_m = float(stored_ts["takeoff_security_height_m"])
-        if stored_ts.get("rth_height_m") is not None:
-            cfg.flight.rth_height_m = float(stored_ts["rth_height_m"])
-        if stored_ts.get("rc_lost_action") is not None:
-            cfg.flight.rc_lost_action = str(stored_ts["rc_lost_action"])
-        if stored_ts.get("finish_action") is not None:
-            cfg.flight.finish_action = str(stored_ts["finish_action"])
-        cfg.flight.advanced_mode = bool(stored_ts.get("advanced_mode", False))
-        if stored_ts.get("adv_min_height_m") is not None:
-            cfg.flight.adv_min_height_m = float(stored_ts["adv_min_height_m"])
-        if stored_ts.get("adv_powerline_clearance_m") is not None:
-            cfg.flight.adv_powerline_clearance_m = float(stored_ts["adv_powerline_clearance_m"])
-        if stored_ts.get("adv_slope_f") is not None:
-            cfg.flight.adv_slope_f = float(stored_ts["adv_slope_f"])
+        from flightmanager.routers.execution import _apply_template_settings
+        _apply_template_settings(cfg, stored_ts)
 
     if folder:
         cfg.output.output_dir = str(_output_dir() / folder)
