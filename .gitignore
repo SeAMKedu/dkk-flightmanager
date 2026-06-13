@@ -1,6 +1,7 @@
 # Claude Code and planning docs (local only)
 CLAUDE.md
 mavic3e-job-generator-plan.md
+.claude/launch.json
 
 # Secrets and local config
 config.toml
