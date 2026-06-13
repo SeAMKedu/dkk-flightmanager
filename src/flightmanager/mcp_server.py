@@ -103,7 +103,7 @@ def _pipeline_guard():
             )
 
 
-def _prepare_config(
+def _prepare_config(  # noqa: C901
     drone: str | None = None,
     height_m: float | None = None,
     subcategory: str | None = None,
@@ -447,7 +447,7 @@ def delete_job(path: str) -> str:
 
 
 @mcp.tool()
-def export_existing_job(
+def export_existing_job(  # noqa: C901
     path: str,
     drone: str | None = None,
     height_m: float | None = None,

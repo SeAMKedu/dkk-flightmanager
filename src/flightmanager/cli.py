@@ -29,6 +29,179 @@ cache_app = typer.Typer(help="Manage the tile cache.", no_args_is_help=True)
 app.add_typer(cache_app, name="cache")
 
 
+def _parse_area_inputs(
+    parcels: str | None,
+    properties: str | None,
+    bbox: str | None,
+) -> tuple[list[str] | None, list[str] | None, tuple[float, float, float, float] | None]:
+    """Parse and validate the three mutually-exclusive area input flags.
+
+    Returns (parcel_ids, property_ids, bbox_3067). Raises typer.Exit(1) on invalid input.
+    """
+    parcel_ids: list[str] | None = None
+    property_ids: list[str] | None = None
+    bbox_3067: tuple[float, float, float, float] | None = None
+
+    if parcels:
+        parcel_ids = [p.strip() for p in parcels.split(",") if p.strip()]
+    if properties:
+        property_ids = [k.strip() for k in properties.split(",") if k.strip()]
+    if bbox:
+        try:
+            parts = [float(x) for x in bbox.split(",")]
+            if len(parts) != 4:
+                raise ValueError
+            bbox_3067 = (parts[0], parts[1], parts[2], parts[3])
+        except ValueError:
+            typer.echo("Error: --bbox must be 'xmin,ymin,xmax,ymax' (four floats).", err=True)
+            raise typer.Exit(1)
+
+    return parcel_ids, property_ids, bbox_3067
+
+
+def _apply_run_overrides(  # noqa: C901
+    cfg,
+    *,
+    drone: str | None,
+    height: float | None,
+    subcategory: str | None,
+    buffer: float | None,
+    homes_distance: float | None,
+    preview_radius: float | None,
+    simplify: str | None,
+    offset: float | None,
+    no_keepout: bool,
+    offline: bool,
+) -> None:
+    """Apply CLI overrides to cfg in-place. Raises typer.Exit(1) on invalid values."""
+    if offline:
+        cfg.cache.offline = True
+
+    if drone is not None:
+        names = [d.name for d in cfg.drones]
+        if drone not in names:
+            typer.echo(
+                f"Error: unknown drone '{drone}'. Available: {', '.join(names)}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        cfg.default_drone = drone
+        typer.echo(f"Drone override: {drone} ({cfg.active_drone().label})")
+
+    if height is not None:
+        active = cfg.active_drone()
+        gsd = active.gsd_from_height(height)
+        cfg.flight.target_gsd_cm = gsd
+        cfg.flight.max_height_agl_m = max(cfg.flight.max_height_agl_m, height + 1)
+        typer.echo(f"Height override: {height:.0f} m AGL  (GSD {gsd:.2f} cm/px)")
+
+    if subcategory:
+        sub = subcategory.upper()
+        if sub not in ("A2", "A3"):
+            typer.echo("Error: --subcategory must be A2 or A3.", err=True)
+            raise typer.Exit(1)
+        cfg.home_safety.operating_subcategory = sub
+        if sub == "A2" and buffer is None:
+            cfg.home_safety.home_buffer_m = cfg.active_drone().height_from_gsd(
+                cfg.flight.target_gsd_cm
+            )
+        typer.echo(
+            f"Subcategory override: {sub}  "
+            f"(buffer {cfg.home_safety.home_buffer_m:.0f} m)"
+        )
+
+    if buffer is not None:
+        cfg.home_safety.home_buffer_m = buffer
+        typer.echo(f"Buffer override: {buffer:.0f} m")
+
+    if homes_distance is not None:
+        cfg.home_safety.home_include_buffer_m = homes_distance
+        typer.echo(f"Homes distance override: {homes_distance:.0f} m")
+
+    if preview_radius is not None:
+        cfg.home_safety.preview_radius_m = preview_radius
+        typer.echo(f"Preview radius override: {preview_radius:.0f} m")
+
+    if simplify is not None:
+        if simplify.lower() == "auto":
+            cfg.polygon.simplify_mode = "auto"
+            typer.echo(
+                f"Simplify override: auto (target ≤{cfg.polygon.auto_simplify_max_vertices} vertices)"
+            )
+        else:
+            try:
+                tol = float(simplify)
+                if tol < 0:
+                    raise ValueError
+                cfg.polygon.simplify_mode = "fixed"
+                cfg.polygon.simplify_tolerance_m = tol
+                typer.echo(f"Simplify override: {tol:.1f} m tolerance")
+            except ValueError:
+                typer.echo("Error: --simplify must be 'auto' or a non-negative number.", err=True)
+                raise typer.Exit(1)
+
+    if offset is not None:
+        cfg.polygon.survey_offset_m = offset
+        direction = "outward" if offset > 0 else ("inward" if offset < 0 else "none")
+        typer.echo(f"Survey offset override: {offset:+.1f} m ({direction})")
+
+    if no_keepout:
+        cfg.home_safety.offset_enabled = False
+        typer.echo(
+            "⚠  Keep-out disabled — buildings will NOT be subtracted from the survey polygon. "
+            "Verify distances to all buildings manually before flying."
+        )
+
+
+def _collect_batch_ids(
+    parcels: str | None,
+    properties: str | None,
+    file: Path | None,
+) -> list[str]:
+    """Collect IDs from inline flags and/or a text file into a single flat list."""
+    raw_ids: list[str] = []
+    if parcels is not None:
+        raw_ids.extend(p.strip() for p in parcels.split(",") if p.strip())
+    if properties is not None:
+        raw_ids.extend(k.strip() for k in properties.split(",") if k.strip())
+    if file is not None:
+        for line in Path(file).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                raw_ids.extend(p.strip() for p in line.split(",") if p.strip())
+    return raw_ids
+
+
+def _detect_id_type(raw_ids: list[str], parcels: str | None, properties: str | None) -> str:
+    """Return 'parcels' or 'properties'. Uses flag presence first, regex fallback."""
+    if parcels is not None:
+        return "parcels"
+    if properties is not None:
+        return "properties"
+    import re
+    id_type = "parcels" if re.match(r"^\d{8,}$", raw_ids[0]) else "properties"
+    typer.echo(f"Auto-detected ID type: {id_type}")
+    return id_type
+
+
+def _print_batch_results(results: list[dict]) -> int:
+    """Print per-ID outcome table. Returns the count of failures."""
+    ok = skipped = failed = 0
+    for r in results:
+        if r["status"] == "ok":
+            ok += 1
+            typer.echo(f"  ✓  {r['id']}")
+        elif r["status"] == "skipped":
+            skipped += 1
+            typer.echo(f"  –  {r['id']}  (skipped: {r.get('reason', '')})")
+        else:
+            failed += 1
+            typer.echo(f"  ✗  {r['id']}  {r.get('reason', '')}")
+    typer.echo()
+    typer.echo(f"Created: {ok}  Skipped: {skipped}  Failed: {failed}")
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # flightmanager drones
 # ---------------------------------------------------------------------------
@@ -173,16 +346,9 @@ def run_job_cmd(
     from flightmanager.config import load_config
     from flightmanager.pipeline import run_job
 
-    # --- preflight checks ---
     _require_key()
 
-    # --- input validation ---
-    # --bbox is exclusive; --parcels / --properties may be combined.
-    area_inputs = sum([
-        parcels is not None,
-        bbox is not None,
-        properties is not None,
-    ])
+    area_inputs = sum([parcels is not None, bbox is not None, properties is not None])
     if area_inputs == 0:
         typer.echo(
             "Error: provide at least one of --parcels, --properties, or --bbox.",
@@ -193,28 +359,8 @@ def run_job_cmd(
         typer.echo("Error: --bbox cannot be combined with other area inputs.", err=True)
         raise typer.Exit(1)
 
-    # --- parse inputs ---
-    parcel_ids: list[str] | None = None
-    property_ids: list[str] | None = None
-    bbox_3067: tuple[float, float, float, float] | None = None
+    parcel_ids, property_ids, bbox_3067 = _parse_area_inputs(parcels, properties, bbox)
 
-    if parcels:
-        parcel_ids = [p.strip() for p in parcels.split(",") if p.strip()]
-
-    if properties:
-        property_ids = [k.strip() for k in properties.split(",") if k.strip()]
-
-    if bbox:
-        try:
-            parts = [float(x) for x in bbox.split(",")]
-            if len(parts) != 4:
-                raise ValueError
-            bbox_3067 = (parts[0], parts[1], parts[2], parts[3])
-        except ValueError:
-            typer.echo("Error: --bbox must be 'xmin,ymin,xmax,ymax' (four floats).", err=True)
-            raise typer.Exit(1)
-
-    # --- load config ---
     try:
         cfg = load_config(config_path)
     except FileNotFoundError as e:
@@ -224,87 +370,14 @@ def run_job_cmd(
         typer.echo(f"Config error: {e}", err=True)
         raise typer.Exit(1)
 
-    if offline:
-        cfg.cache.offline = True
+    _apply_run_overrides(
+        cfg,
+        drone=drone, height=height, subcategory=subcategory,
+        buffer=buffer, homes_distance=homes_distance,
+        preview_radius=preview_radius, simplify=simplify,
+        offset=offset, no_keepout=no_keepout, offline=offline,
+    )
 
-    if drone is not None:
-        names = [d.name for d in cfg.drones]
-        if drone not in names:
-            typer.echo(
-                f"Error: unknown drone '{drone}'. Available: {', '.join(names)}",
-                err=True,
-            )
-            raise typer.Exit(1)
-        cfg.default_drone = drone
-        typer.echo(f"Drone override: {drone} ({cfg.active_drone().label})")
-
-    if height is not None:
-        active = cfg.active_drone()
-        gsd = active.gsd_from_height(height)
-        cfg.flight.target_gsd_cm = gsd
-        cfg.flight.max_height_agl_m = max(cfg.flight.max_height_agl_m, height + 1)
-        typer.echo(f"Height override: {height:.0f} m AGL  (GSD {gsd:.2f} cm/px)")
-
-    if subcategory:
-        sub = subcategory.upper()
-        if sub not in ("A2", "A3"):
-            typer.echo("Error: --subcategory must be A2 or A3.", err=True)
-            raise typer.Exit(1)
-        cfg.home_safety.operating_subcategory = sub
-        # A2: buffer ≈ flight height (EU reg: ≥ flight height from people).
-        # Apply automatically unless the operator overrides with --buffer.
-        if sub == "A2" and buffer is None:
-            cfg.home_safety.home_buffer_m = cfg.active_drone().height_from_gsd(
-                cfg.flight.target_gsd_cm
-            )
-        typer.echo(
-            f"Subcategory override: {sub}  "
-            f"(buffer {cfg.home_safety.home_buffer_m:.0f} m)"
-        )
-
-    if buffer is not None:
-        cfg.home_safety.home_buffer_m = buffer
-        typer.echo(f"Buffer override: {buffer:.0f} m")
-
-    if homes_distance is not None:
-        cfg.home_safety.home_include_buffer_m = homes_distance
-        typer.echo(f"Homes distance override: {homes_distance:.0f} m")
-
-    if preview_radius is not None:
-        cfg.home_safety.preview_radius_m = preview_radius
-        typer.echo(f"Preview radius override: {preview_radius:.0f} m")
-
-    if simplify is not None:
-        if simplify.lower() == "auto":
-            cfg.polygon.simplify_mode = "auto"
-            typer.echo(
-                f"Simplify override: auto (target ≤{cfg.polygon.auto_simplify_max_vertices} vertices)"
-            )
-        else:
-            try:
-                tol = float(simplify)
-                if tol < 0:
-                    raise ValueError
-                cfg.polygon.simplify_mode = "fixed"
-                cfg.polygon.simplify_tolerance_m = tol
-                typer.echo(f"Simplify override: {tol:.1f} m tolerance")
-            except ValueError:
-                typer.echo("Error: --simplify must be 'auto' or a non-negative number.", err=True)
-                raise typer.Exit(1)
-
-    if offset is not None:
-        cfg.polygon.survey_offset_m = offset
-        direction = "outward" if offset > 0 else ("inward" if offset < 0 else "none")
-        typer.echo(f"Survey offset override: {offset:+.1f} m ({direction})")
-
-    if no_keepout:
-        cfg.home_safety.offset_enabled = False
-        typer.echo(
-            "⚠  Keep-out disabled — buildings will NOT be subtracted from the survey polygon. "
-            "Verify distances to all buildings manually before flying."
-        )
-
-    # --- run ---
     typer.echo(f"Starting job '{name}' …")
     try:
         manifest, _route_geojson = run_job(
@@ -332,7 +405,7 @@ def run_job_cmd(
     _print_net_stats(cfg.cache.cache_dir)
 
     if manifest.get("needs_review") or not manifest.get("flight_ready"):
-        raise typer.Exit(2)   # non-zero so scripts can detect review-needed
+        raise typer.Exit(2)
 
 
 # ---------------------------------------------------------------------------
@@ -627,46 +700,23 @@ def batch_cmd(
     _require_key()
     cfg = _load_cfg(config_path)
 
-    # Determine ID type
     if parcels is not None and properties is not None:
         typer.echo("Error: --parcels and --properties cannot be combined.", err=True)
         raise typer.Exit(1)
 
-    # Collect IDs from inline flags and/or file
-    raw_ids: list[str] = []
-    if parcels is not None:
-        raw_ids.extend(p.strip() for p in parcels.split(",") if p.strip())
-    if properties is not None:
-        raw_ids.extend(k.strip() for k in properties.split(",") if k.strip())
-    if file is not None:
-        for line in Path(file).read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                raw_ids.extend(p.strip() for p in line.split(",") if p.strip())
-
+    raw_ids = _collect_batch_ids(parcels, properties, file)
     if not raw_ids:
         typer.echo("Error: no IDs provided (use --parcels, --properties, and/or --file).", err=True)
         raise typer.Exit(1)
 
-    # Detect or assign ID type
-    if parcels is not None:
-        id_type = "parcels"
-    elif properties is not None:
-        id_type = "properties"
-    else:
-        import re
-        sample = raw_ids[0]
-        id_type = "parcels" if re.match(r"^\d{8,}$", sample) else "properties"
-        typer.echo(f"Auto-detected ID type: {id_type}")
+    id_type = _detect_id_type(raw_ids, parcels, properties)
 
-    # Validate subcategory
     if subcategory:
         subcategory = subcategory.upper()
         if subcategory not in ("A2", "A3"):
             typer.echo("Error: --subcategory must be A2 or A3.", err=True)
             raise typer.Exit(1)
 
-    # Apply drone/height overrides to config
     import copy
     cfg = copy.deepcopy(cfg)
     if drone:
@@ -698,21 +748,7 @@ def batch_cmd(
         progress_cb=None, config=cfg,
     )
 
-    # Print results table
-    ok = skipped = failed = 0
-    for r in results:
-        if r["status"] == "ok":
-            ok += 1
-            typer.echo(f"  ✓  {r['id']}")
-        elif r["status"] == "skipped":
-            skipped += 1
-            typer.echo(f"  –  {r['id']}  (skipped: {r.get('reason', '')})")
-        else:
-            failed += 1
-            typer.echo(f"  ✗  {r['id']}  {r.get('reason', '')}")
-
-    typer.echo()
-    typer.echo(f"Created: {ok}  Skipped: {skipped}  Failed: {failed}")
+    failed = _print_batch_results(results)
     from flightmanager.net_stats import print_summary as _print_net_stats
     _print_net_stats(cfg.cache.cache_dir)
     if failed:

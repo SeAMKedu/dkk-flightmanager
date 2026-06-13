@@ -95,7 +95,7 @@ def _build_waypoint_list(
     return wps, strip_start_wp_idx, strip_end_wp_idx
 
 
-def build_waylines(
+def build_waylines(  # noqa: C901
     route: RouteResult,
     altitude_profile: list[float],
     *,

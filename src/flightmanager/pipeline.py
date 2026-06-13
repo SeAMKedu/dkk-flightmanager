@@ -62,7 +62,7 @@ def _cb(fn: Callable | None, stage: str, msg: str, pct: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_job(
+def run_job(  # noqa: C901
     job_name: str,
     config: AppConfig,
     *,
@@ -327,7 +327,7 @@ def run_job(
 
 
 
-def run_preview(
+def run_preview(  # noqa: C901
     config: AppConfig,
     *,
     parcel_ids: list[str] | None = None,
