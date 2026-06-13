@@ -46,24 +46,15 @@ def compute_auto_angle(polygon_3067) -> float:
     return math.degrees(math.atan2(dx, dy)) % 180
 
 
-def _boundary_route(
-    polygon,
+def _ring_route(
+    ring: list[tuple[float, float]],
     p1: tuple[float, float],
     p2: tuple[float, float],
 ) -> list[tuple[float, float]]:
-    """Return waypoints from p1 to p2 that stay inside polygon.
+    """Walk *ring* (open list, no repeated last vertex) from p1-side to p2-side.
 
-    Falls back to [p1, p2] when the direct path is already contained.
-    Otherwise walks the exterior ring in the shorter direction.
-    Both points are expected to lie on or very near the polygon boundary
-    (scanline intersection endpoints).
+    Returns the shorter of the two traversal directions.
     """
-    from shapely.geometry import LineString
-
-    if polygon.buffer(0.5).contains(LineString([p1, p2])):
-        return [p1, p2]
-
-    ring = list(polygon.exterior.coords[:-1])  # open ring, no repeated first vertex
     n = len(ring)
 
     def seg_idx(pt: tuple[float, float]) -> int:
@@ -80,11 +71,8 @@ def _boundary_route(
         return best
 
     i1, i2 = seg_idx(p1), seg_idx(p2)
-
-    # Number of ring vertices traversed in each direction
-    steps_cw  = (i2 - i1) % n   # clockwise: ring[i1+1 .. i2]
-    steps_ccw = (i1 - i2) % n   # counterclockwise: ring[i1 .. i2+1]
-
+    steps_cw  = (i2 - i1) % n
+    steps_ccw = (i1 - i2) % n
     path_cw  = [p1] + [ring[(i1 + 1 + k) % n] for k in range(steps_cw)]  + [p2]
     path_ccw = [p1] + [ring[(i1 - k) % n]     for k in range(steps_ccw)] + [p2]
 
@@ -95,6 +83,36 @@ def _boundary_route(
         )
 
     return path_cw if plen(path_cw) <= plen(path_ccw) else path_ccw
+
+
+def _boundary_route(
+    polygon,
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """Return waypoints from p1 to p2 that stay within or along the polygon boundary.
+
+    Falls back to [p1, p2] when the direct path is already contained.
+    Otherwise tries both the exterior ring and all interior rings (holes) and
+    returns the shortest candidate — this correctly handles transitions across
+    keepout holes without routing all the way around the outer boundary.
+    """
+    from shapely.geometry import LineString
+
+    if polygon.buffer(0.5).contains(LineString([p1, p2])):
+        return [p1, p2]
+
+    def plen(pts: list) -> float:
+        return sum(
+            math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1])
+            for k in range(len(pts) - 1)
+        )
+
+    candidates = [_ring_route(list(polygon.exterior.coords[:-1]), p1, p2)]
+    for interior in polygon.interiors:
+        candidates.append(_ring_route(list(interior.coords[:-1]), p1, p2))
+
+    return min(candidates, key=plen)
 
 
 def compute_route(
@@ -157,7 +175,7 @@ def compute_route(
                 xs.append(ax + t * (bx - ax))
         xs.sort()
         for i in range(0, len(xs) - 1, 2):
-            if xs[i + 1] > xs[i] + 0.1:
+            if xs[i + 1] > xs[i] + 1.0:  # discard sub-metre artefacts from arc tangencies
                 raw_segs.append((y_strip, xs[i], xs[i + 1]))
 
     if not raw_segs:
@@ -168,23 +186,23 @@ def compute_route(
             first_wp_3067=None, last_wp_3067=None,
         )
 
-    # Nearest-first ordering: choose which y end starts closer to home
-    home_rot_y = (miny + maxy) / 2
-    home_rot_x = 0.0
+    # Home position in rotated space (absolute coordinates, same frame as raw_segs).
+    # Rotation is around (cx, cy), so a world point (hx, hy) maps to:
+    #   rot_x = cx + (hx-cx)*cos_r - (hy-cy)*sin_r
+    #   rot_y = cy + (hx-cx)*sin_r + (hy-cy)*cos_r
+    # Default (no home): start from the polygon's midpoint so all strips are
+    # equidistant in the y-direction and the NN picks a sensible starting strip.
+    minx_r = min(x for x, _ in ring)
+    maxx_r = max(x for x, _ in ring)
+    home_rot_x = (minx_r + maxx_r) / 2
+    home_rot_y = miny  # start from the y-near edge
     if home_3067 is not None:
         hx_rel = home_3067[0] - cx
         hy_rel = home_3067[1] - cy
-        home_rot_x = hx_rel * cos_r - hy_rel * sin_r
-        home_rot_y = hx_rel * sin_r + hy_rel * cos_r
+        home_rot_x = cx + hx_rel * cos_r - hy_rel * sin_r
+        home_rot_y = cy + hx_rel * sin_r + hy_rel * cos_r
 
-    if abs(home_rot_y - maxy) < abs(home_rot_y - miny):
-        raw_segs = raw_segs[::-1]
-
-    # Boustrophedon: alternate left/right each strip; first strip toward home x
-    midx = sum(s[1] + s[2] for s in raw_segs) / (2 * len(raw_segs))
-    first_from_left = home_rot_x <= midx
-
-    # Back-rotation helper
+    # Back-rotation helper: convert (x, y) in rotated space back to EPSG:3067.
     back_rad = math.radians(90.0 - angle_deg)
     cos_b, sin_b = math.cos(back_rad), math.sin(back_rad)
 
@@ -192,12 +210,47 @@ def compute_route(
         dx, dy = px - cx, py - cy
         return cx + dx * cos_b - dy * sin_b, cy + dx * sin_b + dy * cos_b
 
+    # Greedy nearest-neighbour strip ordering.
+    #
+    # Each scanline segment is an independent strip.  At each step the drone
+    # extends the route to the unvisited strip whose closest endpoint is nearest
+    # to the current position (in rotated space), entering it from that end.
+    #
+    # This groups strips that share the same spatial arm together naturally,
+    # eliminating the repeated long gap-crossing transits that boustrophedon-by-
+    # y-row produces on C/U-shaped polygons where a building keepout hole splits
+    # individual scanline rows into disconnected pieces.  For simple rectangular
+    # polygons it degenerates to a standard boustrophedon (each strip is adjacent
+    # to the previous one in y).
+    n_strips = len(raw_segs)
+    visited_strip = [False] * n_strips
+
+    def _rot_ep(i: int) -> tuple[tuple[float, float], tuple[float, float]]:
+        y_s, x0_s, x1_s = raw_segs[i]
+        return (x0_s, y_s), (x1_s, y_s)
+
+    def _nearest_ep_dist(i: int, pos: tuple[float, float]) -> float:
+        e1, e2 = _rot_ep(i)
+        return min(math.hypot(e1[0] - pos[0], e1[1] - pos[1]),
+                   math.hypot(e2[0] - pos[0], e2[1] - pos[1]))
+
+    cur_rot: tuple[float, float] = (home_rot_x, home_rot_y)
+    cur_strip = min(range(n_strips), key=lambda i: _nearest_ep_dist(i, cur_rot))
+
     strips_3067: list[tuple] = []
-    for i, (y_strip, x0, x1) in enumerate(raw_segs):
-        from_left = first_from_left if i % 2 == 0 else not first_from_left
-        a = _back(x0 if from_left else x1, y_strip)
-        b = _back(x1 if from_left else x0, y_strip)
+    while len(strips_3067) < n_strips:
+        visited_strip[cur_strip] = True
+        ep_l, ep_r = _rot_ep(cur_strip)
+        dl = math.hypot(ep_l[0] - cur_rot[0], ep_l[1] - cur_rot[1])
+        dr = math.hypot(ep_r[0] - cur_rot[0], ep_r[1] - cur_rot[1])
+        a_rot, b_rot = (ep_l, ep_r) if dl <= dr else (ep_r, ep_l)
+        a = _back(a_rot[0], a_rot[1])
+        b = _back(b_rot[0], b_rot[1])
         strips_3067.append((a[0], a[1], b[0], b[1]))
+        cur_rot = b_rot
+        remaining = [i for i in range(n_strips) if not visited_strip[i]]
+        if remaining:
+            cur_strip = min(remaining, key=lambda i: _nearest_ep_dist(i, cur_rot))
 
     strip_dist_m = sum(math.hypot(x2 - x1, y2 - y1) for x1, y1, x2, y2 in strips_3067)
 
