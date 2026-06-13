@@ -309,7 +309,7 @@ def run_job_cmd(
     # --- run ---
     typer.echo(f"Starting job '{name}' …")
     try:
-        manifest = run_job(
+        manifest, _route_geojson = run_job(
             name, cfg,
             parcel_ids=parcel_ids,
             property_ids=property_ids,

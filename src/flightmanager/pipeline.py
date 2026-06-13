@@ -6,6 +6,7 @@ Output directory layout::
 
     output/<jobname>/
     ├── <jobname>.kmz         WPML mapping route (EPSG:4326, terrain-follow)
+    ├── waylines.wpml         explicit waypoint XML sidecar (advanced mode only)
     ├── site_dsm_wgs84.tif    DTM clipped to survey polygon, EPSG:4326
     ├── homes.kml             DJI Pilot 2 map layer: building pins
     ├── run.log               structured log for this run
@@ -198,6 +199,9 @@ def run_job(
                                    buildings=inp.buildings,
                                    power_lines=inp.power_lines)
                 kmz_results.append(result)
+                if result.waylines_xml:
+                    sidecar = job_dir / f"waylines{suffix}.wpml"
+                    sidecar.write_text(result.waylines_xml, encoding="utf-8")
                 if result.over_one_battery:
                     reason = (
                         f"Piece {i+1}: estimated flight time "
@@ -303,7 +307,18 @@ def run_job(
     status = "NEEDS REVIEW" if needs_review else ("FLIGHT READY" if flight_ready else "NOT FLIGHT READY")
     log.info("=== Job %s complete — %s ===", job_name, status)
     _cb(progress_cb, "complete", f"Job complete — {status}", 100)
-    return manifest
+
+    # Build route GeoJSON from the first KMZ result (advanced mode only).
+    route_geojson: dict | None = None
+    if kmz_results and kmz_results[0].route is not None:
+        route_geojson = _route_result_to_geojson(
+            kmz_results[0].route,
+            kmz_results[0].altitude_profile,
+            drone_cfg,
+            config.flight.overlap_front_pct,
+        )
+
+    return manifest, route_geojson
 
 
 # ---------------------------------------------------------------------------
@@ -484,8 +499,9 @@ def run_preview(
         takeoff_point_4326 = None
 
     # Route estimate: actual strip intersections for flight-time/photo preview.
-    _route_stats = _compute_route_stats(
-        survey_geom.survey_3067, config, drone_cfg, takeoff_point_4326
+    _route_data = _compute_route_geojson(
+        survey_geom.survey_3067, config, drone_cfg, takeoff_point_4326,
+        inp.buildings, inp.power_lines,
     )
 
     # Power lines for map display (both overhead and underground)
@@ -524,8 +540,13 @@ def run_preview(
             "home_buffer_m": buf,
             "has_parcels": any(hasattr(g, "parcel_id") for g in inp.input_geoms),
             "has_properties": any(hasattr(g, "property_id") for g in inp.input_geoms),
-            **_route_stats,
+            "route_angle_deg_auto":  _route_data.get("route_angle_deg_auto"),
+            "route_strip_count":     _route_data.get("route_strip_count"),
+            "route_photo_count":     _route_data.get("route_photo_count"),
+            "route_flight_time_min": _route_data.get("route_flight_time_min"),
         },
+        "strips_geojson":   _route_data.get("strips_geojson"),
+        "transits_geojson": _route_data.get("transits_geojson"),
     }
     return result
 
@@ -776,17 +797,15 @@ def _fetch_survey_inputs(
 
 
 
-def _compute_route_stats(
+def _compute_route_geojson(
     survey_3067,
     config: "AppConfig",
     drone_cfg,
     takeoff_point_4326: list | None,
+    buildings: list,
+    power_lines: list,
 ) -> dict:
-    """Compute strip/photo count and flight-time estimate for the preview payload.
-
-    Returns a dict with route_angle_deg_auto, route_strip_count,
-    route_photo_count, route_flight_time_min (all None on failure).
-    """
+    """Compute route and return stats + GeoJSON strips/transits for the preview payload."""
     from flightmanager import route as _route
 
     home_3067 = None
@@ -796,15 +815,22 @@ def _compute_route_stats(
         home_3067 = (_hp.x, _hp.y)
 
     H   = drone_cfg.height_from_gsd(config.flight.target_gsd_cm)
+    ovf = config.flight.overlap_front_pct
+    ovs = config.flight.overlap_side_pct
     p_m = drone_cfg.pixel_pitch_um * 1e-6
     f_m = drone_cfg.focal_length_mm * 1e-3
-    fp  = H * drone_cfg.image_width_px  * p_m / f_m
-    sm  = fp * (1 - config.flight.overlap_side_pct  / 100)
-    pm  = H * drone_cfg.image_height_px * p_m / f_m * (1 - config.flight.overlap_front_pct / 100)
+    fp_w = H * drone_cfg.image_width_px  * p_m / f_m
+    fp_h = H * drone_cfg.image_height_px * p_m / f_m
+    sm   = fp_w * (1 - ovs / 100)
+    pm   = fp_h * (1 - ovf / 100)
+
+    _empty = {"route_angle_deg_auto": None, "route_strip_count": None,
+              "route_photo_count": None, "route_flight_time_min": None,
+              "strips_geojson": None, "transits_geojson": None}
     try:
         angle = _route.compute_auto_angle(survey_3067)
         rr = _route.compute_route(survey_3067, angle, sm, pm,
-                                  footprint_width_m=fp, home_3067=home_3067)
+                                  footprint_width_m=fp_w, home_3067=home_3067)
         ft = _route.estimate_flight_time(
             rr,
             flight_height_m=H,
@@ -813,16 +839,59 @@ def _compute_route_stats(
             takeoff_security_height_m=config.flight.takeoff_security_height_m,
             home_3067=home_3067,
         )
+        altitude_profile = [H] * len(rr.strips_3067)
+        if config.flight.advanced_mode and rr.strips_3067:
+            try:
+                from flightmanager.obstacle_heights import compute_altitude_profile
+                altitude_profile = compute_altitude_profile(
+                    rr, buildings, power_lines,
+                    flight_height_m=H,
+                    min_h=config.flight.adv_min_height_m,
+                    powerline_clearance_m=config.flight.adv_powerline_clearance_m,
+                    overlap_front_pct=ovf,
+                    overlap_side_pct=ovs,
+                    slope_f=config.flight.adv_slope_f,
+                    drone=drone_cfg,
+                )
+            except Exception as exc:
+                log.warning("Preview: altitude profile failed — %s", exc)
+
+        gj = _route_result_to_geojson(rr, altitude_profile, drone_cfg, ovf)
         return {
             "route_angle_deg_auto":  round(angle, 1),
             "route_strip_count":     rr.strip_count,
             "route_photo_count":     rr.photo_count,
             "route_flight_time_min": round(ft, 1),
+            **gj,
         }
     except Exception as exc:
         log.warning("Preview: route estimate failed — %s", exc)
-        return {"route_angle_deg_auto": None, "route_strip_count": None,
-                "route_photo_count": None, "route_flight_time_min": None}
+        return _empty
+
+
+def _route_result_to_geojson(route, altitude_profile: list[float], drone_cfg, overlap_front_pct: float) -> dict:
+    """Convert a RouteResult + altitude profile to strips/transits GeoJSON dicts."""
+    from shapely.geometry import LineString, mapping as _mapping
+
+    def _seg_feat(x1, y1, x2, y2, alt, speed):
+        line = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
+        return {"type": "Feature", "geometry": dict(_mapping(line)),
+                "properties": {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2)}}
+
+    def _path_feat(pts):
+        line = reproject_to_4326(LineString(pts))
+        return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": {}}
+
+    strips = [
+        _seg_feat(*s, alt=altitude_profile[i],
+                  speed=drone_cfg.auto_speed(altitude_profile[i], overlap_front_pct))
+        for i, s in enumerate(route.strips_3067)
+    ]
+    transits = [_path_feat(seg) for seg in route.transit_segs_3067]
+    return {
+        "strips_geojson":   {"type": "FeatureCollection", "features": strips},
+        "transits_geojson": {"type": "FeatureCollection", "features": transits},
+    }
 
 
 def _require_api_key() -> str:

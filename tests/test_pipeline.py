@@ -153,12 +153,13 @@ class TestRunJob:
             patch("flightmanager.pipeline.load_tile", return_value=[_BUILDING]),
             patch("flightmanager.pipeline.check_zones", return_value=zone_result),
         ):
-            return run_job(
+            manifest, _route = run_job(
                 "test-job",
                 config,
                 parcel_ids=parcel_ids or ["TEST001"],
                 dry_run=dry_run,
             )
+            return manifest
 
     def test_manifest_has_required_keys(self, config, dem_tile, bldg_tile):
         manifest = self._run(config, dem_tile, bldg_tile)
@@ -256,7 +257,7 @@ def test_live_run_job(tmp_path):
     from flightmanager.config import OutputConfig
     cfg.output = OutputConfig(output_dir=str(tmp_path / "output"))
 
-    manifest = run_job(
+    manifest, _route = run_job(
         "live-test",
         cfg,
         parcel_ids=["0040003911"],

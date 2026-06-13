@@ -52,7 +52,7 @@ export function onPreviewDone(payload) {
       st._routeAngleAuto = payload.stats.route_angle_deg_auto;
       _renderAngleControl();
     }
-    updateRouteOverlay();
+    updateRouteOverlay(payload.strips_geojson, payload.transits_geojson);
     // _legendUserVis persists user eye choices across renders and job switches.
     // Empty on first render → resetLegend applies startOff defaults.
     resetLegend(_legendUserVis);

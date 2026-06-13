@@ -74,7 +74,7 @@ export async function _doOpenJob(path) {
           st._routeAngleAuto = st.previewData.stats.route_angle_deg_auto;
           _renderAngleControl();
         }
-        updateRouteOverlay();
+        updateRouteOverlay(st.previewData.strips_geojson, st.previewData.transits_geojson);
         resetLegend(_legendUserVis);
         renderStatus(st.previewData.stats);
         if (st.previewData.stats) {

@@ -275,11 +275,15 @@ export function updateRouteStats(data) {
   te.textContent = (data && data.flight_time_min != null) ? '~' + Math.round(data.flight_time_min) + ' min' : '—';
 }
 
-export function updateRouteOverlay() {
+export function updateRouteOverlay(cachedStrips, cachedTransits) {
   if (!st.previewData || !st.previewData.survey) { _clearRouteLayer(); updateRouteStats(null); return; }
   var p = _getRouteParams();
   if (!p) { _clearRouteLayer(); updateRouteStats(null); return; }
   _lastFpAcross = p.fpAcross;
+  if (cachedStrips) {
+    _drawRouteGeoJSON(cachedStrips, cachedTransits);
+    return;
+  }
   _drawRoughPreview(st.previewData.survey, p.angle, p.stripM, p.fpAcross);
   updateRouteStats(null);
   _scheduleAccurateEstimate();

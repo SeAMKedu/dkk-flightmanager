@@ -27,8 +27,12 @@ import logging
 import math
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from flightmanager.route import RouteResult
 
 from lxml import etree
 from shapely.geometry.base import BaseGeometry
@@ -100,6 +104,9 @@ class KmzResult:
     over_one_battery: bool
     drone_name: str = "m3m"
     strip_speed_ms: float = 0.0
+    route: RouteResult | None = None
+    altitude_profile: list[float] = field(default_factory=list)
+    waylines_xml: str | None = None
 
 
 # ---- Main entry point ----
@@ -154,8 +161,10 @@ def build_kmz(
     if dsm_path is not None and dsm_path.exists():
         dsm_kmz_name = f"wpmz/res/dsm/{dsm_path.name}"
 
+    adv_route = None
+    adv_alt_profile: list[float] = []
     if flight_config.advanced_mode and drone is not None:
-        template_xml, waylines_xml = _build_advanced_files(
+        template_xml, waylines_xml, adv_route, adv_alt_profile = _build_advanced_files(
             survey_4326, flight_config, speed_ms=speed_ms, drone=drone,
             height_m=height_m, buildings=buildings, power_lines=power_lines,
         )
@@ -184,6 +193,9 @@ def build_kmz(
         over_one_battery=budget["over_one_battery"],
         drone_name=drone.name if drone else "m3m",
         strip_speed_ms=speed_ms,
+        route=adv_route,
+        altitude_profile=adv_alt_profile,
+        waylines_xml=waylines_xml,
     )
 
 
@@ -198,8 +210,8 @@ def _build_advanced_files(
     height_m: float,
     buildings: list | None,
     power_lines: list | None,
-) -> tuple[str, str]:
-    """Compute obstacle-aware altitude profile and return (template_xml, waylines_xml)."""
+) -> tuple[str, str, RouteResult, list[float]]:
+    """Compute obstacle-aware altitude profile and return (template_xml, waylines_xml, route, alt_profile)."""
     from flightmanager.geometry import reproject_to_3067
     from flightmanager.route import compute_route, compute_auto_angle
     from flightmanager.obstacle_heights import compute_altitude_profile
@@ -249,7 +261,7 @@ def _build_advanced_files(
         template_type="waypoint",
     )
     waylines_xml = build_waylines(route, alt_profile, drone=drone, cfg=cfg)
-    return template_xml, waylines_xml
+    return template_xml, waylines_xml, route, alt_profile
 
 
 # ---- template.kml builder ----

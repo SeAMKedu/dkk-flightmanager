@@ -187,7 +187,7 @@ async def start_export(req: ExportRequest):
         try:
             from flightmanager.pipeline import run_job
 
-            manifest = run_job(
+            manifest, route_geojson = run_job(
                 req.job_name,
                 cfg,
                 parcel_ids=req.parcel_ids or None,
@@ -201,7 +201,7 @@ async def start_export(req: ExportRequest):
                 job_dir.parent.mkdir(parents=True, exist_ok=True)
             else:
                 job_dir = Path(output_dir) / req.job_name
-            _write_job_params(job_dir, req, manifest, preview_snapshot)
+            _write_job_params(job_dir, req, manifest, preview_snapshot, route_geojson)
             output_files = {
                 k: str(p)
                 for k, p in {
@@ -585,11 +585,22 @@ def _prepare_config(req: PreviewRequest):
     return cfg
 
 
+def _merge_preview_and_route(preview_result: dict | None, route_geojson: dict | None) -> dict | None:
+    """Merge preview snapshot with KMZ-derived route GeoJSON, dropping the DSM thumbnail."""
+    if not preview_result:
+        return None
+    merged = {k: v for k, v in preview_result.items() if k != "dsm_b64"}
+    if route_geojson:
+        merged.update(route_geojson)
+    return merged
+
+
 def _write_job_params(
     job_dir: Path,
     req: ExportRequest,
     manifest: dict,
     preview_result: dict | None = None,
+    route_geojson: dict | None = None,
 ) -> None:
     """Write job_params.json and thumbnail.svg alongside the manifest."""
     params = {
@@ -618,10 +629,7 @@ def _write_job_params(
         "custom_polygon_4326": req.custom_polygon,
         "takeoff_point_4326":  req.takeoff_point_4326,
         "color": req.color or None,
-        "last_preview_geojson": (
-            {k: v for k, v in preview_result.items() if k != "dsm_b64"}
-            if preview_result else None
-        ),
+        "last_preview_geojson": _merge_preview_and_route(preview_result, route_geojson),
     }
     # Preserve existing color, sort_order, and skipped from prior save
     if (job_dir / "job_params.json").exists():
