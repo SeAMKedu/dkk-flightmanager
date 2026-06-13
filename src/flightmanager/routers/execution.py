@@ -110,10 +110,10 @@ async def start_preview(req: PreviewRequest):
             return
         try:
             from shapely.geometry import shape as _shape
-            from flightmanager.pipeline import run_preview
+            from flightmanager.pipeline import analyse_survey
 
             custom_poly_geom = _shape(req.custom_polygon) if req.custom_polygon else None
-            result = run_preview(
+            result = analyse_survey(
                 cfg,
                 parcel_ids=req.parcel_ids or None,
                 property_ids=req.property_ids or None,
@@ -181,13 +181,13 @@ async def start_export(req: ExportRequest):
         lock = _acquire_pipeline_lock(job_id, loop, queue, "export")
         if lock is None:
             return
-        # Snapshot the preview result before run_job so a concurrent preview
+        # Snapshot the preview result before export_job so a concurrent preview
         # can't overwrite the global between job completion and the file write.
         preview_snapshot = _st.last_preview_result
         try:
-            from flightmanager.pipeline import run_job
+            from flightmanager.pipeline import export_job
 
-            manifest, route_geojson = run_job(
+            manifest, route_geojson = export_job(
                 req.job_name,
                 cfg,
                 parcel_ids=req.parcel_ids or None,

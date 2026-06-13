@@ -18,7 +18,7 @@ from flightmanager.buildings import Building
 from flightmanager.cache import TileRecord
 from flightmanager.config import AppConfig, CacheConfig, FlightConfig, HomeSafetyConfig, ParcelsConfig, PolygonConfig, ZonesConfig
 from flightmanager.parcels import Parcel
-from flightmanager.pipeline import run_job
+from flightmanager.pipeline import export_job
 from flightmanager.zones import ZoneCheckResult
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ class TestRunJob:
             patch("flightmanager.pipeline.load_tile", return_value=[_BUILDING]),
             patch("flightmanager.pipeline.check_zones", return_value=zone_result),
         ):
-            manifest, _route = run_job(
+            manifest, _route = export_job(
                 "test-job",
                 config,
                 parcel_ids=parcel_ids or ["TEST001"],
@@ -213,7 +213,7 @@ class TestRunJob:
         env = {k: v for k, v in os.environ.items() if k != "MML_API_KEY"}
         with patch.dict(os.environ, env, clear=True):
             with pytest.raises(RuntimeError, match="MML_API_KEY"):
-                run_job("test", config, parcel_ids=["X"])
+                export_job("test", config, parcel_ids=["X"])
 
     def test_attribution_strings_present(self, config, dem_tile, bldg_tile):
         manifest = self._run(config, dem_tile, bldg_tile)
@@ -245,7 +245,7 @@ class TestRunJob:
 
 @pytest.mark.integration
 @pytest.mark.skip(reason="Hits live services — run with -m integration")
-def test_live_run_job(tmp_path):
+def test_live_export_job(tmp_path):
     cfg = AppConfig(
         flight=FlightConfig(target_gsd_cm=2.7),
         home_safety=HomeSafetyConfig(home_buffer_m=150),
@@ -257,7 +257,7 @@ def test_live_run_job(tmp_path):
     from flightmanager.config import OutputConfig
     cfg.output = OutputConfig(output_dir=str(tmp_path / "output"))
 
-    manifest, _route = run_job(
+    manifest, _route = export_job(
         "live-test",
         cfg,
         parcel_ids=["0040003911"],

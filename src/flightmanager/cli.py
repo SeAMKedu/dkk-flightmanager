@@ -344,7 +344,7 @@ def run_job_cmd(
 ) -> None:
     """Generate a mapping job: KMZ route, terrain-follow DSM, and homes map layer."""
     from flightmanager.config import load_config
-    from flightmanager.pipeline import run_job
+    from flightmanager.pipeline import export_job
 
     _require_key()
 
@@ -380,7 +380,7 @@ def run_job_cmd(
 
     typer.echo(f"Starting job '{name}' …")
     try:
-        manifest, _route_geojson = run_job(
+        manifest, _route_geojson = export_job(
             name, cfg,
             parcel_ids=parcel_ids,
             property_ids=property_ids,

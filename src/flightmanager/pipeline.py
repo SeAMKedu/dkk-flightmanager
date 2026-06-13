@@ -1,6 +1,6 @@
 """Orchestrate one mapping job end-to-end.
 
-Entry point: ``run_job()``.  Importable as a module for Airflow use.
+Entry points: ``export_job()``, ``analyse_survey()``.  Importable as a module for Airflow use.
 
 Output directory layout::
 
@@ -62,7 +62,7 @@ def _cb(fn: Callable | None, stage: str, msg: str, pct: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_job(  # noqa: C901
+def export_job(  # noqa: C901
     job_name: str,
     config: AppConfig,
     *,
@@ -327,7 +327,7 @@ def run_job(  # noqa: C901
 
 
 
-def run_preview(  # noqa: C901
+def analyse_survey(  # noqa: C901
     config: AppConfig,
     *,
     parcel_ids: list[str] | None = None,
@@ -710,7 +710,7 @@ def _fetch_survey_inputs(
 ) -> "_InputResult":
     """Fetch parcels, properties and building tiles; return a bundled result.
 
-    Shared by ``run_job()`` and ``run_preview()``.  Progress uses the unified
+    Shared by ``export_job()`` and ``analyse_survey()``.  Progress uses the unified
     ladder: parcels=10%, properties=20%, buildings=30%.
 
     ``custom_polygon_4326`` takes precedence over ``input_geoms`` for the

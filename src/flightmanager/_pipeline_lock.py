@@ -10,7 +10,7 @@ Usage:
 
     try:
         with pipeline_lock(cfg.cache.cache_dir):
-            run_job(...)
+            export_job(...)
     except Timeout:
         # another process holds the lock
         raise RuntimeError("Pipeline busy — another process is running a job.")

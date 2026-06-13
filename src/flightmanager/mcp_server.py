@@ -478,7 +478,7 @@ def export_existing_job(  # noqa: C901
 
     Returns job path, output files, flight status, and key stats.
     """
-    from flightmanager.pipeline import run_job
+    from flightmanager.pipeline import export_job
     from flightmanager.job_store import resolve_job_dir
 
     folder, name, job_dir = resolve_job_dir(_output_dir(), path)
@@ -527,7 +527,7 @@ def export_existing_job(  # noqa: C901
 
     try:
         with _pipeline_guard():
-            manifest = run_job(
+            manifest = export_job(
                 name, cfg,
                 parcel_ids=parcel_ids,
                 property_ids=property_ids,
@@ -608,7 +608,7 @@ def create_preview(
 
     Returns survey area, vertex count, zone hits, and flight readiness.
     """
-    from flightmanager.pipeline import run_preview
+    from flightmanager.pipeline import analyse_survey
 
     if not parcel_ids and not property_ids and not bbox:
         return json.dumps({"error": "Provide at least one of parcel_ids, property_ids, or bbox."})
@@ -630,7 +630,7 @@ def create_preview(
 
     try:
         with _pipeline_guard():
-            result = run_preview(
+            result = analyse_survey(
                 cfg,
                 parcel_ids=parcel_ids or None,
                 property_ids=property_ids or None,
@@ -781,7 +781,7 @@ def run_export(
 
     Returns job path, output files, flight status, and key stats.
     """
-    from flightmanager.pipeline import run_job
+    from flightmanager.pipeline import export_job
 
     if not parcel_ids and not property_ids and not bbox:
         return json.dumps({"error": "Provide at least one of parcel_ids, property_ids, or bbox."})
@@ -814,7 +814,7 @@ def run_export(
 
     try:
         with _pipeline_guard():
-            manifest = run_job(
+            manifest = export_job(
                 name, cfg,
                 parcel_ids=parcel_ids or None,
                 property_ids=property_ids or None,
