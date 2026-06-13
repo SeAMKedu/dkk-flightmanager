@@ -31,9 +31,9 @@ from flightmanager.powerlines import (
     PowerLine, dedup_power_lines, load_tile as load_pl_tile, tile_fetcher as powerlines_fetcher,
     Pylon, dedup_pylons, load_pylon_tile, pylon_tile_fetcher, correct_overhead_from_pylons,
 )
-from flightmanager.cache import FetcherFn, TileRecord, get_tiles, tile_provenance
+from flightmanager.cache import TileRecord, get_tiles, tile_provenance
 from flightmanager.config import AppConfig
-from flightmanager.elevation import tile_fetcher as dem_fetcher, validate_tile
+from flightmanager.elevation import tile_fetcher as dem_fetcher
 from shapely import make_valid
 from shapely.ops import unary_union
 from flightmanager.geometry import (
@@ -458,7 +458,6 @@ def run_preview(
     ] + [
         (h, True)  for h in zone_result.related_zones
     ]
-    all_hit_objs = [h for h, _ in all_zone_hits]
     zone_hits_data = []
     for i, (h, context_only) in enumerate(all_zone_hits):
         geojson = _zone_geojson(h)

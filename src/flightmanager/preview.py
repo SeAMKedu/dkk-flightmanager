@@ -61,7 +61,7 @@ _VIRIDIS_STOPS = _np.array([
 del _np
 
 
-def _colorize_viridis(norm: "np.ndarray") -> "np.ndarray":
+def _colorize_viridis(norm):
     """Map normalized float32 [0,1] array to viridis RGB. Returns (H, W, 3) uint8."""
     import numpy as np
     n = len(_VIRIDIS_STOPS)           # 11 stops → 10 intervals
@@ -153,7 +153,9 @@ def build_preview_dsm_thumbnail(
 
     rgb = _colorize_viridis(norm)     # (H, W, 3) uint8
     rgba = np.zeros((4, th, tw), dtype=np.uint8)
-    rgba[0] = rgb[:, :, 0]; rgba[1] = rgb[:, :, 1]; rgba[2] = rgb[:, :, 2]
+    rgba[0] = rgb[:, :, 0]
+    rgba[1] = rgb[:, :, 1]
+    rgba[2] = rgb[:, :, 2]
     rgba[3] = np.where(valid_mask, 255, 0).astype(np.uint8)
 
     with MemoryFile() as mem:
@@ -194,7 +196,9 @@ def _dsm_thumbnail_b64(dsm_path: Path) -> tuple[str, tuple[float, float, float, 
 
     rgb = _colorize_viridis(norm)     # (H, W, 3) uint8
     rgba = np.zeros((4, th, tw), dtype=np.uint8)
-    rgba[0] = rgb[:, :, 0]; rgba[1] = rgb[:, :, 1]; rgba[2] = rgb[:, :, 2]
+    rgba[0] = rgb[:, :, 0]
+    rgba[1] = rgb[:, :, 1]
+    rgba[2] = rgb[:, :, 2]
     rgba[3] = np.where(valid_mask, 255, 0).astype(np.uint8)
 
     with MemoryFile() as mem:

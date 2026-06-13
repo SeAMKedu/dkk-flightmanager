@@ -37,7 +37,7 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 
 from flightmanager.cache import FetcherFn
-from flightmanager.config import CacheConfig, HomeSafetyConfig
+from flightmanager.config import HomeSafetyConfig
 from flightmanager.crs import require_3067
 
 log = logging.getLogger(__name__)

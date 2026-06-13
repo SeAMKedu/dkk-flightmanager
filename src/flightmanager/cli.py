@@ -7,14 +7,12 @@ Commands:
 
 from __future__ import annotations
 
-import json
 import os
 
 from dotenv import load_dotenv
 
 load_dotenv()  # reads .env (or .env.local) from cwd upward; no-op if not found
 import sqlite3
-import sys
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -53,7 +51,7 @@ def list_drones(
         typer.echo(
             f"{d.name + marker:<18} {gsd50:>7.2f} cm {gsd100:>8.2f} cm  {d.label}"
         )
-    typer.echo(f"\n  * = default drone (override with --drone or default_drone in config.toml)\n")
+    typer.echo("\n  * = default drone (override with --drone or default_drone in config.toml)\n")
 
 
 # ---------------------------------------------------------------------------
@@ -352,10 +350,8 @@ def cache_warm(
     refresh: bool = typer.Option(False, "--refresh", help="Force re-fetch of all tiles."),
 ) -> None:
     """Pre-fetch DEM and building tiles for an area ahead of a field day."""
-    import os
     from flightmanager.buildings import tile_fetcher as b_fetcher
     from flightmanager.cache import covering_tiles, get_tiles
-    from flightmanager.config import load_config
     from flightmanager.elevation import tile_fetcher as d_fetcher
 
     try:
@@ -449,8 +445,7 @@ def cache_refresh(
     """Re-fetch stale cache tiles."""
     import sqlite3
     from flightmanager.buildings import tile_fetcher as b_fetcher
-    from flightmanager.cache import _db_path, _init_db, get_tiles, TileBbox
-    from flightmanager.config import load_config
+    from flightmanager.cache import _db_path, get_tiles, TileBbox
     from flightmanager.elevation import tile_fetcher as d_fetcher
 
     cfg = _load_cfg(config_path)

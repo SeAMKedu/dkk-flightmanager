@@ -24,7 +24,6 @@ Battery budget:
 from __future__ import annotations
 
 import logging
-import math
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -40,7 +39,6 @@ from shapely.geometry.base import BaseGeometry
 from flightmanager.config import (
     M3E_FOCAL_LENGTH_MM,
     M3E_IMAGE_HEIGHT_PX,
-    M3E_IMAGE_WIDTH_PX,
     M3E_PIXEL_PITCH_UM,
     DroneConfig,
     FlightConfig,

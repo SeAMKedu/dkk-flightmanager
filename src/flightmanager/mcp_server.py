@@ -429,7 +429,7 @@ def delete_job(path: str) -> str:
     The parent folder is removed automatically if it becomes empty after deletion.
     """
     import shutil
-    from flightmanager.job_store import resolve_job_dir, is_folder_dir
+    from flightmanager.job_store import resolve_job_dir
 
     _, _, job_dir = resolve_job_dir(_output_dir(), path)
     if not job_dir.exists():
@@ -799,7 +799,6 @@ def run_export(
     Returns job path, output files, flight status, and key stats.
     """
     from flightmanager.pipeline import run_job
-    from flightmanager.job_store import make_thumbnail_svg
 
     if not parcel_ids and not property_ids and not bbox:
         return json.dumps({"error": "Provide at least one of parcel_ids, property_ids, or bbox."})
