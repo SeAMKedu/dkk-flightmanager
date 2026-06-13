@@ -16,7 +16,7 @@ from shapely.geometry import Point
 
 if TYPE_CHECKING:
     from flightmanager.buildings import Building
-    from flightmanager.powerlines import PowerLine
+    from flightmanager.powerlines import PowerLine  # noqa: F401
     from flightmanager.config import DroneConfig
     from flightmanager.route import RouteResult
 

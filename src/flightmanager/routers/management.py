@@ -495,38 +495,39 @@ async def reveal_job(path: str):
 # ---------------------------------------------------------------------------
 
 
+def _build_operation_polygon(pts: list):
+    """Build a valid Shapely polygon from 3 (triangle) or 4 (quad) points.
+
+    Returns the polygon or raises HTTPException(400) on invalid input.
+    """
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from shapely.validation import make_valid
+
+    if len(pts) == 3:
+        poly = ShapelyPolygon(pts)
+        if not poly.is_valid:
+            poly = make_valid(poly)
+        return poly
+    if len(pts) == 4:
+        for order in [[pts[0], pts[1], pts[2], pts[3]], [pts[0], pts[1], pts[3], pts[2]]]:
+            candidate = ShapelyPolygon(order)
+            if not candidate.is_valid:
+                candidate = make_valid(candidate)
+            if candidate.is_valid and not candidate.is_empty and candidate.area > 0:
+                return candidate
+        raise HTTPException(400, detail="Selected points do not form a valid quadrilateral")
+    raise HTTPException(400, detail=f"Expected 3 or 4 points, got {len(pts)}")
+
+
 @router.post("/api/polygon_op")
 async def polygon_op(req: PolygonOpRequest):
-    from shapely.geometry import Polygon as ShapelyPolygon, mapping, shape
+    from shapely.geometry import mapping, shape
     from shapely.ops import unary_union
-    from shapely.validation import make_valid
 
     try:
         survey = shape(req.polygon)
         pts = [(c[0], c[1]) for c in req.points]  # lng, lat
-
-        if len(pts) == 3:
-            quad = ShapelyPolygon(pts)
-            if not quad.is_valid:
-                quad = make_valid(quad)
-        elif len(pts) == 4:
-            quad = None
-            for order in [
-                [pts[0], pts[1], pts[2], pts[3]],
-                [pts[0], pts[1], pts[3], pts[2]],
-            ]:
-                candidate = ShapelyPolygon(order)
-                if not candidate.is_valid:
-                    candidate = make_valid(candidate)
-                if candidate.is_valid and not candidate.is_empty and candidate.area > 0:
-                    quad = candidate
-                    break
-            if quad is None:
-                raise HTTPException(
-                    400, detail="Selected points do not form a valid quadrilateral"
-                )
-        else:
-            raise HTTPException(400, detail=f"Expected 3 or 4 points, got {len(pts)}")
+        quad = _build_operation_polygon(pts)
 
         if not quad.is_valid or quad.is_empty:
             raise HTTPException(400, detail="Selected points do not form a valid shape")
@@ -718,6 +719,19 @@ async def create_folder(body: dict):
     return {"name": folder_name}
 
 
+def _copy_route_job(job_dir: Path, job_name: str, dest_path: Path) -> int:
+    """Copy KMZ files and homes.kml from one job to dest_path. Returns file count."""
+    count = 0
+    for kmz_file in sorted(job_dir.glob("*.kmz")):
+        shutil.copy2(kmz_file, dest_path / kmz_file.name)
+        count += 1
+    homes_kml = job_dir / "homes.kml"
+    if homes_kml.exists():
+        shutil.copy2(homes_kml, dest_path / f"{job_name}_homes.kml")
+        count += 1
+    return count
+
+
 @router.post("/api/export-route")
 async def export_route(body: dict):
     """Copy .kmz and homes.kml for every route job to a local directory.
@@ -752,14 +766,7 @@ async def export_route(body: dict):
             if not card.get("takeoff_point_4326") or card.get("skipped", False):
                 continue
             _, _, job_dir = resolve_job_dir(output_dir, card["path"])
-            job_name = card["name"]
-            for kmz_file in sorted(job_dir.glob("*.kmz")):
-                shutil.copy2(kmz_file, dest_path / kmz_file.name)
-                copied += 1
-            homes_kml = job_dir / "homes.kml"
-            if homes_kml.exists():
-                shutil.copy2(homes_kml, dest_path / f"{job_name}_homes.kml")
-                copied += 1
+            copied += _copy_route_job(job_dir, card["name"], dest_path)
 
     return {"ok": True, "copied": copied, "dest_dir": str(dest_path)}
 

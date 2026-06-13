@@ -76,34 +76,48 @@ def _load_ui() -> str:
     return env.get_template("ui.html").render()
 
 
+@asynccontextmanager
+async def _app_lifespan(app: FastAPI):
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    task = asyncio.create_task(_watch_output_dir(output_dir))
+    yield
+    # Send shutdown sentinel to all /api/events clients so their generators
+    # exit cleanly before uvicorn tears down the connections. Without this,
+    # Starlette's listen_for_disconnect gets a CancelledError mid-wait and
+    # uvicorn logs it as ERROR.
+    for q in list(_st.event_queues):
+        try:
+            q.put_nowait(None)
+        except asyncio.QueueFull:
+            pass
+    await asyncio.sleep(0.15)  # let all SSE generators drain their sentinel
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    from flightmanager.net_stats import print_summary as _print_net_stats
+    _print_net_stats(_st.config.cache.cache_dir)
+
+
+def _compute_default_speed() -> float:
+    """Return the effective strip speed at the current default altitude.
+
+    When auto_flight_speed_ms is None the speed is altitude-dependent; we
+    compute it at the default altitude so the UI can show a sensible placeholder.
+    The actual KMZ value is re-computed at export time.
+    """
+    from flightmanager.wpml import resolve_strip_speed
+    drone = _st.config.active_drone()
+    H = drone.height_from_gsd(_st.config.flight.target_gsd_cm)
+    return resolve_strip_speed(_st.config.flight, drone, H)
+
+
 def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     _st.config = config
     _st.config_path = config_path
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        output_dir = Path(_st.config.output.output_dir).resolve()
-        task = asyncio.create_task(_watch_output_dir(output_dir))
-        yield
-        # Send shutdown sentinel to all /api/events clients so their generators
-        # exit cleanly before uvicorn tears down the connections. Without this,
-        # Starlette's listen_for_disconnect gets a CancelledError mid-wait and
-        # uvicorn logs it as ERROR.
-        for q in list(_st.event_queues):
-            try:
-                q.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
-        await asyncio.sleep(0.15)  # let all SSE generators drain their sentinel
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        from flightmanager.net_stats import print_summary as _print_net_stats
-        _print_net_stats(_st.config.cache.cache_dir)
-
-    app = FastAPI(title="dkk-flightmanager", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="dkk-flightmanager", docs_url=None, redoc_url=None, lifespan=_app_lifespan)
 
     @app.get("/", response_class=HTMLResponse)
     async def ui():
@@ -137,18 +151,6 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
         data = _get_stats()
         data["cache_disk_bytes"] = query_disk_size(_st.config.cache.cache_dir)
         return data
-
-    def _compute_default_speed() -> float:
-        """Return the strip speed that will be used for the current config/drone.
-
-        When auto_flight_speed_ms is None the speed is altitude-dependent; we
-        compute it at the current default altitude so the UI can show a sensible
-        placeholder.  The actual KMZ value is re-computed at export time.
-        """
-        from flightmanager.wpml import resolve_strip_speed
-        drone = _st.config.active_drone()
-        H = drone.height_from_gsd(_st.config.flight.target_gsd_cm)
-        return resolve_strip_speed(_st.config.flight, drone, H)
 
     @app.get("/api/config")
     async def get_config():

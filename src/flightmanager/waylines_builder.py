@@ -59,6 +59,42 @@ def _photo_interval_m(height_m: float, drone: DroneConfig, overlap_front_pct: fl
     return max(0.5, footprint_m * (1.0 - overlap_front_pct / 100.0))
 
 
+def _build_waypoint_list(
+    strips_3067: list,
+    altitude_profile: list[float],
+    inter_transits: list,
+) -> tuple[list[tuple], list[int], list[int]]:
+    """Build flat (x, y, alt, strip_idx, is_start, is_end) waypoint list.
+
+    Returns (wps, strip_start_wp_idx, strip_end_wp_idx).
+    Each entry: (x3067, y3067, alt_m, strip_idx_or_None, is_start, is_end).
+    Transit intermediate waypoints use max(adjacent strip altitudes).
+    """
+    wps: list[tuple] = []
+    strip_start_wp_idx: list[int] = []
+    strip_end_wp_idx: list[int] = []
+    n = len(strips_3067)
+
+    for i, (x1, y1, x2, y2) in enumerate(strips_3067):
+        alt = altitude_profile[i]
+
+        strip_start_wp_idx.append(len(wps))
+        wps.append((x1, y1, alt, i, True, False))
+
+        strip_end_wp_idx.append(len(wps))
+        wps.append((x2, y2, alt, i, False, True))
+
+        if i < n - 1:
+            transit = inter_transits[i]
+            # transit[0] = this strip's end (already added)
+            # transit[-1] = next strip's start (will be added next iteration)
+            transit_alt = max(alt, altitude_profile[i + 1])
+            for tx, ty in transit[1:-1]:
+                wps.append((tx, ty, transit_alt, None, False, False))
+
+    return wps, strip_start_wp_idx, strip_end_wp_idx
+
+
 def build_waylines(
     route: RouteResult,
     altitude_profile: list[float],
@@ -95,29 +131,9 @@ def build_waylines(
         inter_transits = route.transit_segs_3067   # N-1 elements
 
     # ── Build flat waypoint list ──────────────────────────────────────────────
-    # Each entry: (x3067, y3067, alt_m, strip_idx_or_None, is_start, is_end)
-    wps: list[tuple] = []          # (x, y, alt, strip_idx, is_start, is_end)
-    strip_start_wp_idx: list[int] = []
-    strip_end_wp_idx:   list[int] = []
-
-    for i, (x1, y1, x2, y2) in enumerate(route.strips_3067):
-        alt = altitude_profile[i]
-
-        strip_start_wp_idx.append(len(wps))
-        wps.append((x1, y1, alt, i, True, False))
-
-        strip_end_wp_idx.append(len(wps))
-        wps.append((x2, y2, alt, i, False, True))
-
-        if i < n - 1:
-            transit = inter_transits[i]
-            # transit[0] = this strip's end (already added)
-            # transit[-1] = next strip's start (will be added next iteration)
-            # Include only the intermediate waypoints.
-            transit_alt = max(alt, altitude_profile[i + 1])
-            for tx, ty in transit[1:-1]:
-                wps.append((tx, ty, transit_alt, None, False, False))
-
+    wps, strip_start_wp_idx, strip_end_wp_idx = _build_waypoint_list(
+        route.strips_3067, altitude_profile, inter_transits
+    )
     total_wps = len(wps)
 
     # Pre-compute 4326 coordinates and bearings
