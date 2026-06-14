@@ -182,6 +182,19 @@
     <div id="cesium-container"><div id="cesium-legend"></div></div>
     <!-- Mirror of the 2D/3D toggle: shown on top of Cesium at the same pixel position -->
     <button id="cesium-2d-btn" class="toggle-3d-ctrl active" onclick="toggle3dView()" title="Switch to 2D view" style="display:none">2D</button>
+    <!-- 3D telemetry readout (altitude + speed) -->
+    <div id="cesium-telemetry">
+      <div class="c3d-tel-row">
+        <span class="c3d-tel-label">Alt</span>
+        <span class="c3d-tel-value" id="cesium-tel-alt">—</span>
+        <span class="c3d-tel-unit">m</span>
+      </div>
+      <div class="c3d-tel-row">
+        <span class="c3d-tel-label">Spd</span>
+        <span class="c3d-tel-value" id="cesium-tel-spd">—</span>
+        <span class="c3d-tel-unit">m/s</span>
+      </div>
+    </div>
     <!-- 3D playback controls -->
     <div id="cesium-playback">
       <button id="cesium-play-btn">&#9654;</button>

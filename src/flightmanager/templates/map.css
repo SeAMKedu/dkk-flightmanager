@@ -74,6 +74,12 @@
 #cesium-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.9);color:#cbd5e1;font-size:13px;z-index:10;letter-spacing:.03em}
 #cesium-playback{display:none;position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:600;align-items:center;gap:12px;background:rgba(15,23,42,.88);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 20px;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.5);white-space:nowrap;pointer-events:auto}
 #cesium-playback.active{display:flex}
+#cesium-telemetry{display:none;position:absolute;bottom:28px;right:20px;z-index:600;flex-direction:column;gap:4px;background:rgba(15,23,42,.88);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:9px 16px;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.5);pointer-events:none;min-width:90px}
+#cesium-telemetry.active{display:flex}
+.c3d-tel-row{display:flex;align-items:baseline;gap:6px}
+.c3d-tel-label{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;min-width:28px}
+.c3d-tel-value{font-family:monospace;font-size:16px;font-weight:700;color:#00d2ff;min-width:52px;text-align:right;line-height:1}
+.c3d-tel-unit{font-size:10px;color:#64748b;align-self:flex-end;padding-bottom:1px}
 #cesium-play-btn,#cesium-reset-btn{background:#00d2ff;color:#000;border:none;padding:5px 11px;border-radius:5px;font-weight:700;cursor:pointer;width:auto;font-size:13px;transition:background .15s}
 #cesium-play-btn:hover,#cesium-reset-btn:hover{background:#00b8e0}
 #cesium-slider{width:260px;accent-color:#00d2ff;cursor:pointer}

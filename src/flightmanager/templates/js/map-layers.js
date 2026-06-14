@@ -66,6 +66,7 @@ export function onPreviewDone(payload) {
         strip_count:      payload.stats.route_strip_count,
         photo_count:      payload.stats.route_photo_count,
         flight_time_min:  payload.stats.route_flight_time_min,
+        strips_geojson:   payload.strips_geojson,
       });
     }
   } catch(e) {

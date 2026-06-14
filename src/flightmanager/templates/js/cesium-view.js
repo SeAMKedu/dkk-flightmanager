@@ -31,6 +31,7 @@ var _playbackTime = 0;
 var _totalDuration = 0;
 var _lastTickTime = null;
 var _dronePositionProperty = null;
+var _waypoints = [];
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -167,6 +168,7 @@ function _clearScene() {
   Object.keys(_entityGroups).forEach(function(k) { _entityGroups[k] = []; });
   if (_dsmLayer) { _viewer.imageryLayers.remove(_dsmLayer); _dsmLayer = null; }
   _dronePositionProperty = null;
+  _waypoints = [];
   _playbackTime = 0;
   _totalDuration = 0;
   _isPlaying = false;
@@ -293,7 +295,7 @@ function _buildWaypoints(altM) {
   var t = 0;
   return pts.map(function(p, i) {
     if (i > 0) t += _haversineM(pts[i - 1].lat, pts[i - 1].lon, p.lat, p.lon) / pts[i - 1].speed;
-    return {lon: p.lon, lat: p.lat, height: p.height, time: t};
+    return {lon: p.lon, lat: p.lat, height: p.height, speed: p.speed, time: t};
   });
 }
 
@@ -302,7 +304,8 @@ function _renderScene() {
   _clearScene();
 
   var altM      = parseFloat(document.getElementById('hgt').value) || 60;
-  var waypoints = _buildWaypoints(altM);
+  _waypoints = _buildWaypoints(altM);
+  var waypoints = _waypoints;
   if (!waypoints.length) return;
 
   _totalDuration = waypoints[waypoints.length - 1].time;
@@ -573,6 +576,30 @@ function _updateTimeDisplay() {
   var s  = Math.floor(_playbackTime % 60);
   var el = document.getElementById('cesium-time-display');
   if (el) el.textContent = m + ':' + String(s).padStart(2, '0');
+  _updateTelemetryDisplay();
+}
+
+function _updateTelemetryDisplay() {
+  var altEl = document.getElementById('cesium-tel-alt');
+  var spdEl = document.getElementById('cesium-tel-spd');
+  if (!altEl || !spdEl || !_waypoints.length) return;
+  var wps = _waypoints;
+  var t   = _playbackTime;
+
+  // Find surrounding waypoints
+  var i = 0;
+  while (i < wps.length - 1 && wps[i + 1].time <= t) i++;
+
+  var wp0 = wps[i];
+  var wp1 = wps[Math.min(i + 1, wps.length - 1)];
+  var dt  = wp1.time - wp0.time;
+  var f   = dt > 0 ? Math.min(1, (t - wp0.time) / dt) : 0;
+
+  var alt = wp0.height + f * (wp1.height - wp0.height);
+  var spd = wp0.speed  + f * (wp1.speed  - wp0.speed);
+
+  altEl.textContent = alt.toFixed(1);
+  spdEl.textContent = spd.toFixed(1);
 }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
@@ -600,6 +627,14 @@ function _showLoadingMsg(show) {
 function _showPlayback(show) {
   var panel = document.getElementById('cesium-playback');
   if (panel) panel.classList.toggle('active', show);
+  var tel = document.getElementById('cesium-telemetry');
+  if (tel) tel.classList.toggle('active', show);
+  if (!show) {
+    var altEl = document.getElementById('cesium-tel-alt');
+    var spdEl = document.getElementById('cesium-tel-spd');
+    if (altEl) altEl.textContent = '—';
+    if (spdEl) spdEl.textContent = '—';
+  }
 }
 
 function _positionOverlayBtn(show) {

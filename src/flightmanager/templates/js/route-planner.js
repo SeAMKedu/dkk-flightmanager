@@ -273,6 +273,26 @@ export function updateRouteStats(data) {
   se.textContent = (data && data.strip_count     != null) ? data.strip_count                              : '—';
   pe.textContent = (data && data.photo_count     != null) ? '~' + data.photo_count                        : '—';
   te.textContent = (data && data.flight_time_min != null) ? '~' + Math.round(data.flight_time_min) + ' min' : '—';
+
+  var minEl = document.getElementById('rstat-spd-min');
+  var avgEl = document.getElementById('rstat-spd-avg');
+  var maxEl = document.getElementById('rstat-spd-max');
+  if (!minEl) return;
+  var speeds = data && data.strips_geojson && data.strips_geojson.features
+    ? data.strips_geojson.features.map(function(f) { return f.properties && f.properties.speed_ms; }).filter(function(v) { return v != null; })
+    : [];
+  if (speeds.length) {
+    var mn = speeds.reduce(function(a, b) { return Math.min(a, b); }, Infinity);
+    var mx = speeds.reduce(function(a, b) { return Math.max(a, b); }, -Infinity);
+    var av = speeds.reduce(function(a, b) { return a + b; }, 0) / speeds.length;
+    minEl.textContent = mn.toFixed(1) + ' m/s';
+    avgEl.textContent = av.toFixed(1) + ' m/s';
+    maxEl.textContent = mx.toFixed(1) + ' m/s';
+  } else {
+    minEl.textContent = '—';
+    avgEl.textContent = '—';
+    maxEl.textContent = '—';
+  }
 }
 
 export function updateRouteOverlay(cachedStrips, cachedTransits) {
