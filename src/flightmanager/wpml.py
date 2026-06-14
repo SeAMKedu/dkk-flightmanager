@@ -226,7 +226,7 @@ def _build_advanced_files(
 
     H_max = cfg.adv_max_height_m if cfg.adv_max_height_m is not None else height_m
 
-    route, alt_profile = compute_adaptive_route(
+    route, alt_profile, strip_wps = compute_adaptive_route(
         survey_3067,
         angle_deg=angle_deg,
         buildings=buildings or [],
@@ -243,16 +243,23 @@ def _build_advanced_files(
     if route.strip_count == 0:
         raise ValueError("Adaptive route produced no strips — polygon too small?")
 
+    n_instrip_wps = sum(
+        max(0, len(wps) - 2) for wps in strip_wps
+    )
     log.info(
-        "Adaptive advanced mode: %d strips, altitude range %.1f–%.1f m (H_max=%.1f)",
-        len(alt_profile), min(alt_profile), max(alt_profile), H_max,
+        "Adaptive advanced mode: %d strips, altitude %.1f–%.1f m, "
+        "%d intermediate altitude waypoints (H_max=%.1f)",
+        len(alt_profile), min(alt_profile), max(alt_profile),
+        n_instrip_wps, H_max,
     )
 
     template_xml = _build_template_kml(
         survey_4326, cfg, dsm_kmz_name=None, speed_ms=speed_ms, drone=drone,
         template_type="waypoint",
     )
-    waylines_xml = build_waylines(route, alt_profile, drone=drone, cfg=cfg)
+    waylines_xml = build_waylines(
+        route, alt_profile, drone=drone, cfg=cfg, strip_waypoints=strip_wps,
+    )
     return template_xml, waylines_xml, route, alt_profile
 
 

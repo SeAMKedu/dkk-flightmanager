@@ -431,7 +431,7 @@ async def route_estimate(req: RouteEstimateRequest):
         slope_f   = req.adv_slope_f                or cfg_flight.adv_slope_f
         try:
             buildings, power_lines = _load_preview_obstacles(reproject_to_3067)
-            result, altitude_profile = compute_adaptive_route(
+            result, altitude_profile, _strip_wps = compute_adaptive_route(
                 poly_3067, angle_deg, buildings, power_lines,
                 drone=drone,
                 H_max=H_max, H_min=H_min,

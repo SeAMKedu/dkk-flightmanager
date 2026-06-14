@@ -63,33 +63,69 @@ def _build_waypoint_list(
     strips_3067: list,
     altitude_profile: list[float],
     inter_transits: list,
+    strip_waypoints: list[list[tuple[float, float, float]]] | None = None,
 ) -> tuple[list[tuple], list[int], list[int]]:
     """Build flat (x, y, alt, strip_idx, is_start, is_end) waypoint list.
 
     Returns (wps, strip_start_wp_idx, strip_end_wp_idx).
     Each entry: (x3067, y3067, alt_m, strip_idx_or_None, is_start, is_end).
-    Transit intermediate waypoints use max(adjacent strip altitudes).
+
+    When *strip_waypoints* is provided and a strip has more than 2 points,
+    intermediate waypoints with individual altitudes are inserted so the drone
+    climbs/descends continuously along the strip.  Transit altitude is derived
+    from the actual start/end waypoint altitudes rather than the per-strip min.
     """
     wps: list[tuple] = []
     strip_start_wp_idx: list[int] = []
     strip_end_wp_idx: list[int] = []
     n = len(strips_3067)
 
+    def _strip_end_alt(i: int) -> float:
+        if strip_waypoints and strip_waypoints[i]:
+            return strip_waypoints[i][-1][2]
+        return altitude_profile[i]
+
+    def _strip_start_alt(i: int) -> float:
+        if strip_waypoints and strip_waypoints[i]:
+            return strip_waypoints[i][0][2]
+        return altitude_profile[i]
+
+    # Waypoint tuple: (x3067, y3067, alt_m, strip_idx, is_start, is_end)
+    # strip_idx:
+    #   i (int)  → this waypoint belongs to strip i (start, end, or intermediate)
+    #   None     → transit waypoint between strips
+    # Intermediate within-strip waypoints: strip_idx=i, is_start=False, is_end=False
+
     for i, (x1, y1, x2, y2) in enumerate(strips_3067):
-        alt = altitude_profile[i]
+        wps_for_strip = strip_waypoints[i] if strip_waypoints else None
 
-        strip_start_wp_idx.append(len(wps))
-        wps.append((x1, y1, alt, i, True, False))
+        if wps_for_strip and len(wps_for_strip) > 2:
+            # Variable-altitude strip — emit intermediate waypoints so the drone
+            # climbs/descends continuously rather than flying level.
+            strip_start_wp_idx.append(len(wps))
+            sx, sy, sa = wps_for_strip[0]
+            wps.append((sx, sy, sa, i, True, False))
 
-        strip_end_wp_idx.append(len(wps))
-        wps.append((x2, y2, alt, i, False, True))
+            for mx, my, ma in wps_for_strip[1:-1]:
+                # strip_idx=i marks this as an instrip waypoint (not transit)
+                wps.append((mx, my, ma, i, False, False))
+
+            strip_end_wp_idx.append(len(wps))
+            ex, ey, ea = wps_for_strip[-1]
+            wps.append((ex, ey, ea, i, False, True))
+        else:
+            # Constant-altitude strip (original behaviour)
+            alt = altitude_profile[i]
+            strip_start_wp_idx.append(len(wps))
+            wps.append((x1, y1, alt, i, True, False))
+            strip_end_wp_idx.append(len(wps))
+            wps.append((x2, y2, alt, i, False, True))
 
         if i < n - 1:
             transit = inter_transits[i]
-            # transit[0] = this strip's end (already added)
-            # transit[-1] = next strip's start (will be added next iteration)
-            transit_alt = max(alt, altitude_profile[i + 1])
+            transit_alt = max(_strip_end_alt(i), _strip_start_alt(i + 1))
             for tx, ty in transit[1:-1]:
+                # strip_idx=None marks transit waypoints
                 wps.append((tx, ty, transit_alt, None, False, False))
 
     return wps, strip_start_wp_idx, strip_end_wp_idx
@@ -101,11 +137,16 @@ def build_waylines(  # noqa: C901
     *,
     drone: DroneConfig,
     cfg: FlightConfig,
+    strip_waypoints: list[list[tuple[float, float, float]]] | None = None,
 ) -> str:
-    """Return waylines.wpml XML string with per-strip altitudes.
+    """Return waylines.wpml XML string with per-strip (or per-waypoint) altitudes.
 
     *route*            — RouteResult from compute_route() (EPSG:3067).
     *altitude_profile* — one altitude (m AGL) per entry in route.strips_3067.
+    *strip_waypoints*  — optional per-strip waypoint lists with individual
+                         altitudes from ``compute_adaptive_route()``.  When
+                         provided, intermediate waypoints are emitted so the
+                         drone climbs/descends continuously along each strip.
     """
     n = len(route.strips_3067)
     if n == 0 or len(altitude_profile) != n:
@@ -132,7 +173,7 @@ def build_waylines(  # noqa: C901
 
     # ── Build flat waypoint list ──────────────────────────────────────────────
     wps, strip_start_wp_idx, strip_end_wp_idx = _build_waypoint_list(
-        route.strips_3067, altitude_profile, inter_transits
+        route.strips_3067, altitude_profile, inter_transits, strip_waypoints
     )
     total_wps = len(wps)
 
@@ -216,10 +257,18 @@ def build_waylines(  # noqa: C901
         _tx(hp, f"{_WPML}waypointHeadingPathMode",  "followBadArc")
         _tx(hp, f"{_WPML}waypointHeadingPoiIndex",  "0")
 
+        # Intermediate within-strip waypoints (strip_idx=i, not start, not end)
+        # are distinct from transit waypoints (strip_idx=None).
+        is_instrip_mid = (strip_idx is not None and not is_start and not is_end)
+
         tp = etree.SubElement(pm, f"{_WPML}waypointTurnParam")
         if is_start:
             _tx(tp, f"{_WPML}waypointTurnMode",        "toPointAndStopWithDiscontinuityCurvature")
             _tx(tp, f"{_WPML}waypointTurnDampingDist", "0")
+        elif is_instrip_mid:
+            # Fly through without stopping; drone interpolates altitude toward next wp.
+            _tx(tp, f"{_WPML}waypointTurnMode",        "coordinateTurn")
+            _tx(tp, f"{_WPML}waypointTurnDampingDist", "3")
         else:
             _tx(tp, f"{_WPML}waypointTurnMode",        "coordinateTurn")
             _tx(tp, f"{_WPML}waypointTurnDampingDist", "10")
@@ -227,8 +276,11 @@ def build_waylines(  # noqa: C901
         _tx(pm, f"{_WPML}useStraightLine", "1")
 
         if is_start:
-            end_idx   = strip_end_wp_idx[strip_idx]
-            photo_m   = _photo_interval_m(alt_m, drone, cfg.overlap_front_pct)
+            end_idx = strip_end_wp_idx[strip_idx]
+            # Use the strip's minimum altitude (altitude_profile[strip_idx]) for
+            # the photo trigger interval so overlap is maintained everywhere on
+            # the strip, not just at the (possibly higher) start altitude.
+            photo_m = _photo_interval_m(altitude_profile[strip_idx], drone, cfg.overlap_front_pct)
             _add_ag_start_shooting(pm, ag_id=ag_idx, start=i, end=end_idx,
                                    photo_m=photo_m, img_fmt=img_fmt, pp=pp)
             ag_idx += 1

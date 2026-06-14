@@ -1,15 +1,30 @@
-"""Adaptive-sweep lawnmower route with variable strip spacing.
+"""Adaptive-sweep lawnmower route with variable strip spacing and per-waypoint altitude.
 
 In advanced flight mode the drone must comply with the EU 1:1 rule near
-buildings: flight altitude ≤ horizontal distance to the nearest building
-rooftop (horizontal_dist + building_height).  Lower altitude shrinks the
-camera footprint, requiring tighter strip spacing to preserve side overlap.
+buildings: altitude ≤ (horizontal distance to building) + building_height.
 
-This module computes variable-spaced strips: near buildings the drone flies
-lower and strips pinch together; in open areas the drone rises to H_max and
-strips widen.  The single entry point ``compute_adaptive_route()`` returns
-both a ``RouteResult`` (strips, transits, ordering) and the per-strip altitude
-profile ready for ``waylines_builder.build_waylines()``.
+Two behavioural improvements over the fixed-spacing + per-strip-constant-altitude
+approach:
+
+1. **Variable strip spacing** — strip cross-track stepover equals
+   footprint_width(alt) × (1 − side_overlap), evaluated from the MINIMUM
+   altitude anywhere along the strip.  This ensures strips are placed tighter
+   wherever buildings constrain altitude at any point of the strip, not just
+   at the strip midpoint.
+
+2. **Per-waypoint altitude within each strip** — altitude is sampled every
+   *sample_m* metres along the strip and simplified (merge points within 2 m
+   of each other).  The waylines builder emits intermediate waypoints so the
+   drone climbs/descends continuously rather than holding the worst-case
+   altitude for the full strip length.
+
+Entry point: ``compute_adaptive_route()`` returns
+``(RouteResult, altitude_profile, strip_waypoints)`` where
+
+* ``altitude_profile[i]``     — minimum altitude for strip *i* (used for
+  flight-time estimation and backward-compatible callers)
+* ``strip_waypoints[i]``      — list of ``(x3067, y3067, alt_m)`` waypoints
+  for strip *i* including the two endpoints; len ≥ 2.
 
 All geometry is in EPSG:3067.
 """
@@ -24,7 +39,7 @@ from shapely.geometry import Point
 
 from flightmanager.obstacle_heights import building_height_m
 
-# Private but stable helpers from route.py — same package, no external API.
+# Stable private helpers from route.py — same package, no external API.
 from flightmanager.route import (
     RouteResult,
     _boundary_route,
@@ -37,33 +52,29 @@ if TYPE_CHECKING:
     from flightmanager.config import DroneConfig
     from flightmanager.powerlines import PowerLine
 
-_MAX_CLIMB_MS = 3.0   # conservative max vertical speed (m/s) in waypoint mode
-_PL_SCAN_M   = 200.0  # powerline influence radius (m)
+_MAX_CLIMB_MS  = 3.0    # conservative max vertical speed (m/s) in waypoint mode
+_PL_SCAN_M     = 200.0  # powerline influence radius (m)
+_ALT_MERGE_M   = 2.0    # merge consecutive waypoints within this altitude delta
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Altitude computation
 # ---------------------------------------------------------------------------
 
 
 def _altitude_at(
     pt: Point,
     bldg_pairs: list[tuple],    # list of (shapely_geom, height_m)
-    pl_geoms: list,              # overhead powerline shapely geometries
+    pl_geoms: list,
     *,
     H_max: float,
     H_min: float,
     powerline_clearance_m: float,
 ) -> float:
-    """Return the EU 1:1 compliant altitude at a 2-D world point.
-
-    EU 1:1 rule: altitude ≤ horizontal distance to nearest building measured
-    from the rooftop (d_horizontal + building_height).  Result is clamped to
-    [H_min, H_max].  Powerline proximity overrides the floor upward.
-    """
+    """EU 1:1 altitude at a 2-D world point, clamped to [H_min, H_max]."""
     if bldg_pairs:
         d_eff = min(pt.distance(g) + h for g, h in bldg_pairs)
-        alt = float(min(max(d_eff, H_min), H_max))
+        alt   = float(min(max(d_eff, H_min), H_max))
     else:
         alt = H_max
     for pl_g in pl_geoms:
@@ -72,8 +83,9 @@ def _altitude_at(
     return alt
 
 
-def _sample_strip_altitude(
-    x1: float, y1: float, x2: float, y2: float,
+def _sample_strip(
+    x1: float, y1: float,
+    x2: float, y2: float,
     bldg_pairs: list[tuple],
     pl_geoms: list,
     *,
@@ -81,25 +93,64 @@ def _sample_strip_altitude(
     H_min: float,
     powerline_clearance_m: float,
     sample_m: float,
-) -> float:
-    """Return the minimum (most conservative) altitude along a strip segment.
+) -> list[tuple[float, float, float]]:
+    """Return ``(x, y, alt)`` samples along the strip at *sample_m* intervals.
 
-    Samples at roughly every *sample_m* metres plus both endpoints.
+    Samples always include both endpoints.  Altitude is the EU 1:1 value at
+    each point.
     """
     length = math.hypot(x2 - x1, y2 - y1)
-    n = max(2, int(length / sample_m) + 1)
-    min_alt = H_max
+    n = max(1, int(length / sample_m))
+    result: list[tuple[float, float, float]] = []
     for k in range(n + 1):
         t = k / n
+        x = x1 + t * (x2 - x1)
+        y = y1 + t * (y2 - y1)
         alt = _altitude_at(
-            Point(x1 + t * (x2 - x1), y1 + t * (y2 - y1)),
-            bldg_pairs, pl_geoms,
+            Point(x, y), bldg_pairs, pl_geoms,
             H_max=H_max, H_min=H_min,
             powerline_clearance_m=powerline_clearance_m,
         )
-        if alt < min_alt:
-            min_alt = alt
-    return min_alt
+        result.append((x, y, alt))
+    return result
+
+
+def _simplify_altitude_waypoints(
+    samples: list[tuple[float, float, float]],
+    merge_m: float = _ALT_MERGE_M,
+) -> list[tuple[float, float, float]]:
+    """Remove intermediate waypoints where altitude deviates < *merge_m* from
+    the linear interpolation between its neighbours.
+
+    Endpoints are always kept.  This reduces waypoint count on flat sections
+    while preserving the shape of rapid altitude transitions.
+    """
+    if len(samples) <= 2:
+        return list(samples)
+
+    kept = [samples[0]]
+    i = 1
+    while i < len(samples) - 1:
+        x0, y0, a0 = kept[-1]
+        x2, y2, a2 = samples[i + 1]
+        x1, y1, a1 = samples[i]
+        # Linear interpolation of altitude at this point
+        d_total = math.hypot(x2 - x0, y2 - y0)
+        if d_total < 1e-6:
+            i += 1
+            continue
+        d_to_pt = math.hypot(x1 - x0, y1 - y0)
+        a_interp = a0 + (a2 - a0) * (d_to_pt / d_total)
+        if abs(a1 - a_interp) >= merge_m:
+            kept.append(samples[i])
+        i += 1
+    kept.append(samples[-1])
+    return kept
+
+
+# ---------------------------------------------------------------------------
+# Slope filter
+# ---------------------------------------------------------------------------
 
 
 def _slope_across(
@@ -117,6 +168,34 @@ def _slope_across(
     )
     physical_limit = _MAX_CLIMB_MS / speed
     return min(photogrammetry_limit, physical_limit)
+
+
+def _apply_slope_filter(
+    alt_list: list[float],
+    midpoints: list[tuple[float, float]],
+    slope_across: float,
+    H_min: float,
+) -> list[float]:
+    """Two-pass forward/backward slope filter with per-pair variable spacing."""
+    n = len(alt_list)
+    smooth = list(alt_list)
+
+    def _d(i: int) -> float:
+        ax, ay = midpoints[i]
+        bx, by = midpoints[i + 1]
+        return math.hypot(bx - ax, by - ay)
+
+    for i in range(1, n):
+        step = slope_across * _d(i - 1)
+        smooth[i] = max(smooth[i], smooth[i - 1] - step)
+        smooth[i] = min(smooth[i], smooth[i - 1] + step)
+
+    for i in range(n - 2, -1, -1):
+        step = slope_across * _d(i)
+        smooth[i] = max(smooth[i], smooth[i + 1] - step)
+        smooth[i] = min(smooth[i], smooth[i + 1] + step)
+
+    return [max(H_min, h) for h in smooth]
 
 
 # ---------------------------------------------------------------------------
@@ -139,32 +218,27 @@ def compute_adaptive_route(
     slope_f: float,
     home_3067: tuple[float, float] | None = None,
     sample_m: float = 10.0,
-) -> tuple[RouteResult, list[float]]:
-    """Variable-spacing lawnmower route with per-strip altitude profile.
+) -> tuple[RouteResult, list[float], list[list[tuple[float, float, float]]]]:
+    """Variable-spacing lawnmower with per-waypoint altitude.
 
-    Strip spacing is derived from the drone's altitude at each position:
-        footprint_width(alt) = alt × sensor_w / focal_length
-        stepover(alt)        = footprint_width × (1 − side_overlap)
+    Returns ``(route, altitude_profile, strip_waypoints)`` where:
 
-    Near buildings the drone descends (EU 1:1 rule) → smaller footprint →
-    tighter strips.  Far from buildings the drone rises to *H_max* → wide
-    strips → efficient coverage.
+    * *altitude_profile[i]*  — minimum AGL altitude for strip *i*
+    * *strip_waypoints[i]*   — ``[(x3067, y3067, alt_m), ...]`` with altitude
+      varying along the strip so the drone climbs/descends continuously.
 
-    Returns ``(RouteResult, altitude_profile)`` where ``altitude_profile`` has
-    one entry per strip in route-execution order (matching *RouteResult.strips_3067*).
-    The profile has been slope-filtered so no adjacent-strip altitude transition
-    exceeds the drone's physical climb/descent capability.
+    Strip cross-track spacing is derived from the minimum altitude ANYWHERE
+    along each strip (not just the midpoint), so strips near building edges are
+    placed correctly even when buildings run along the flight direction.
     """
     if polygon_3067.geom_type == "MultiPolygon":
         polygon_3067 = max(polygon_3067.geoms, key=lambda g: g.area)
 
-    # Pre-build obstacle lookup structures (fast repeated distance queries).
     bldg_pairs: list[tuple] = [
         (b.geometry, building_height_m(b)) for b in buildings
     ]
     pl_geoms: list = [pl.geometry for pl in power_lines if pl.is_overhead]
 
-    # Camera geometry constants
     sensor_w_m = drone.image_width_px  * drone.pixel_pitch_um * 1e-6
     sensor_h_m = drone.image_height_px * drone.pixel_pitch_um * 1e-6
     focal_m    = drone.focal_length_mm * 1e-3
@@ -184,7 +258,6 @@ def compute_adaptive_route(
     maxx_r  = max(x for x, _ in ring)
     _, miny, _, maxy = rotated.bounds
 
-    # Back-rotation: rotated space → EPSG:3067
     back_rad = math.radians(90.0 - angle_deg)
     cos_b, sin_b = math.cos(back_rad), math.sin(back_rad)
 
@@ -192,9 +265,10 @@ def compute_adaptive_route(
         dx, dy = px - cx, py - cy
         return cx + dx * cos_b - dy * sin_b, cy + dx * sin_b + dy * cos_b
 
-    # ── Adaptive y-position generation ───────────────────────────────────────
-    # First strip is placed at half a footprint from the boundary (same as
-    # compute_route() so polygon edges land inside the overlap zone).
+    # ── Adaptive y-position generation ────────────────────────────────────────
+    # Stepover is based on the MINIMUM altitude along the strip (full-length
+    # sampling), so strips are spaced correctly even when buildings affect only
+    # one end of a strip rather than the cross-track centre.
     first_stepover = _stepover(H_max)
     y = miny + first_stepover / 2.0
 
@@ -202,20 +276,22 @@ def compute_adaptive_route(
     while y <= maxy + 1e-6:
         strips_y.append(y)
 
-        # Representative point for altitude estimate: midpoint of the widest
-        # segment at this y (or polygon x-centre if no coverage yet).
-        test_segs = _clip_strips_to_polygon(ring, [y])
-        if test_segs:
-            _, x0, x1 = max(test_segs, key=lambda s: s[2] - s[1])
-            wx, wy = _back((x0 + x1) / 2.0, y)
+        # Sample the full strip width for minimum altitude
+        segs = _clip_strips_to_polygon(ring, [y])
+        if segs:
+            _, x0, x1 = max(segs, key=lambda s: s[2] - s[1])
+            wx0, wy0 = _back(x0, y)
+            wx1, wy1 = _back(x1, y)
+            samples = _sample_strip(
+                wx0, wy0, wx1, wy1, bldg_pairs, pl_geoms,
+                H_max=H_max, H_min=H_min,
+                powerline_clearance_m=powerline_clearance_m,
+                sample_m=sample_m,
+            )
+            alt = min(s[2] for s in samples)
         else:
-            wx, wy = _back((minx_r + maxx_r) / 2.0, y)
+            alt = H_max
 
-        alt = _altitude_at(
-            Point(wx, wy), bldg_pairs, pl_geoms,
-            H_max=H_max, H_min=H_min,
-            powerline_clearance_m=powerline_clearance_m,
-        )
         y += _stepover(alt)
 
     if not strips_y:
@@ -226,12 +302,10 @@ def compute_adaptive_route(
                 strips_3067=[], transit_segs_3067=[],
                 first_wp_3067=None, last_wp_3067=None,
             ),
-            [],
+            [], [],
         )
 
-    # ── Clip strips to polygon ────────────────────────────────────────────────
     raw_segs = _clip_strips_to_polygon(ring, strips_y)
-
     if not raw_segs:
         return (
             RouteResult(
@@ -240,10 +314,10 @@ def compute_adaptive_route(
                 strips_3067=[], transit_segs_3067=[],
                 first_wp_3067=None, last_wp_3067=None,
             ),
-            [],
+            [], [],
         )
 
-    # ── Greedy nearest-neighbour ordering (same as compute_route) ────────────
+    # ── Greedy nearest-neighbour ordering ─────────────────────────────────────
     home_rot_x = (minx_r + maxx_r) / 2.0
     home_rot_y = miny
     if home_3067 is not None:
@@ -254,21 +328,19 @@ def compute_adaptive_route(
 
     strips_3067 = _greedy_nn_order(raw_segs, home_rot_x, home_rot_y, _back)
 
-    # ── Per-strip statistics ──────────────────────────────────────────────────
-    # Photo count uses per-strip altitude (computed during profile step below).
+    # ── Route geometry ─────────────────────────────────────────────────────────
     strip_dist_m = sum(
         math.hypot(x2 - x1, y2 - y1) for x1, y1, x2, y2 in strips_3067
     )
 
-    # ── Transit segments ──────────────────────────────────────────────────────
     transit_segs: list[list[tuple[float, float]]] = []
     turn_dist_m = 0.0
     if strips_3067:
         if home_3067 is not None:
             transit_segs.append([home_3067, (strips_3067[0][0], strips_3067[0][1])])
         for i in range(len(strips_3067) - 1):
-            p1 = (strips_3067[i][2],     strips_3067[i][3])
-            p2 = (strips_3067[i + 1][0], strips_3067[i + 1][1])
+            p1   = (strips_3067[i][2],     strips_3067[i][3])
+            p2   = (strips_3067[i + 1][0], strips_3067[i + 1][1])
             path = _boundary_route(polygon_3067, p1, p2)
             transit_segs.append(path)
             turn_dist_m += sum(
@@ -278,47 +350,49 @@ def compute_adaptive_route(
         if home_3067 is not None:
             transit_segs.append([(strips_3067[-1][2], strips_3067[-1][3]), home_3067])
 
-    # ── Altitude profile: sample full strip length, take conservative minimum ─
-    raw_alt: list[float] = []
+    # ── Per-strip altitude waypoints ───────────────────────────────────────────
+    # Sample the full strip, simplify, then slope-filter the minimum per strip.
+    strip_waypoints_raw: list[list[tuple[float, float, float]]] = []
     for x1, y1, x2, y2 in strips_3067:
-        alt = _sample_strip_altitude(
+        samples = _sample_strip(
             x1, y1, x2, y2, bldg_pairs, pl_geoms,
             H_max=H_max, H_min=H_min,
             powerline_clearance_m=powerline_clearance_m,
             sample_m=sample_m,
         )
-        raw_alt.append(alt)
+        strip_waypoints_raw.append(_simplify_altitude_waypoints(samples))
 
-    # ── Two-pass slope filter (variable spacing between ordered strips) ───────
+    # Per-strip minimum altitude (used for spacing decisions and flight time)
+    raw_alt = [min(wp[2] for wp in wps) for wps in strip_waypoints_raw]
+
+    # Slope-filter the per-strip minimum altitudes
+    midpoints = [
+        ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+        for x1, y1, x2, y2 in strips_3067
+    ]
     sc = _slope_across(drone, H_max, overlap_front_pct, overlap_side_pct, slope_f)
+    altitude_profile = _apply_slope_filter(raw_alt, midpoints, sc, H_min)
 
-    def _strip_mid(idx: int) -> tuple[float, float]:
-        x1, y1, x2, y2 = strips_3067[idx]
-        return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    # Apply the slope-filtered floor to per-strip waypoints: if the slope filter
+    # raised a strip's minimum altitude, raise every waypoint in that strip by
+    # the same delta so the waypoint curve is preserved but shifted up.
+    strip_waypoints: list[list[tuple[float, float, float]]] = []
+    for i, wps in enumerate(strip_waypoints_raw):
+        floor = altitude_profile[i]
+        old_min = min(wp[2] for wp in wps)
+        shift = max(0.0, floor - old_min)
+        if shift > 0.0:
+            strip_waypoints.append([
+                (x, y, min(max(a + shift, H_min), H_max)) for x, y, a in wps
+            ])
+        else:
+            strip_waypoints.append(wps)
 
-    n = len(strips_3067)
-    smooth = list(raw_alt)
-    for i in range(1, n):
-        ax, ay = _strip_mid(i - 1)
-        bx, by = _strip_mid(i)
-        max_step = sc * math.hypot(bx - ax, by - ay)
-        smooth[i] = max(smooth[i], smooth[i - 1] - max_step)
-        smooth[i] = min(smooth[i], smooth[i - 1] + max_step)
-
-    for i in range(n - 2, -1, -1):
-        ax, ay = _strip_mid(i)
-        bx, by = _strip_mid(i + 1)
-        max_step = sc * math.hypot(bx - ax, by - ay)
-        smooth[i] = max(smooth[i], smooth[i + 1] - max_step)
-        smooth[i] = min(smooth[i], smooth[i + 1] + max_step)
-
-    altitude_profile = [max(H_min, h) for h in smooth]
-
-    # ── Photo count with per-strip altitude ───────────────────────────────────
+    # ── Photo count (per-strip minimum altitude) ───────────────────────────────
     photo_count = 0
     for i, (x1, y1, x2, y2) in enumerate(strips_3067):
-        alt = altitude_profile[i]
-        photo_m = max(0.5, alt * sensor_h_m / focal_m * (1.0 - overlap_front_pct / 100.0))
+        alt      = altitude_profile[i]
+        photo_m  = max(0.5, alt * sensor_h_m / focal_m * (1.0 - overlap_front_pct / 100.0))
         strip_len = math.hypot(x2 - x1, y2 - y1)
         photo_count += max(1, math.ceil(strip_len / photo_m) + 1)
 
@@ -333,4 +407,4 @@ def compute_adaptive_route(
         first_wp_3067=(strips_3067[0][0], strips_3067[0][1]) if strips_3067 else None,
         last_wp_3067=(strips_3067[-1][2], strips_3067[-1][3]) if strips_3067 else None,
     )
-    return route, altitude_profile
+    return route, altitude_profile, strip_waypoints

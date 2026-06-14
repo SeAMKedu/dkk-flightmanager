@@ -7,7 +7,10 @@ import math
 import pytest
 from shapely.geometry import box
 
-from flightmanager.adaptive_route import _altitude_at, _slope_across, compute_adaptive_route
+from flightmanager.adaptive_route import (
+    _altitude_at, _simplify_altitude_waypoints, _slope_across,
+    compute_adaptive_route,
+)
 from flightmanager.buildings import Building
 from flightmanager.config import DroneConfig
 from flightmanager.route import RouteResult
@@ -94,10 +97,30 @@ class TestAltitudeAt:
 # ---------------------------------------------------------------------------
 
 
+class TestSimplifyAltitudeWaypoints:
+    def test_keeps_endpoints(self):
+        samples = [(0, 0, 20.0), (5, 0, 20.5), (10, 0, 21.0)]
+        result = _simplify_altitude_waypoints(samples)
+        assert result[0] == samples[0]
+        assert result[-1] == samples[-1]
+
+    def test_removes_redundant_intermediate(self):
+        # altitude rises linearly — midpoint is exactly on the interpolated line
+        samples = [(0, 0, 10.0), (50, 0, 15.0), (100, 0, 20.0)]
+        result = _simplify_altitude_waypoints(samples, merge_m=2.0)
+        assert len(result) == 2  # midpoint is on the line, should be removed
+
+    def test_keeps_significant_deviation(self):
+        # midpoint is 5 m below the interpolated line
+        samples = [(0, 0, 50.0), (50, 0, 35.0), (100, 0, 50.0)]
+        result = _simplify_altitude_waypoints(samples, merge_m=2.0)
+        assert len(result) == 3
+
+
 class TestComputeAdaptiveRoute:
     def test_no_buildings_uniform_altitude(self):
         """Without buildings the route degenerates to fixed spacing at H_max."""
-        route, alts = compute_adaptive_route(
+        route, alts, _wps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE,
             H_max=50.0, H_min=10.0,
@@ -110,13 +133,13 @@ class TestComputeAdaptiveRoute:
 
     def test_strip_count_increases_with_lower_h_max(self):
         """Lowering H_max → smaller footprint → more strips needed."""
-        route_hi, _ = compute_adaptive_route(
+        route_hi, _, _wps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=100.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
             powerline_clearance_m=70.0, slope_f=0.2,
         )
-        route_lo, _ = compute_adaptive_route(
+        route_lo, _, _wps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=30.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -125,7 +148,7 @@ class TestComputeAdaptiveRoute:
         assert route_lo.strip_count > route_hi.strip_count
 
     def test_altitude_profile_matches_strip_count(self):
-        route, alts = compute_adaptive_route(
+        route, alts, _wps = compute_adaptive_route(
             _POLY, 0.0, [_BUILDING], [],
             drone=_DRONE, H_max=80.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -134,7 +157,7 @@ class TestComputeAdaptiveRoute:
         assert len(alts) == route.strip_count
 
     def test_altitude_within_bounds(self):
-        route, alts = compute_adaptive_route(
+        route, alts, _wps = compute_adaptive_route(
             _POLY, 0.0, [_BUILDING], [],
             drone=_DRONE, H_max=80.0, H_min=15.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -143,7 +166,7 @@ class TestComputeAdaptiveRoute:
         assert all(15.0 - 1e-9 <= a <= 80.0 + 1e-9 for a in alts)
 
     def test_returns_routeresult(self):
-        route, alts = compute_adaptive_route(
+        route, alts, _wps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=50.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -154,30 +177,72 @@ class TestComputeAdaptiveRoute:
         assert route.photo_count > 0
 
     def test_transit_segs_length_without_home(self):
-        route, _ = compute_adaptive_route(
+        route, _, _wps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=50.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
             powerline_clearance_m=70.0, slope_f=0.2,
         )
-        # N-1 inter-strip transits when no home point
         assert len(route.transit_segs_3067) == route.strip_count - 1
 
     def test_with_home_adds_home_transits(self):
-        route, _ = compute_adaptive_route(
+        route, _, _wps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=50.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
             powerline_clearance_m=70.0, slope_f=0.2,
             home_3067=(200.0, -100.0),
         )
-        # N+1 segments: home→first, N-1 inter-strip, last→home
         assert len(route.transit_segs_3067) == route.strip_count + 1
+
+    def test_strip_waypoints_count_matches_strips(self):
+        route, alts, wps = compute_adaptive_route(
+            _POLY, 0.0, [_BUILDING], [],
+            drone=_DRONE, H_max=80.0, H_min=15.0,
+            overlap_front_pct=80, overlap_side_pct=70,
+            powerline_clearance_m=70.0, slope_f=0.2,
+        )
+        assert len(wps) == route.strip_count
+
+    def test_strip_waypoints_endpoints_match_strips_3067(self):
+        route, alts, wps = compute_adaptive_route(
+            _POLY, 0.0, [_BUILDING], [],
+            drone=_DRONE, H_max=80.0, H_min=15.0,
+            overlap_front_pct=80, overlap_side_pct=70,
+            powerline_clearance_m=70.0, slope_f=0.2,
+        )
+        for i, (x1, y1, x2, y2) in enumerate(route.strips_3067):
+            assert abs(wps[i][0][0] - x1) < 1e-6
+            assert abs(wps[i][0][1] - y1) < 1e-6
+            assert abs(wps[i][-1][0] - x2) < 1e-6
+            assert abs(wps[i][-1][1] - y2) < 1e-6
+
+    def test_strip_waypoints_altitude_within_bounds(self):
+        route, alts, wps = compute_adaptive_route(
+            _POLY, 0.0, [_BUILDING], [],
+            drone=_DRONE, H_max=80.0, H_min=15.0,
+            overlap_front_pct=80, overlap_side_pct=70,
+            powerline_clearance_m=70.0, slope_f=0.2,
+        )
+        for strip_wps in wps:
+            for _, _, a in strip_wps:
+                assert 15.0 - 1e-9 <= a <= 80.0 + 1e-9
+
+    def test_strip_waypoints_min_geq_altitude_profile(self):
+        """altitude_profile[i] must be ≤ the min waypoint altitude in that strip."""
+        route, alts, wps = compute_adaptive_route(
+            _POLY, 0.0, [_BUILDING], [],
+            drone=_DRONE, H_max=80.0, H_min=15.0,
+            overlap_front_pct=80, overlap_side_pct=70,
+            powerline_clearance_m=70.0, slope_f=0.2,
+        )
+        for i, strip_wps in enumerate(wps):
+            assert alts[i] <= min(wp[2] for wp in strip_wps) + 1e-6
 
     def test_tiny_polygon_returns_empty(self):
         """A polygon too small to fit any strip returns empty route."""
         tiny = box(0, 0, 0.5, 0.5)
-        route, alts = compute_adaptive_route(
+        route, alts, _wps = compute_adaptive_route(
             tiny, 0.0, [], [],
             drone=_DRONE, H_max=50.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
