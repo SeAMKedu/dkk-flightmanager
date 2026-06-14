@@ -347,72 +347,43 @@ async def start_batch(req: BatchRequest):
     return {"job_id": job_id}
 
 
-def _build_altitude_profile(req, result, H, ovf, ovs, drone, reproject_to_3067):
-    """Build per-strip altitude profile for advanced mode from last preview obstacles.
-
-    Falls back to the uniform H profile silently on any error, so a failed
-    building/powerline lookup never crashes the route_estimate endpoint.
-    """
-    from flightmanager.obstacle_heights import compute_altitude_profile
+def _load_preview_obstacles(reproject_to_3067):
+    """Return (buildings, power_lines) from the last stored preview result."""
     from flightmanager.buildings import Building
     from flightmanager.powerlines import PowerLine
     from shapely.geometry import shape as _shape_geom
 
-    default = [H] * len(result.strips_3067)
-    try:
-        preview = _st.last_preview_result or {}
-        buildings: list[Building] = []
-        for bd in preview.get("buildings", []):
-            try:
-                geom_3067 = reproject_to_3067(_shape_geom(bd["geojson"]))
-                buildings.append(Building(
-                    mtk_id=0,
-                    kohdeluokka=bd.get("kohdeluokka", 42210),
-                    kayttotarkoitus=None,
-                    geometry=geom_3067,
-                    alkupvm=None,
-                    kerrosluku=None,
-                ))
-            except Exception:
-                pass
+    preview = _st.last_preview_result or {}
+    buildings: list[Building] = []
+    for bd in preview.get("buildings", []):
+        try:
+            geom_3067 = reproject_to_3067(_shape_geom(bd["geojson"]))
+            buildings.append(Building(
+                mtk_id=0,
+                kohdeluokka=bd.get("kohdeluokka", 42210),
+                kayttotarkoitus=None,
+                geometry=geom_3067,
+                alkupvm=None,
+                kerrosluku=None,
+            ))
+        except Exception:
+            pass
 
-        power_lines: list[PowerLine] = []
-        for pl in preview.get("power_lines", []):
-            try:
-                geom_3067 = reproject_to_3067(_shape_geom(pl["geojson"]))
-                power_lines.append(PowerLine(
-                    mtk_id=0,
-                    kohdeluokka=22312,
-                    is_overhead=bool(pl.get("is_overhead", True)),
-                    geometry=geom_3067,
-                    alkupvm=None,
-                ))
-            except Exception:
-                pass
+    power_lines: list[PowerLine] = []
+    for pl in preview.get("power_lines", []):
+        try:
+            geom_3067 = reproject_to_3067(_shape_geom(pl["geojson"]))
+            power_lines.append(PowerLine(
+                mtk_id=0,
+                kohdeluokka=22312,
+                is_overhead=bool(pl.get("is_overhead", True)),
+                geometry=geom_3067,
+                alkupvm=None,
+            ))
+        except Exception:
+            pass
 
-        cfg_flight = _st.config.flight
-        min_h     = req.adv_min_height_m         or cfg_flight.adv_min_height_m
-        max_h     = req.adv_max_height_m          or H
-        clearance = req.adv_powerline_clearance_m or cfg_flight.adv_powerline_clearance_m
-        slope_f   = req.adv_slope_f               or cfg_flight.adv_slope_f
-
-        return compute_altitude_profile(
-            result,
-            buildings=buildings,
-            power_lines=power_lines,
-            flight_height_m=max_h,
-            min_h=min_h,
-            powerline_clearance_m=clearance,
-            overlap_front_pct=ovf,
-            overlap_side_pct=ovs,
-            slope_f=slope_f,
-            drone=drone,
-        )
-    except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        print(f"[route_estimate] altitude profile failed: {exc}")
-        return default
+    return buildings, power_lines
 
 
 @router.post("/api/route_estimate")
@@ -451,23 +422,41 @@ async def route_estimate(req: RouteEstimateRequest):
         hp = reproject_to_3067(Point(req.takeoff_point_4326))
         home_3067 = (hp.x, hp.y)
 
-    result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m,
-                                  home_3067=home_3067)
+    if req.advanced_mode:
+        from flightmanager.adaptive_route import compute_adaptive_route
+        cfg_flight = cfg.flight
+        H_max     = req.adv_max_height_m          or cfg_flight.adv_max_height_m or H
+        H_min     = req.adv_min_height_m           or cfg_flight.adv_min_height_m
+        clearance = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
+        slope_f   = req.adv_slope_f                or cfg_flight.adv_slope_f
+        try:
+            buildings, power_lines = _load_preview_obstacles(reproject_to_3067)
+            result, altitude_profile = compute_adaptive_route(
+                poly_3067, angle_deg, buildings, power_lines,
+                drone=drone,
+                H_max=H_max, H_min=H_min,
+                overlap_front_pct=ovf, overlap_side_pct=ovs,
+                powerline_clearance_m=clearance,
+                slope_f=slope_f,
+                home_3067=home_3067,
+            )
+        except Exception as exc:
+            import traceback; traceback.print_exc()
+            print(f"[route_estimate] adaptive route failed: {exc}")
+            result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
+            altitude_profile = [H_max] * result.strip_count
+    else:
+        result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
+        altitude_profile = [H] * result.strip_count
+
     flight_time = _route.estimate_flight_time(
         result,
-        flight_height_m=H,
+        flight_height_m=altitude_profile[0] if altitude_profile else H,
         auto_speed_ms=speed_ms,
         transit_speed_ms=cfg.flight.transitional_speed_ms,
         takeoff_security_height_m=cfg.flight.takeoff_security_height_m,
         home_3067=home_3067,
     )
-
-    # Altitude profile — uniform unless advanced_mode is active
-    altitude_profile: list[float] = [H] * len(result.strips_3067)
-    if req.advanced_mode and result.strips_3067:
-        altitude_profile = _build_altitude_profile(
-            req, result, H, ovf, ovs, drone, reproject_to_3067
-        )
 
     def _seg_to_feature(x1, y1, x2, y2, alt: float, strip_speed: float):
         line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
@@ -550,6 +539,8 @@ def _apply_template_settings(cfg, ts: dict) -> None:
     cfg.flight.advanced_mode = bool(ts.get("advanced_mode", False))
     if ts.get("adv_min_height_m") is not None:
         cfg.flight.adv_min_height_m = float(ts["adv_min_height_m"])
+    if ts.get("adv_max_height_m") is not None:
+        cfg.flight.adv_max_height_m = float(ts["adv_max_height_m"])
     if ts.get("adv_powerline_clearance_m") is not None:
         cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
     if ts.get("adv_slope_f") is not None:
