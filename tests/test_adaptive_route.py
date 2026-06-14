@@ -120,7 +120,7 @@ class TestSimplifyAltitudeWaypoints:
 class TestComputeAdaptiveRoute:
     def test_no_buildings_uniform_altitude(self):
         """Without buildings the route degenerates to fixed spacing at H_max."""
-        route, alts, _wps = compute_adaptive_route(
+        route, alts, _wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE,
             H_max=50.0, H_min=10.0,
@@ -133,13 +133,13 @@ class TestComputeAdaptiveRoute:
 
     def test_strip_count_increases_with_lower_h_max(self):
         """Lowering H_max → smaller footprint → more strips needed."""
-        route_hi, _, _wps = compute_adaptive_route(
+        route_hi, _, _wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=100.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
             powerline_clearance_m=70.0, slope_f=0.2,
         )
-        route_lo, _, _wps = compute_adaptive_route(
+        route_lo, _, _wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=30.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -148,7 +148,7 @@ class TestComputeAdaptiveRoute:
         assert route_lo.strip_count > route_hi.strip_count
 
     def test_altitude_profile_matches_strip_count(self):
-        route, alts, _wps = compute_adaptive_route(
+        route, alts, _wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [_BUILDING], [],
             drone=_DRONE, H_max=80.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -157,7 +157,7 @@ class TestComputeAdaptiveRoute:
         assert len(alts) == route.strip_count
 
     def test_altitude_within_bounds(self):
-        route, alts, _wps = compute_adaptive_route(
+        route, alts, _wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [_BUILDING], [],
             drone=_DRONE, H_max=80.0, H_min=15.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -166,7 +166,7 @@ class TestComputeAdaptiveRoute:
         assert all(15.0 - 1e-9 <= a <= 80.0 + 1e-9 for a in alts)
 
     def test_returns_routeresult(self):
-        route, alts, _wps = compute_adaptive_route(
+        route, alts, _wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=50.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -177,7 +177,7 @@ class TestComputeAdaptiveRoute:
         assert route.photo_count > 0
 
     def test_transit_segs_length_without_home(self):
-        route, _, _wps = compute_adaptive_route(
+        route, _, _wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=50.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -186,7 +186,7 @@ class TestComputeAdaptiveRoute:
         assert len(route.transit_segs_3067) == route.strip_count - 1
 
     def test_with_home_adds_home_transits(self):
-        route, _, _wps = compute_adaptive_route(
+        route, _, _wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [], [],
             drone=_DRONE, H_max=50.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -196,7 +196,7 @@ class TestComputeAdaptiveRoute:
         assert len(route.transit_segs_3067) == route.strip_count + 1
 
     def test_strip_waypoints_count_matches_strips(self):
-        route, alts, wps = compute_adaptive_route(
+        route, alts, wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [_BUILDING], [],
             drone=_DRONE, H_max=80.0, H_min=15.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -205,7 +205,7 @@ class TestComputeAdaptiveRoute:
         assert len(wps) == route.strip_count
 
     def test_strip_waypoints_endpoints_match_strips_3067(self):
-        route, alts, wps = compute_adaptive_route(
+        route, alts, wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [_BUILDING], [],
             drone=_DRONE, H_max=80.0, H_min=15.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -218,7 +218,7 @@ class TestComputeAdaptiveRoute:
             assert abs(wps[i][-1][1] - y2) < 1e-6
 
     def test_strip_waypoints_altitude_within_bounds(self):
-        route, alts, wps = compute_adaptive_route(
+        route, alts, wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [_BUILDING], [],
             drone=_DRONE, H_max=80.0, H_min=15.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -230,7 +230,7 @@ class TestComputeAdaptiveRoute:
 
     def test_strip_waypoints_min_geq_altitude_profile(self):
         """altitude_profile[i] must be ≤ the min waypoint altitude in that strip."""
-        route, alts, wps = compute_adaptive_route(
+        route, alts, wps, _twps = compute_adaptive_route(
             _POLY, 0.0, [_BUILDING], [],
             drone=_DRONE, H_max=80.0, H_min=15.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -242,7 +242,7 @@ class TestComputeAdaptiveRoute:
     def test_tiny_polygon_returns_empty(self):
         """A polygon too small to fit any strip returns empty route."""
         tiny = box(0, 0, 0.5, 0.5)
-        route, alts, _wps = compute_adaptive_route(
+        route, alts, _wps, _twps = compute_adaptive_route(
             tiny, 0.0, [], [],
             drone=_DRONE, H_max=50.0, H_min=10.0,
             overlap_front_pct=80, overlap_side_pct=70,
@@ -250,3 +250,52 @@ class TestComputeAdaptiveRoute:
         )
         assert route.strip_count == 0
         assert alts == []
+
+    def test_transit_waypoints_count_matches_interstrip_transits(self):
+        """transit_waypoints has one entry per inter-strip transit."""
+        route, alts, _wps, twps = compute_adaptive_route(
+            _POLY, 0.0, [_BUILDING], [],
+            drone=_DRONE, H_max=80.0, H_min=15.0,
+            overlap_front_pct=80, overlap_side_pct=70,
+            powerline_clearance_m=70.0, slope_f=0.2,
+        )
+        assert len(twps) == route.strip_count - 1
+
+    def test_transit_altitude_within_bounds(self):
+        """All transit waypoint altitudes must respect [H_min, H_max]."""
+        route, alts, _wps, twps = compute_adaptive_route(
+            _POLY, 0.0, [_BUILDING], [],
+            drone=_DRONE, H_max=80.0, H_min=15.0,
+            overlap_front_pct=80, overlap_side_pct=70,
+            powerline_clearance_m=70.0, slope_f=0.2,
+        )
+        for transit in twps:
+            for _, _, a in transit:
+                assert 15.0 - 1e-9 <= a <= 80.0 + 1e-9
+
+    def test_transit_altitude_not_above_h_max_near_buildings(self):
+        """Transit near a building must not fly at max(end, start) when that
+        exceeds the 1:1-compliant altitude at the transit waypoint."""
+        # Building directly adjacent to the polygon (10 m buffer inside poly)
+        close_bldg = Building(
+            mtk_id=2,
+            kohdeluokka=42211,
+            kayttotarkoitus=None,
+            geometry=box(-60, 150, -30, 250),   # 30 m west of poly west edge
+            alkupvm=None,
+            kerrosluku=2,
+        )
+        route, alts, _wps, twps = compute_adaptive_route(
+            _POLY, 0.0, [close_bldg], [],
+            drone=_DRONE, H_max=80.0, H_min=15.0,
+            overlap_front_pct=80, overlap_side_pct=70,
+            powerline_clearance_m=70.0, slope_f=0.2,
+        )
+        # Transit altitudes on the west edge of the polygon must be < H_max
+        # because the building is only 30 m away → 1:1 cap ≈ 30+6 = 36 m.
+        for transit in twps:
+            for tx, ty, ta in transit:
+                if tx < 10.0:   # near the west edge of _POLY (x=0)
+                    assert ta < 80.0 - 1e-9, (
+                        f"Transit at x={tx:.1f} flew at {ta:.1f} m near building"
+                    )

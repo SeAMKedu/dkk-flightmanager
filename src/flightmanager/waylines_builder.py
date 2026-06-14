@@ -64,6 +64,7 @@ def _build_waypoint_list(
     altitude_profile: list[float],
     inter_transits: list,
     strip_waypoints: list[list[tuple[float, float, float]]] | None = None,
+    transit_waypoints: list[list[tuple[float, float, float]]] | None = None,
 ) -> tuple[list[tuple], list[int], list[int]]:
     """Build flat (x, y, alt, strip_idx, is_start, is_end) waypoint list.
 
@@ -72,8 +73,11 @@ def _build_waypoint_list(
 
     When *strip_waypoints* is provided and a strip has more than 2 points,
     intermediate waypoints with individual altitudes are inserted so the drone
-    climbs/descends continuously along the strip.  Transit altitude is derived
-    from the actual start/end waypoint altitudes rather than the per-strip min.
+    climbs/descends continuously along the strip.
+
+    When *transit_waypoints* is provided, each inter-strip transit uses the
+    pre-computed 1:1-compliant altitude at every waypoint instead of a single
+    fixed ``max(end_alt, start_alt)`` value.
     """
     wps: list[tuple] = []
     strip_start_wp_idx: list[int] = []
@@ -123,10 +127,18 @@ def _build_waypoint_list(
 
         if i < n - 1:
             transit = inter_transits[i]
-            transit_alt = max(_strip_end_alt(i), _strip_start_alt(i + 1))
-            for tx, ty in transit[1:-1]:
-                # strip_idx=None marks transit waypoints
-                wps.append((tx, ty, transit_alt, None, False, False))
+            if transit_waypoints and i < len(transit_waypoints) and transit_waypoints[i]:
+                # Use 1:1-compliant altitude at each transit waypoint.
+                # transit_waypoints[i] covers the full transit path including
+                # endpoints (which are already emitted as strip start/end
+                # waypoints), so we emit only the intermediate points.
+                for tx, ty, ta in transit_waypoints[i][1:-1]:
+                    wps.append((tx, ty, ta, None, False, False))
+            else:
+                # Fallback: single altitude for all intermediate transit points.
+                transit_alt = max(_strip_end_alt(i), _strip_start_alt(i + 1))
+                for tx, ty in transit[1:-1]:
+                    wps.append((tx, ty, transit_alt, None, False, False))
 
     return wps, strip_start_wp_idx, strip_end_wp_idx
 
@@ -138,15 +150,18 @@ def build_waylines(  # noqa: C901
     drone: DroneConfig,
     cfg: FlightConfig,
     strip_waypoints: list[list[tuple[float, float, float]]] | None = None,
+    transit_waypoints: list[list[tuple[float, float, float]]] | None = None,
 ) -> str:
     """Return waylines.wpml XML string with per-strip (or per-waypoint) altitudes.
 
-    *route*            — RouteResult from compute_route() (EPSG:3067).
-    *altitude_profile* — one altitude (m AGL) per entry in route.strips_3067.
-    *strip_waypoints*  — optional per-strip waypoint lists with individual
-                         altitudes from ``compute_adaptive_route()``.  When
-                         provided, intermediate waypoints are emitted so the
-                         drone climbs/descends continuously along each strip.
+    *route*             — RouteResult from compute_route() (EPSG:3067).
+    *altitude_profile*  — one altitude (m AGL) per entry in route.strips_3067.
+    *strip_waypoints*   — per-strip waypoint lists from ``compute_adaptive_route()``.
+                          Intermediate waypoints are emitted so the drone
+                          climbs/descends continuously along each strip.
+    *transit_waypoints* — per-transit waypoint lists from ``compute_adaptive_route()``.
+                          1:1-compliant altitude at each transit point so the
+                          drone does not fly at max(end, start) near buildings.
     """
     n = len(route.strips_3067)
     if n == 0 or len(altitude_profile) != n:
@@ -173,7 +188,8 @@ def build_waylines(  # noqa: C901
 
     # ── Build flat waypoint list ──────────────────────────────────────────────
     wps, strip_start_wp_idx, strip_end_wp_idx = _build_waypoint_list(
-        route.strips_3067, altitude_profile, inter_transits, strip_waypoints
+        route.strips_3067, altitude_profile, inter_transits,
+        strip_waypoints, transit_waypoints,
     )
     total_wps = len(wps)
 

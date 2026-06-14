@@ -431,7 +431,7 @@ async def route_estimate(req: RouteEstimateRequest):
         slope_f   = req.adv_slope_f                or cfg_flight.adv_slope_f
         try:
             buildings, power_lines = _load_preview_obstacles(reproject_to_3067)
-            result, altitude_profile, _strip_wps = compute_adaptive_route(
+            result, altitude_profile, _strip_wps, _transit_wps = compute_adaptive_route(
                 poly_3067, angle_deg, buildings, power_lines,
                 drone=drone,
                 H_max=H_max, H_min=H_min,
@@ -545,6 +545,13 @@ def _apply_template_settings(cfg, ts: dict) -> None:
         cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
     if ts.get("adv_slope_f") is not None:
         cfg.flight.adv_slope_f = float(ts["adv_slope_f"])
+
+    # Inverted-cone keepout: in adaptive flight the drone descends to H_min
+    # near buildings, so the A2 exclusion buffer only needs to equal H_min —
+    # not the (potentially much larger) nominal height used for GSD.  The
+    # altitude algorithm enforces the 1:1 rule at higher altitudes in-flight.
+    if cfg.flight.advanced_mode and cfg.home_safety.operating_subcategory == "A2":
+        cfg.home_safety.home_buffer_m = cfg.flight.adv_min_height_m
 
 
 def _prepare_config(req: PreviewRequest):
