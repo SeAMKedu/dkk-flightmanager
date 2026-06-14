@@ -13,7 +13,7 @@ var _defaults = {
   adv_min_height_m: 30,
   adv_max_height_m: null,
   adv_powerline_clearance_m: 70,
-  adv_slope_f: 0.20,
+  adv_slope_f: 0.30,
 };
 
 function _el(id) { return document.getElementById(id); }
@@ -25,6 +25,8 @@ export function initTplDefaults(cfg) {
   if (cfg.rth_height_m != null)               _defaults.rth_height_m               = cfg.rth_height_m;
   if (cfg.finish_action  != null)             _defaults.finish_action              = cfg.finish_action;
   if (cfg.rc_lost_action != null)             _defaults.rc_lost_action             = cfg.rc_lost_action;
+  if (cfg.adv_slope_f    != null)             _defaults.adv_slope_f                = cfg.adv_slope_f;
+  if (cfg.adv_min_dip_m  != null)             _defaults.adv_min_dip_m              = cfg.adv_min_dip_m;
   restoreTplSettings({});
 }
 

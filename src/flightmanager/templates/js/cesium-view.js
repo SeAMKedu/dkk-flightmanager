@@ -271,17 +271,20 @@ function _buildWaypoints(altM) {
     coords.forEach(function(c) { _addPt(c[0], c[1], h, spd); });
   }
 
-  function addCoordsWithAlts(coords, alts, spd) {
+  function addCoordsWithAlts(coords, alts, speeds, defaultSpd) {
     coords.forEach(function(c, k) {
-      _addPt(c[0], c[1], alts[k] !== undefined ? alts[k] : alts[alts.length - 1], spd);
+      var h   = (alts[k]   !== undefined) ? alts[k]   : alts[alts.length - 1];
+      var spd = (speeds && speeds[k] !== undefined) ? speeds[k] : defaultSpd;
+      _addPt(c[0], c[1], h, spd);
     });
   }
 
   function addStrip(strip, i) {
-    var wptAlts = strip.properties && strip.properties.wpt_alts;
-    var coords  = strip.geometry.coordinates;
+    var wptAlts   = strip.properties && strip.properties.wpt_alts;
+    var wptSpeeds = strip.properties && strip.properties.wpt_speeds;
+    var coords    = strip.geometry.coordinates;
     if (wptAlts && wptAlts.length === coords.length) {
-      addCoordsWithAlts(coords, wptAlts, stripSpeeds[i]);
+      addCoordsWithAlts(coords, wptAlts, wptSpeeds, stripSpeeds[i]);
     } else {
       addCoords(coords, stripAlts[i], stripSpeeds[i]);
     }

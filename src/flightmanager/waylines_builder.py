@@ -106,16 +106,18 @@ def _build_waypoint_list(
         if wps_for_strip and len(wps_for_strip) > 2:
             # Variable-altitude strip — emit intermediate waypoints so the drone
             # climbs/descends continuously rather than flying level.
+            # strip_waypoints entries are (x, y, alt, speed) 4-tuples.
             strip_start_wp_idx.append(len(wps))
-            sx, sy, sa = wps_for_strip[0]
+            sx, sy, sa = wps_for_strip[0][0], wps_for_strip[0][1], wps_for_strip[0][2]
             wps.append((sx, sy, sa, i, True, False))
 
-            for mx, my, ma in wps_for_strip[1:-1]:
+            for wp in wps_for_strip[1:-1]:
+                mx, my, ma = wp[0], wp[1], wp[2]
                 # strip_idx=i marks this as an instrip waypoint (not transit)
                 wps.append((mx, my, ma, i, False, False))
 
             strip_end_wp_idx.append(len(wps))
-            ex, ey, ea = wps_for_strip[-1]
+            ex, ey, ea = wps_for_strip[-1][0], wps_for_strip[-1][1], wps_for_strip[-1][2]
             wps.append((ex, ey, ea, i, False, True))
         else:
             # Constant-altitude strip (original behaviour)
@@ -245,6 +247,34 @@ def build_waylines(  # noqa: C901
     _add_focus_infinite(sag, action_id=3, pp=pp)
     _add_hover(sag, action_id=4, hover_s=1.0)
 
+    # ── Per-segment shooting sessions ─────────────────────────────────────────
+    # Each adjacent pair of waypoints within a strip gets its own
+    # startContinuousShooting / stopContinuousShooting action pair with
+    # photo_m calibrated to the AVERAGE altitude of that segment.  This keeps
+    # speed and photo interval in sync as altitude changes within the strip:
+    # both scale with altitude so the SD card is never overloaded and forward
+    # overlap stays consistent throughout.
+    sessions: list[tuple[int, int, float]] = []   # (start_wp_idx, end_wp_idx, photo_m)
+    for strip_i in range(n):
+        s = strip_start_wp_idx[strip_i]
+        e = strip_end_wp_idx[strip_i]
+        if e - s >= 2:
+            # Variable-altitude strip: one session per segment
+            for k in range(s, e):
+                avg_alt = (wps[k][2] + wps[k + 1][2]) / 2.0
+                sessions.append((k, k + 1, _photo_interval_m(avg_alt, drone, cfg.overlap_front_pct)))
+        else:
+            # Single-segment strip: one session using average of start/end altitude
+            avg_alt = (wps[s][2] + wps[e][2]) / 2.0
+            sessions.append((s, e, _photo_interval_m(avg_alt, drone, cfg.overlap_front_pct)))
+
+    # Build fast lookup maps: wp_idx → sessions starting/ending there
+    sessions_starting: dict[int, list[tuple[int, float]]] = {}
+    sessions_ending:   dict[int, list[int]] = {}
+    for sess_s, sess_e, sess_pm in sessions:
+        sessions_starting.setdefault(sess_s, []).append((sess_e, sess_pm))
+        sessions_ending.setdefault(sess_e, []).append(sess_s)
+
     # ── Placemarks ────────────────────────────────────────────────────────────
     ag_idx = 0
     for i, (x3067, y3067, alt_m, strip_idx, is_start, is_end) in enumerate(wps):
@@ -291,17 +321,13 @@ def build_waylines(  # noqa: C901
 
         _tx(pm, f"{_WPML}useStraightLine", "1")
 
-        if is_start:
-            end_idx = strip_end_wp_idx[strip_idx]
-            # Use the strip's minimum altitude (altitude_profile[strip_idx]) for
-            # the photo trigger interval so overlap is maintained everywhere on
-            # the strip, not just at the (possibly higher) start altitude.
-            photo_m = _photo_interval_m(altitude_profile[strip_idx], drone, cfg.overlap_front_pct)
-            _add_ag_start_shooting(pm, ag_id=ag_idx, start=i, end=end_idx,
-                                   photo_m=photo_m, img_fmt=img_fmt, pp=pp)
-            ag_idx += 1
-        elif is_end:
+        # Shooting actions: stop before start so there's no overlap between sessions
+        for _ in sessions_ending.get(i, []):
             _add_ag_stop_shooting(pm, ag_id=ag_idx, idx=i, img_fmt=img_fmt, pp=pp)
+            ag_idx += 1
+        for sess_end, sess_pm in sessions_starting.get(i, []):
+            _add_ag_start_shooting(pm, ag_id=ag_idx, start=i, end=sess_end,
+                                   photo_m=sess_pm, img_fmt=img_fmt, pp=pp)
             ag_idx += 1
 
         gh = etree.SubElement(pm, f"{_WPML}waypointGimbalHeadingParam")

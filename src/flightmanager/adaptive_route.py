@@ -23,8 +23,8 @@ Entry point: ``compute_adaptive_route()`` returns
 
 * ``altitude_profile[i]``     — minimum altitude for strip *i* (used for
   flight-time estimation and backward-compatible callers)
-* ``strip_waypoints[i]``      — list of ``(x3067, y3067, alt_m)`` waypoints
-  for strip *i* including the two endpoints; len ≥ 2.
+* ``strip_waypoints[i]``      — list of ``(x3067, y3067, alt_m, speed_ms)``
+  waypoints for strip *i* including the two endpoints; len ≥ 2.
 * ``transit_waypoints[i]``    — ``(x3067, y3067, alt_m)`` waypoints along
   the *i*-th inter-strip transit, sampled at *sample_m* intervals with
   1:1-compliant altitude at each point.  Only inter-strip transits (home
@@ -56,9 +56,12 @@ if TYPE_CHECKING:
     from flightmanager.config import DroneConfig
     from flightmanager.powerlines import PowerLine
 
-_MAX_CLIMB_MS  = 3.0    # conservative max vertical speed (m/s) in waypoint mode
+_MAX_CLIMB_MS  = 10.0   # DJI waypoint-mode max climb (m/s) — kept above photogrammetric limit
 _PL_SCAN_M     = 200.0  # powerline influence radius (m)
 _ALT_MERGE_M   = 2.0    # merge consecutive waypoints within this altitude delta
+# Kohdeluokka codes treated as non-habited structures; excluded from 1:1 altitude rule.
+# Agricultural/storage buildings are part of the farm operation, not uninvolved-person hazards.
+_AGRI_CODES: frozenset[int] = frozenset({42260, 42261, 42262})
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +189,79 @@ def _simplify_altitude_waypoints(
 
 
 # ---------------------------------------------------------------------------
-# Slope filter
+# Along-strip smoothing
+# ---------------------------------------------------------------------------
+
+
+def _smooth_strip_along(
+    samples: list[tuple[float, float, float]],
+    slope_m_per_m: float,
+    H_min: float,
+    H_max: float,
+) -> list[tuple[float, float, float]]:
+    """Two-pass forward/backward slope filter along a strip's altitude samples.
+
+    *slope_m_per_m* is the maximum altitude change per metre of horizontal
+    travel (m/m).  Derived from the photogrammetric and physical climb limits
+    via ``_slope_along_m_per_m()``.
+    """
+    if len(samples) <= 1 or slope_m_per_m <= 0.0:
+        return list(samples)
+    n = len(samples)
+    alts = [s[2] for s in samples]
+    for i in range(1, n):
+        d    = math.hypot(samples[i][0] - samples[i - 1][0], samples[i][1] - samples[i - 1][1])
+        step = slope_m_per_m * max(d, 1e-3)
+        alts[i] = max(alts[i], alts[i - 1] - step)
+        alts[i] = min(alts[i], alts[i - 1] + step)
+    for i in range(n - 2, -1, -1):
+        d    = math.hypot(samples[i + 1][0] - samples[i][0], samples[i + 1][1] - samples[i][1])
+        step = slope_m_per_m * max(d, 1e-3)
+        alts[i] = max(alts[i], alts[i + 1] - step)
+        alts[i] = min(alts[i], alts[i + 1] + step)
+    alts = [max(H_min, min(H_max, a)) for a in alts]
+    return [(samples[i][0], samples[i][1], alts[i]) for i in range(n)]
+
+
+def _fill_narrow_dips(
+    samples: list[tuple[float, float, float]],
+    min_dip_m: float,
+) -> list[tuple[float, float, float]]:
+    """Raise any valley whose horizontal span < *min_dip_m* to the chord
+    connecting its surrounding higher altitudes.
+
+    For every pair of sample points (i, j) within *min_dip_m* horizontal
+    distance, any interior point below the straight-line altitude between
+    i and j is raised to that chord.  This fills isolated dips from small
+    obstacles while leaving wide, genuine low-altitude zones unchanged.
+    """
+    n = len(samples)
+    if n <= 2 or min_dip_m <= 0.0:
+        return list(samples)
+    alts = [s[2] for s in samples]
+    result = list(alts)
+    cum = [0.0]
+    for k in range(1, n):
+        cum.append(cum[-1] + math.hypot(
+            samples[k][0] - samples[k - 1][0],
+            samples[k][1] - samples[k - 1][1],
+        ))
+    for i in range(n):
+        for j in range(i + 1, n):
+            span = cum[j] - cum[i]
+            if span >= min_dip_m:
+                break
+            if span < 1e-6:
+                continue
+            for k in range(i + 1, j):
+                t = (cum[k] - cum[i]) / span
+                chord = alts[i] * (1.0 - t) + alts[j] * t
+                result[k] = max(result[k], chord)
+    return [(samples[i][0], samples[i][1], result[i]) for i in range(n)]
+
+
+# ---------------------------------------------------------------------------
+# Slope filter (cross-strip)
 # ---------------------------------------------------------------------------
 
 
@@ -202,6 +277,26 @@ def _slope_across(
     photogrammetry_limit = (
         slope_f * drone.focal_length_mm
         / (drone.sensor_w_mm * (1.0 - overlap_side_pct / 100.0))
+    )
+    physical_limit = _MAX_CLIMB_MS / speed
+    return min(photogrammetry_limit, physical_limit)
+
+
+def _slope_along_m_per_m(
+    drone: DroneConfig,
+    H_max: float,
+    overlap_front_pct: int,
+    slope_f: float,
+) -> float:
+    """Max altitude change per metre of along-strip travel (m/m).
+
+    Mirrors ``_slope_across`` using the sensor's forward (height) dimension
+    and front overlap so the slope limit is consistent in both directions.
+    """
+    speed = max(0.5, drone.auto_speed(H_max, overlap_front_pct))
+    photogrammetry_limit = (
+        slope_f * drone.focal_length_mm
+        / (drone.sensor_h_mm * (1.0 - overlap_front_pct / 100.0))
     )
     physical_limit = _MAX_CLIMB_MS / speed
     return min(photogrammetry_limit, physical_limit)
@@ -253,20 +348,24 @@ def compute_adaptive_route(
     overlap_side_pct: int,
     powerline_clearance_m: float,
     slope_f: float,
+    min_dip_m: float = 0.0,
+    habited_only: bool = True,
     home_3067: tuple[float, float] | None = None,
     sample_m: float = 10.0,
 ) -> tuple[
     RouteResult,
     list[float],
-    list[list[tuple[float, float, float]]],
+    list[list[tuple[float, float, float, float]]],
     list[list[tuple[float, float, float]]],
 ]:
-    """Variable-spacing lawnmower with per-waypoint altitude.
+    """Variable-spacing lawnmower with per-waypoint altitude and speed.
 
     Returns ``(route, altitude_profile, strip_waypoints, transit_waypoints)``:
 
     * *altitude_profile[i]*   — minimum AGL altitude for strip *i*
-    * *strip_waypoints[i]*    — ``[(x3067, y3067, alt_m), ...]`` along strip *i*
+    * *strip_waypoints[i]*    — ``[(x3067, y3067, alt_m, speed_ms), ...]`` along
+      strip *i*. Altitude is smoothed by an along-strip slope filter then a
+      narrow-dip fill pass. Speed = ``drone.auto_speed(alt_m, overlap_front_pct)``.
     * *transit_waypoints[i]*  — ``[(x3067, y3067, alt_m), ...]`` along the
       *i*-th inter-strip transit with 1:1-compliant altitude at each point.
       Home transits (when *home_3067* is provided) are excluded.
@@ -280,6 +379,7 @@ def compute_adaptive_route(
 
     bldg_pairs: list[tuple] = [
         (b.geometry, building_height_m(b)) for b in buildings
+        if not habited_only or b.kohdeluokka not in _AGRI_CODES
     ]
     pl_geoms: list = [pl.geometry for pl in power_lines if pl.is_overhead]
 
@@ -395,7 +495,13 @@ def compute_adaptive_route(
             transit_segs.append([(strips_3067[-1][2], strips_3067[-1][3]), home_3067])
 
     # ── Per-strip altitude waypoints ───────────────────────────────────────────
-    # Sample the full strip, simplify, then slope-filter the minimum per strip.
+    # Pipeline:
+    #   1. Sample raw 1:1 altitudes at sample_m intervals.
+    #   2. Along-strip slope filter — gradual climbs/descents.
+    #   3. Narrow-dip fill — erase dips narrower than min_dip_m.
+    #   4. Simplify — drop redundant waypoints.
+    slope_along = _slope_along_m_per_m(drone, H_max, overlap_front_pct, slope_f)
+
     strip_waypoints_raw: list[list[tuple[float, float, float]]] = []
     for x1, y1, x2, y2 in strips_3067:
         samples = _sample_strip(
@@ -404,12 +510,14 @@ def compute_adaptive_route(
             powerline_clearance_m=powerline_clearance_m,
             sample_m=sample_m,
         )
+        samples = _smooth_strip_along(samples, slope_along, H_min, H_max)
+        samples = _fill_narrow_dips(samples, min_dip_m)
         strip_waypoints_raw.append(_simplify_altitude_waypoints(samples))
 
     # Per-strip minimum altitude (used for spacing decisions and flight time)
     raw_alt = [min(wp[2] for wp in wps) for wps in strip_waypoints_raw]
 
-    # Slope-filter the per-strip minimum altitudes
+    # Slope-filter the per-strip minimum altitudes (cross-strip direction)
     midpoints = [
         ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
         for x1, y1, x2, y2 in strips_3067
@@ -420,17 +528,18 @@ def compute_adaptive_route(
     # Apply the slope-filtered floor to per-strip waypoints: if the slope filter
     # raised a strip's minimum altitude, raise every waypoint in that strip by
     # the same delta so the waypoint curve is preserved but shifted up.
-    strip_waypoints: list[list[tuple[float, float, float]]] = []
+    # Attach per-waypoint speed: drone.auto_speed(alt) scales with altitude so
+    # the camera fires at the correct interval for consistent forward overlap.
+    strip_waypoints: list[list[tuple[float, float, float, float]]] = []
     for i, wps in enumerate(strip_waypoints_raw):
-        floor = altitude_profile[i]
+        floor   = altitude_profile[i]
         old_min = min(wp[2] for wp in wps)
-        shift = max(0.0, floor - old_min)
-        if shift > 0.0:
-            strip_waypoints.append([
-                (x, y, min(max(a + shift, H_min), H_max)) for x, y, a in wps
-            ])
-        else:
-            strip_waypoints.append(wps)
+        shift   = max(0.0, floor - old_min)
+        out: list[tuple[float, float, float, float]] = []
+        for x, y, a in wps:
+            a_f = min(max(a + shift, H_min), H_max)
+            out.append((x, y, a_f, drone.auto_speed(a_f, overlap_front_pct)))
+        strip_waypoints.append(out)
 
     # ── Per-transit altitude waypoints ────────────────────────────────────────
     # Using _altitude_at() at every transit waypoint ensures the 1:1 rule is

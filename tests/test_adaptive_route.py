@@ -225,8 +225,8 @@ class TestComputeAdaptiveRoute:
             powerline_clearance_m=70.0, slope_f=0.2,
         )
         for strip_wps in wps:
-            for _, _, a in strip_wps:
-                assert 15.0 - 1e-9 <= a <= 80.0 + 1e-9
+            for wp in strip_wps:
+                assert 15.0 - 1e-9 <= wp[2] <= 80.0 + 1e-9
 
     def test_strip_waypoints_min_geq_altitude_profile(self):
         """altitude_profile[i] must be ≤ the min waypoint altitude in that strip."""

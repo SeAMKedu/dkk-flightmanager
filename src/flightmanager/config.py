@@ -119,7 +119,8 @@ class FlightConfig(BaseModel):
     # fewer strips and faster coverage).
     adv_max_height_m: float | None = Field(default=None, ge=0)
     adv_powerline_clearance_m: float = Field(default=70.0, ge=0)
-    adv_slope_f: float = Field(default=0.20, gt=0)
+    adv_slope_f: float = Field(default=0.30, gt=0)
+    adv_min_dip_m: float = Field(default=40.0, ge=0)
 
     @property
     def derived_flight_height_m(self) -> float:

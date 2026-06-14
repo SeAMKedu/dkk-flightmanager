@@ -241,6 +241,7 @@ def _build_advanced_files(  # noqa: C901
         overlap_side_pct=cfg.overlap_side_pct,
         powerline_clearance_m=cfg.adv_powerline_clearance_m,
         slope_f=cfg.adv_slope_f,
+        min_dip_m=cfg.adv_min_dip_m,
     )
 
     if route.strip_count == 0:

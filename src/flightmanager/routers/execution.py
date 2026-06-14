@@ -438,6 +438,7 @@ async def route_estimate(req: RouteEstimateRequest):
                 overlap_front_pct=ovf, overlap_side_pct=ovs,
                 powerline_clearance_m=clearance,
                 slope_f=slope_f,
+                min_dip_m=cfg_flight.adv_min_dip_m,
                 home_3067=home_3067,
             )
         except Exception as exc:
@@ -463,9 +464,11 @@ async def route_estimate(req: RouteEstimateRequest):
                         alt: float, strip_speed: float):
         wps = _strip_wps[i] if _strip_wps and i < len(_strip_wps) else None
         if wps and len(wps) > 2:
-            line_4326 = reproject_to_4326(LineString([(x, y) for x, y, a in wps]))
-            wpt_alts  = [round(a, 1) for x, y, a in wps]
-            props = {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2), "wpt_alts": wpt_alts}
+            line_4326  = reproject_to_4326(LineString([(wp[0], wp[1]) for wp in wps]))
+            wpt_alts   = [round(wp[2], 1) for wp in wps]
+            wpt_speeds = [round(wp[3], 2) for wp in wps]
+            props = {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2),
+                     "wpt_alts": wpt_alts, "wpt_speeds": wpt_speeds}
         else:
             line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
             props = {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2)}

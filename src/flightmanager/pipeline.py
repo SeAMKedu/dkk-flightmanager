@@ -844,6 +844,7 @@ def _compute_route_geojson(
                     overlap_side_pct=ovs,
                     powerline_clearance_m=config.flight.adv_powerline_clearance_m,
                     slope_f=config.flight.adv_slope_f,
+                    min_dip_m=config.flight.adv_min_dip_m,
                     home_3067=home_3067,
                 )
             except Exception as exc:
@@ -896,11 +897,13 @@ def _route_result_to_geojson(
     def _seg_feat(i, x1, y1, x2, y2, alt, speed):
         wps = strip_waypoints[i] if strip_waypoints and i < len(strip_waypoints) else None
         if wps and len(wps) > 2:
-            line = reproject_to_4326(LineString([(x, y) for x, y, a in wps]))
-            wpt_alts = [round(a, 1) for x, y, a in wps]
-            props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2), "wpt_alts": wpt_alts}
+            line       = reproject_to_4326(LineString([(wp[0], wp[1]) for wp in wps]))
+            wpt_alts   = [round(wp[2], 1) for wp in wps]
+            wpt_speeds = [round(wp[3], 2) for wp in wps]
+            props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2),
+                     "wpt_alts": wpt_alts, "wpt_speeds": wpt_speeds}
         else:
-            line = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
+            line  = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
             props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2)}
         return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": props}
 

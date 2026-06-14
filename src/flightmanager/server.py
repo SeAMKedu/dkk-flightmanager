@@ -176,6 +176,8 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             "rth_height_m":            _st.config.flight.rth_height_m,
             "finish_action":           _st.config.flight.finish_action,
             "rc_lost_action":          _st.config.flight.rc_lost_action,
+            "adv_slope_f":             _st.config.flight.adv_slope_f,
+            "adv_min_dip_m":           _st.config.flight.adv_min_dip_m,
             "color_palette": _st.config.output.color_palette,
             "max_area_loss_pct": _st.config.home_safety.max_area_loss_pct,
         }
