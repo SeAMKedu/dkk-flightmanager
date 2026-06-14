@@ -316,6 +316,7 @@ def export_job(  # noqa: C901
             kmz_results[0].altitude_profile,
             drone_cfg,
             config.flight.overlap_front_pct,
+            strip_waypoints=kmz_results[0].strip_waypoints,
         )
 
     return manifest, route_geojson
@@ -828,33 +829,42 @@ def _compute_route_geojson(
               "strips_geojson": None, "transits_geojson": None}
     try:
         angle = _route.compute_auto_angle(survey_3067)
-        rr = _route.compute_route(survey_3067, angle, sm, pm, home_3067=home_3067)
+        strip_wps: list | None = None
+
+        if config.flight.advanced_mode:
+            try:
+                from flightmanager.adaptive_route import compute_adaptive_route
+                H_max = config.flight.adv_max_height_m or H
+                rr, altitude_profile, strip_wps, _ = compute_adaptive_route(
+                    survey_3067, angle, buildings, power_lines,
+                    drone=drone_cfg,
+                    H_max=H_max,
+                    H_min=config.flight.adv_min_height_m,
+                    overlap_front_pct=ovf,
+                    overlap_side_pct=ovs,
+                    powerline_clearance_m=config.flight.adv_powerline_clearance_m,
+                    slope_f=config.flight.adv_slope_f,
+                    home_3067=home_3067,
+                )
+            except Exception as exc:
+                log.warning("Preview: adaptive route failed — %s; falling back", exc)
+                rr = _route.compute_route(survey_3067, angle, sm, pm, home_3067=home_3067)
+                altitude_profile = [H] * len(rr.strips_3067)
+                strip_wps = None
+        else:
+            rr = _route.compute_route(survey_3067, angle, sm, pm, home_3067=home_3067)
+            altitude_profile = [H] * len(rr.strips_3067)
+
         ft = _route.estimate_flight_time(
             rr,
-            flight_height_m=H,
+            flight_height_m=altitude_profile[0] if altitude_profile else H,
             auto_speed_ms=resolve_strip_speed(config.flight, drone_cfg, H),
             transit_speed_ms=config.flight.transitional_speed_ms,
             takeoff_security_height_m=config.flight.takeoff_security_height_m,
             home_3067=home_3067,
         )
-        altitude_profile = [H] * len(rr.strips_3067)
-        if config.flight.advanced_mode and rr.strips_3067:
-            try:
-                from flightmanager.obstacle_heights import compute_altitude_profile
-                altitude_profile = compute_altitude_profile(
-                    rr, buildings, power_lines,
-                    flight_height_m=H,
-                    min_h=config.flight.adv_min_height_m,
-                    powerline_clearance_m=config.flight.adv_powerline_clearance_m,
-                    overlap_front_pct=ovf,
-                    overlap_side_pct=ovs,
-                    slope_f=config.flight.adv_slope_f,
-                    drone=drone_cfg,
-                )
-            except Exception as exc:
-                log.warning("Preview: altitude profile failed — %s", exc)
 
-        gj = _route_result_to_geojson(rr, altitude_profile, drone_cfg, ovf)
+        gj = _route_result_to_geojson(rr, altitude_profile, drone_cfg, ovf, strip_waypoints=strip_wps)
         return {
             "route_angle_deg_auto":  round(angle, 1),
             "route_strip_count":     rr.strip_count,
@@ -867,21 +877,39 @@ def _compute_route_geojson(
         return _empty
 
 
-def _route_result_to_geojson(route, altitude_profile: list[float], drone_cfg, overlap_front_pct: float) -> dict:
-    """Convert a RouteResult + altitude profile to strips/transits GeoJSON dicts."""
+def _route_result_to_geojson(
+    route,
+    altitude_profile: list[float],
+    drone_cfg,
+    overlap_front_pct: float,
+    strip_waypoints: list | None = None,
+) -> dict:
+    """Convert a RouteResult + altitude profile to strips/transits GeoJSON dicts.
+
+    When *strip_waypoints* is provided (advanced mode), each strip feature
+    carries the full waypoint coordinates and a ``wpt_alts`` property so
+    the frontend can render a per-segment altitude gradient in 2D and
+    correct height ramp in 3D.
+    """
     from shapely.geometry import LineString, mapping as _mapping
 
-    def _seg_feat(x1, y1, x2, y2, alt, speed):
-        line = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
-        return {"type": "Feature", "geometry": dict(_mapping(line)),
-                "properties": {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2)}}
+    def _seg_feat(i, x1, y1, x2, y2, alt, speed):
+        wps = strip_waypoints[i] if strip_waypoints and i < len(strip_waypoints) else None
+        if wps and len(wps) > 2:
+            line = reproject_to_4326(LineString([(x, y) for x, y, a in wps]))
+            wpt_alts = [round(a, 1) for x, y, a in wps]
+            props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2), "wpt_alts": wpt_alts}
+        else:
+            line = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
+            props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2)}
+        return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": props}
 
     def _path_feat(pts):
         line = reproject_to_4326(LineString(pts))
         return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": {}}
 
     strips = [
-        _seg_feat(*s, alt=altitude_profile[i],
+        _seg_feat(i, *s, alt=altitude_profile[i],
                   speed=drone_cfg.auto_speed(altitude_profile[i], overlap_front_pct))
         for i, s in enumerate(route.strips_3067)
     ]

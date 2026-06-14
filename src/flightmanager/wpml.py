@@ -104,6 +104,7 @@ class KmzResult:
     strip_speed_ms: float = 0.0
     route: RouteResult | None = None
     altitude_profile: list[float] = field(default_factory=list)
+    strip_waypoints: list | None = None
     waylines_xml: str | None = None
 
 
@@ -161,8 +162,9 @@ def build_kmz(
 
     adv_route = None
     adv_alt_profile: list[float] = []
+    adv_strip_wps = None
     if flight_config.advanced_mode and drone is not None:
-        template_xml, waylines_xml, adv_route, adv_alt_profile = _build_advanced_files(
+        template_xml, waylines_xml, adv_route, adv_alt_profile, adv_strip_wps = _build_advanced_files(
             survey_4326, flight_config, speed_ms=speed_ms, drone=drone,
             height_m=height_m, buildings=buildings, power_lines=power_lines,
         )
@@ -193,13 +195,14 @@ def build_kmz(
         strip_speed_ms=speed_ms,
         route=adv_route,
         altitude_profile=adv_alt_profile,
+        strip_waypoints=adv_strip_wps,
         waylines_xml=waylines_xml,
     )
 
 
 # ---- Advanced mode: compute route + altitudes + build files ----
 
-def _build_advanced_files(
+def _build_advanced_files(  # noqa: C901
     survey_4326: BaseGeometry,
     cfg: FlightConfig,
     *,
@@ -208,8 +211,8 @@ def _build_advanced_files(
     height_m: float,
     buildings: list | None,
     power_lines: list | None,
-) -> tuple[str, str, RouteResult, list[float]]:
-    """Adaptive-sweep route + altitude profile → (template_xml, waylines_xml, route, alt_profile).
+) -> tuple[str, str, RouteResult, list[float], list]:
+    """Adaptive-sweep route + altitude profile → (template_xml, waylines_xml, route, alt_profile, strip_wps).
 
     Uses variable strip spacing: strips pinch together near buildings (drone
     flies lower → smaller footprint) and widen in open areas (drone rises to
@@ -260,7 +263,7 @@ def _build_advanced_files(
         route, alt_profile, drone=drone, cfg=cfg,
         strip_waypoints=strip_wps, transit_waypoints=transit_wps,
     )
-    return template_xml, waylines_xml, route, alt_profile
+    return template_xml, waylines_xml, route, alt_profile, strip_wps
 
 
 # ---- template.kml builder ----

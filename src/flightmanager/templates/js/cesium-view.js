@@ -255,36 +255,66 @@ function _buildWaypoints(altM) {
 
   var pts = [];
 
+  function _addPt(lon, lat, h, spd) {
+    var last = pts.length > 0 ? pts[pts.length - 1] : null;
+    if (last && Math.abs(last.lon - lon) < 1e-9 && Math.abs(last.lat - lat) < 1e-9) {
+      // Duplicate lat/lon at a boundary: update height/speed instead of a zero-length segment
+      // (which causes NaN in Cesium polylineVolume).
+      last.height = h;
+      last.speed = spd;
+    } else {
+      pts.push({lon: lon, lat: lat, height: h, speed: spd});
+    }
+  }
+
   function addCoords(coords, h, spd) {
-    coords.forEach(function(c) {
-      var last = pts.length > 0 ? pts[pts.length - 1] : null;
-      if (last && Math.abs(last.lon - c[0]) < 1e-9 && Math.abs(last.lat - c[1]) < 1e-9) {
-        // Duplicate lat/lon at a boundary: update height/speed instead of creating a
-        // zero-length horizontal segment (which causes NaN in Cesium polylineVolume).
-        last.height = h;
-        last.speed = spd;
-      } else {
-        pts.push({lon: c[0], lat: c[1], height: h, speed: spd});
-      }
+    coords.forEach(function(c) { _addPt(c[0], c[1], h, spd); });
+  }
+
+  function addCoordsWithAlts(coords, alts, spd) {
+    coords.forEach(function(c, k) {
+      _addPt(c[0], c[1], alts[k] !== undefined ? alts[k] : alts[alts.length - 1], spd);
     });
   }
 
+  function addStrip(strip, i) {
+    var wptAlts = strip.properties && strip.properties.wpt_alts;
+    var coords  = strip.geometry.coordinates;
+    if (wptAlts && wptAlts.length === coords.length) {
+      addCoordsWithAlts(coords, wptAlts, stripSpeeds[i]);
+    } else {
+      addCoords(coords, stripAlts[i], stripSpeeds[i]);
+    }
+  }
+
+  // Actual altitude at the START of strip idx (first wpt_alts entry, else strip min).
+  function _startAlt(strip, idx) {
+    var wa = strip.properties && strip.properties.wpt_alts;
+    return (wa && wa.length > 0) ? wa[0] : stripAlts[idx];
+  }
+
+  // Actual altitude at the END of strip idx (last wpt_alts entry, else strip min).
+  function _endAlt(strip, idx) {
+    var wa = strip.properties && strip.properties.wpt_alts;
+    return (wa && wa.length > 0) ? wa[wa.length - 1] : stripAlts[idx];
+  }
+
   if (hasHome) {
-    addCoords(transits[0].geometry.coordinates, stripAlts[0], stripSpeeds[0]);
+    addCoords(transits[0].geometry.coordinates, _startAlt(strips[0], 0), stripSpeeds[0]);
     strips.forEach(function(strip, i) {
-      addCoords(strip.geometry.coordinates, stripAlts[i], stripSpeeds[i]);
+      addStrip(strip, i);
       if (i < N - 1) {
-        var tAlt = (stripAlts[i] + stripAlts[i + 1]) / 2;
+        var tAlt = (_endAlt(strip, i) + _startAlt(strips[i + 1], i + 1)) / 2;
         var tSpd = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
         addCoords(transits[i + 1].geometry.coordinates, tAlt, tSpd);
       }
     });
-    addCoords(transits[N].geometry.coordinates, stripAlts[N - 1], stripSpeeds[N - 1]);
+    addCoords(transits[N].geometry.coordinates, _endAlt(strips[N - 1], N - 1), stripSpeeds[N - 1]);
   } else {
     strips.forEach(function(strip, i) {
-      addCoords(strip.geometry.coordinates, stripAlts[i], stripSpeeds[i]);
+      addStrip(strip, i);
       if (i < N - 1) {
-        var tAlt = (stripAlts[i] + stripAlts[i + 1]) / 2;
+        var tAlt = (_endAlt(strip, i) + _startAlt(strips[i + 1], i + 1)) / 2;
         var tSpd = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
         addCoords(transits[i].geometry.coordinates, tAlt, tSpd);
       }

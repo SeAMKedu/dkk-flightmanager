@@ -161,7 +161,7 @@ function _altColor(t) {
   return '#' + [r,g,bv].map(function(x){return x.toString(16).padStart(2,'0');}).join('');
 }
 
-function _drawRouteLines(lines, transits, fpAcross, altitudes) {
+function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   if (!lines || !lines.length) { lrs.route = null; lrs.coverage = null; return; }
@@ -169,22 +169,39 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes) {
   var lat0 = lines[0][0][0], lon0 = lines[0][0][1];
   var mLat = 111132.0, mLon = mLat * Math.cos(lat0 * Math.PI / 180);
 
-  // Compute altitude range for color mapping
-  var hasAlt = altitudes && altitudes.length === lines.length;
-  var altMin = hasAlt ? Math.min.apply(null, altitudes) : 0;
-  var altMax = hasAlt ? Math.max.apply(null, altitudes) : 1;
+  var hasAlt     = altitudes    && altitudes.length    === lines.length;
+  var hasWptAlts = wptAltsList  && wptAltsList.length  === lines.length;
+
+  // Global altitude range across all waypoints for consistent colour mapping
+  var allAlts = [];
+  if (hasWptAlts) {
+    wptAltsList.forEach(function(wa) { if (wa) wa.forEach(function(a) { allAlts.push(a); }); });
+  }
+  if (!allAlts.length && hasAlt) allAlts = altitudes;
+  var altMin   = allAlts.length ? Math.min.apply(null, allAlts) : 0;
+  var altMax   = allAlts.length ? Math.max.apply(null, allAlts) : 1;
   var altRange = (altMax - altMin) || 1;
 
   var g = L.layerGroup();
   var defaultColor = '#f59e0b';
   lines.forEach(function(line, idx) {
-    var color = hasAlt
-      ? _altColor((altitudes[idx] - altMin) / altRange)
-      : defaultColor;
-    var arrowColor = hasAlt ? color : '#b45309';
-    L.polyline(line, {color: color, weight: 2, opacity: 0.9, interactive: false}).addTo(g);
-    var ll1 = line[0], ll2 = line[1];
+    var wptAlts = hasWptAlts ? wptAltsList[idx] : null;
+    if (wptAlts && wptAlts.length === line.length && wptAlts.length > 2) {
+      // Gradient: one Leaflet polyline segment per waypoint pair, coloured by mid-altitude
+      for (var k = 0; k < line.length - 1; k++) {
+        var midAlt = (wptAlts[k] + wptAlts[k + 1]) / 2;
+        var segColor = _altColor((midAlt - altMin) / altRange);
+        L.polyline([line[k], line[k + 1]], {color: segColor, weight: 2, opacity: 0.9, interactive: false}).addTo(g);
+      }
+    } else {
+      var color = hasAlt ? _altColor((altitudes[idx] - altMin) / altRange) : defaultColor;
+      L.polyline(line, {color: color, weight: 2, opacity: 0.9, interactive: false}).addTo(g);
+    }
+    // Direction arrow at strip midpoint (use start→end for bearing regardless of inner coords)
+    var ll1 = line[0], ll2 = line[line.length - 1];
     var mid = [(ll1[0]+ll2[0])/2, (ll1[1]+ll2[1])/2];
+    var stripAlt = hasAlt ? altitudes[idx] : null;
+    var arrowColor = stripAlt != null ? _altColor((stripAlt - altMin) / altRange) : '#b45309';
     var dx = (ll2[1]-ll1[1])*mLon, dy = (ll2[0]-ll1[0])*mLat;
     var deg = Math.atan2(-dy, dx) * 180 / Math.PI;
     var arrowHtml =
@@ -210,9 +227,9 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes) {
   // Altitude legend — show gradient bar with min/max when altitudes vary
   var altRow = document.getElementById('leg-alt-row');
   if (altRow) {
-    if (hasAlt) {
-      var altMin2 = Math.round(Math.min.apply(null, altitudes));
-      var altMax2 = Math.round(Math.max.apply(null, altitudes));
+    if (allAlts.length) {
+      var altMin2 = Math.round(altMin);
+      var altMax2 = Math.round(altMax);
       var minEl = document.getElementById('leg-alt-min');
       var maxEl = document.getElementById('leg-alt-max');
       if (minEl) minEl.textContent = altMin2 + ' m';
@@ -233,7 +250,8 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes) {
       var color = hasAlt ? _altColor((altitudes[idx] - altMin) / altRange) : '#f59e0b';
       var covStyle = {color: color, weight: 0.8, opacity: 0.5,
                       fillColor: color, fillOpacity: 0.15, interactive: false};
-      var corners = _stripCoverageRect(line[0], line[1], fpAcross, lat0, lon0, mLat, mLon);
+      // Coverage rect uses only the endpoints, not intermediate waypoints
+      var corners = _stripCoverageRect(line[0], line[line.length - 1], fpAcross, lat0, lon0, mLat, mLon);
       if (corners) L.polygon(corners, covStyle).addTo(cg);
     });
     _coverageLayer = cg; lrs.coverage = cg;
@@ -246,20 +264,24 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes) {
 
 function _drawRouteGeoJSON(stripsGeojson, transitsGeojson) {
   if (!stripsGeojson || !stripsGeojson.features || !stripsGeojson.features.length) return;
-  var lines = stripsGeojson.features.map(function(f) {
+  var features = stripsGeojson.features;
+  var lines = features.map(function(f) {
     return f.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
   });
-  var altitudes = stripsGeojson.features.map(function(f) {
+  var altitudes = features.map(function(f) {
     return f.properties && f.properties.altitude_m != null ? f.properties.altitude_m : null;
+  });
+  var wptAltsList = features.map(function(f) {
+    return f.properties && f.properties.wpt_alts ? f.properties.wpt_alts : null;
   });
   var _validAlts = altitudes.filter(function(a) { return a !== null; });
   var _altVaries = _validAlts.length > 1 &&
     (Math.max.apply(null, _validAlts) - Math.min.apply(null, _validAlts)) > 1.0;
-  if (!_altVaries) altitudes = null;
+  if (!_altVaries) { altitudes = null; wptAltsList = null; }
   var transits = (transitsGeojson && transitsGeojson.features || []).map(function(f) {
     return f.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
   });
-  _drawRouteLines(lines, transits, _lastFpAcross, altitudes);
+  _drawRouteLines(lines, transits, _lastFpAcross, altitudes, wptAltsList);
   notifyCesiumRouteReady(stripsGeojson, transitsGeojson);
 }
 

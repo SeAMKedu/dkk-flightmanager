@@ -448,6 +448,7 @@ async def route_estimate(req: RouteEstimateRequest):
     else:
         result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
         altitude_profile = [H] * result.strip_count
+        _strip_wps = None
 
     flight_time = _route.estimate_flight_time(
         result,
@@ -458,20 +459,24 @@ async def route_estimate(req: RouteEstimateRequest):
         home_3067=home_3067,
     )
 
-    def _seg_to_feature(x1, y1, x2, y2, alt: float, strip_speed: float):
-        line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
-        return {
-            "type": "Feature",
-            "geometry": dict(mapping(line_4326)),
-            "properties": {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2)},
-        }
+    def _seg_to_feature(i: int, x1: float, y1: float, x2: float, y2: float,
+                        alt: float, strip_speed: float):
+        wps = _strip_wps[i] if _strip_wps and i < len(_strip_wps) else None
+        if wps and len(wps) > 2:
+            line_4326 = reproject_to_4326(LineString([(x, y) for x, y, a in wps]))
+            wpt_alts  = [round(a, 1) for x, y, a in wps]
+            props = {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2), "wpt_alts": wpt_alts}
+        else:
+            line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
+            props = {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2)}
+        return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": props}
 
     def _path_to_feature(pts: list) -> dict:
         line_4326 = reproject_to_4326(LineString(pts))
         return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
 
     strips_features = [
-        _seg_to_feature(*s, alt=altitude_profile[i],
+        _seg_to_feature(i, *s, alt=altitude_profile[i],
                         strip_speed=drone.auto_speed(altitude_profile[i], ovf))
         for i, s in enumerate(result.strips_3067)
     ]
