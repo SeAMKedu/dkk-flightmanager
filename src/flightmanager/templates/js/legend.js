@@ -48,7 +48,7 @@ var _legendRows;
     {btnId:'leg-areas',    lrKey:'areas',    rowId:null},
     {btnId:'leg-survey',   lrKey:'survey',   rowId:null},
     {btnId:'leg-vertices', lrKey:'vertices', rowId:null},
-    {btnId:'leg-rings',    lrKey:'rings',    rowId:'leg-rings-row'},
+    {btnId:'leg-rings',    lrKey:'rings',    rowId:'leg-rings-row', startOff:true},
     {btnId:'leg-ko',       lrKey:'ko',       rowId:'leg-ko-row'},
     {btnId:'leg-bldgs',    lrKey:'bldgs',    rowId:'leg-bldgs-row'},
     {btnId:'leg-plines',   lrKey:'plines',   rowId:'leg-plines-row'},
