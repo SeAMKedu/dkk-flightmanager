@@ -13,6 +13,7 @@ var _coverageLayer = null;
 var _routeAngleAdjusting = false;
 var _lastRouteStats = null;
 var _lastFpAcross = null;
+var _lastFpAlong = null;
 
 export function _getLastRouteStats() { return _lastRouteStats; }
 
@@ -36,6 +37,7 @@ function _getRouteParams() {
     stripM: fpAcross * (1 - ovs / 100),
     photoM: fpAlong  * (1 - ovf / 100),
     fpAcross: fpAcross,
+    fpAlong:  fpAlong,
   };
 }
 
@@ -126,17 +128,23 @@ export function _clearRouteLayer() {
   notifyCesiumRouteReady(null, null);
 }
 
-function _stripCoverageRect(ll1, ll2, fpAcross, lat0, lon0, mLat, mLon) {
+function _stripCoverageRect(ll1, ll2, fpAcross, fpAlong, lat0, lon0, mLat, mLon) {
   var x1 = (ll1[1] - lon0) * mLon, y1 = (ll1[0] - lat0) * mLat;
   var x2 = (ll2[1] - lon0) * mLon, y2 = (ll2[0] - lat0) * mLat;
   var dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
   if (len < 0.1) return null;
-  var px = -dy / len, py = dx / len, hw = fpAcross / 2;
+  var ux = dx / len, uy = dy / len;          // unit along-strip vector
+  var px = -uy,      py = ux;                // unit cross-strip vector
+  var hw = fpAcross / 2;
+  var hf = (fpAlong  || 0) / 2;             // half along-track footprint (vertical FOV overhang)
+  // Extend each endpoint outward by hf to cover the full camera footprint
+  var ex1 = x1 - ux * hf, ey1 = y1 - uy * hf;
+  var ex2 = x2 + ux * hf, ey2 = y2 + uy * hf;
   return [
-    [lat0 + (y1 + py*hw)/mLat, lon0 + (x1 + px*hw)/mLon],
-    [lat0 + (y2 + py*hw)/mLat, lon0 + (x2 + px*hw)/mLon],
-    [lat0 + (y2 - py*hw)/mLat, lon0 + (x2 - px*hw)/mLon],
-    [lat0 + (y1 - py*hw)/mLat, lon0 + (x1 - px*hw)/mLon],
+    [lat0 + (ey1 + py*hw)/mLat, lon0 + (ex1 + px*hw)/mLon],
+    [lat0 + (ey2 + py*hw)/mLat, lon0 + (ex2 + px*hw)/mLon],
+    [lat0 + (ey2 - py*hw)/mLat, lon0 + (ex2 - px*hw)/mLon],
+    [lat0 + (ey1 - py*hw)/mLat, lon0 + (ex1 - px*hw)/mLon],
   ];
 }
 
@@ -251,7 +259,7 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
       var covStyle = {color: color, weight: 0.8, opacity: 0.5,
                       fillColor: color, fillOpacity: 0.15, interactive: false};
       // Coverage rect uses only the endpoints, not intermediate waypoints
-      var corners = _stripCoverageRect(line[0], line[line.length - 1], fpAcross, lat0, lon0, mLat, mLon);
+      var corners = _stripCoverageRect(line[0], line[line.length - 1], fpAcross, _lastFpAlong, lat0, lon0, mLat, mLon);
       if (corners) L.polygon(corners, covStyle).addTo(cg);
     });
     _coverageLayer = cg; lrs.coverage = cg;
@@ -322,6 +330,7 @@ export function updateRouteOverlay(cachedStrips, cachedTransits) {
   var p = _getRouteParams();
   if (!p) { _clearRouteLayer(); updateRouteStats(null); return; }
   _lastFpAcross = p.fpAcross;
+  _lastFpAlong  = p.fpAlong;
   if (cachedStrips) {
     _drawRouteGeoJSON(cachedStrips, cachedTransits);
     return;
