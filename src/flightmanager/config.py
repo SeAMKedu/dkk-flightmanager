@@ -317,6 +317,25 @@ class SatellitesConfig(BaseModel):
     timeout_s: int = Field(default=30, gt=0)
 
 
+class WeatherConfig(BaseModel):
+    # Weather forecast for the map-view day-slot bar, qualifying satellite overpasses.
+    # "open-meteo": keyless JSON, daily forecast up to 16 days (recommended).
+    # "fmi": Finnish Meteorological Institute Open Data WFS (added later).
+    provider: Literal["open-meteo", "fmi"] = "open-meteo"
+    # How many forecast days to request. Open-Meteo serves up to 16; the bar renders
+    # however many the source actually returns.
+    forecast_days: int = Field(default=14, gt=0, le=16)
+    # Re-fetch a cached forecast if older than this. Forecasts update through the day,
+    # so a few hours keeps the bar fresh without hammering the API.
+    cache_max_age_hours: int = Field(default=3, gt=0)
+    open_meteo_url: str = "https://api.open-meteo.com/v1/forecast"
+    # FMI keyless WFS download endpoint (used when provider = "fmi").
+    fmi_wfs_url: str = "https://opendata.fmi.fi/wfs"
+    timeout_s: int = Field(default=30, gt=0)
+    # Optional drone max wind limit (m/s) for the deferred "golden window" highlight.
+    drone_wind_limit_ms: float | None = None
+
+
 class AppConfig(BaseModel):
     flight: FlightConfig
     home_safety: HomeSafetyConfig = Field(default_factory=HomeSafetyConfig)
@@ -328,6 +347,7 @@ class AppConfig(BaseModel):
     zones: ZonesConfig = Field(default_factory=ZonesConfig)
     powerlines: PowerLinesConfig = Field(default_factory=PowerLinesConfig)
     satellites: SatellitesConfig = Field(default_factory=SatellitesConfig)
+    weather: WeatherConfig = Field(default_factory=WeatherConfig)
     # Drone / payload profiles.  The built-in list covers common DJI mapping drones.
     # Add [[drones]] entries in config.toml to extend or override.
     default_drone: str = "m3m-ms"

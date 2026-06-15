@@ -151,6 +151,53 @@ async def jobs_geojson(folder: str | None = None):
     return {"type": "FeatureCollection", "features": features}
 
 
+@router.get("/api/forecast")
+async def forecast(folder: str | None = None, paths: str | None = None):
+    """Satellite-overpass + weather day-slots for the map-view bar.
+
+    Scope: a single ``folder`` (its jobs) and/or an explicit comma-separated
+    ``paths`` list. Falls back to root-level jobs when neither is given.
+    """
+    import asyncio
+
+    from shapely.geometry import shape
+    from flightmanager.forecast import build_forecast
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+
+    # Resolve which job dirs to include and the folder dir used for caching.
+    if paths:
+        wanted = [p for p in paths.split(",") if p.strip()]
+        job_dirs = [resolve_job_dir(output_dir, p)[2] for p in wanted]
+        folder_dir = output_dir / folder if folder else output_dir
+    else:
+        groups = scan_jobs(output_dir)
+        job_dirs = []
+        for group in groups:
+            if folder is not None and group["name"] != folder:
+                continue
+            for card in group["jobs"]:
+                job_dirs.append(resolve_job_dir(output_dir, card["path"])[2])
+        folder_dir = output_dir / folder if folder else output_dir
+
+    centroids: list[tuple[float, float]] = []
+    for jd in job_dirs:
+        geom = best_polygon(jd)
+        if not geom:
+            continue
+        c = shape(geom).centroid
+        centroids.append((c.y, c.x))
+
+    return await asyncio.to_thread(
+        build_forecast,
+        centroids,
+        _st.config.satellites,
+        _st.config.weather,
+        _st.config.cache.cache_dir,
+        folder_dir=folder_dir,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Single-job CRUD
 # ---------------------------------------------------------------------------
