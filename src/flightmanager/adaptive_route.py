@@ -201,9 +201,11 @@ def _smooth_strip_along(
 ) -> list[tuple[float, float, float]]:
     """Two-pass forward/backward slope filter along a strip's altitude samples.
 
-    *slope_m_per_m* is the maximum altitude change per metre of horizontal
-    travel (m/m).  Derived from the photogrammetric and physical climb limits
-    via ``_slope_along_m_per_m()``.
+    *slope_m_per_m* is the maximum altitude ASCENT rate per metre of horizontal
+    travel (m/m).  Only ascent is limited — the drone may descend at any rate
+    so that 1:1 building constraints are never overridden by this smoothing pass.
+    Derived from the photogrammetric and physical climb limits via
+    ``_slope_along_m_per_m()``.
     """
     if len(samples) <= 1 or slope_m_per_m <= 0.0:
         return list(samples)
@@ -212,12 +214,10 @@ def _smooth_strip_along(
     for i in range(1, n):
         d    = math.hypot(samples[i][0] - samples[i - 1][0], samples[i][1] - samples[i - 1][1])
         step = slope_m_per_m * max(d, 1e-3)
-        alts[i] = max(alts[i], alts[i - 1] - step)
         alts[i] = min(alts[i], alts[i - 1] + step)
     for i in range(n - 2, -1, -1):
         d    = math.hypot(samples[i + 1][0] - samples[i][0], samples[i + 1][1] - samples[i][1])
         step = slope_m_per_m * max(d, 1e-3)
-        alts[i] = max(alts[i], alts[i + 1] - step)
         alts[i] = min(alts[i], alts[i + 1] + step)
     alts = [max(H_min, min(H_max, a)) for a in alts]
     return [(samples[i][0], samples[i][1], alts[i]) for i in range(n)]
@@ -308,7 +308,11 @@ def _apply_slope_filter(
     slope_across: float,
     H_min: float,
 ) -> list[float]:
-    """Two-pass forward/backward slope filter with per-pair variable spacing."""
+    """Two-pass forward/backward slope filter with per-pair variable spacing.
+
+    Only limits ascent rate between adjacent strips — descent is unconstrained
+    so that 1:1 building constraints are never overridden by the smoothing pass.
+    """
     n = len(alt_list)
     smooth = list(alt_list)
 
@@ -319,12 +323,10 @@ def _apply_slope_filter(
 
     for i in range(1, n):
         step = slope_across * _d(i - 1)
-        smooth[i] = max(smooth[i], smooth[i - 1] - step)
         smooth[i] = min(smooth[i], smooth[i - 1] + step)
 
     for i in range(n - 2, -1, -1):
         step = slope_across * _d(i)
-        smooth[i] = max(smooth[i], smooth[i + 1] - step)
         smooth[i] = min(smooth[i], smooth[i + 1] + step)
 
     return [max(H_min, h) for h in smooth]

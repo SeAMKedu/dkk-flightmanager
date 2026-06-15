@@ -120,14 +120,23 @@ export function renderMap(data) {
     }).addTo(map);
   }
 
-  // Keep-out circles
-  var koBuf = data.stats && data.stats.home_buffer_m;
+  // Keep-out circles — inner at min/nominal altitude, outer (translucent) at max altitude
+  var koBuf    = data.stats && data.stats.home_buffer_m;
+  var koBufMax = data.stats && data.stats.home_buffer_max_m;
   if (koBuf && data.buildings && data.buildings.length) {
     var kg = L.layerGroup();
     data.buildings.forEach(function(b) {
       if (!b.is_keepout) return;
       var pt = centroid(b.geojson);
       if (!pt) return;
+      // Outer (max-altitude) keepout circle — only in advanced mode
+      if (koBufMax && koBufMax > koBuf) {
+        L.circle(pt, {
+          radius: koBufMax, color: '#dc2626', weight: 1,
+          fillColor: '#fca5a5', fillOpacity: 0.07, dashArray: '2 6'
+        }).addTo(kg);
+      }
+      // Inner (min/nominal altitude) keepout circle
       L.circle(pt, {
         radius: koBuf, color: '#dc2626', weight: 1,
         fillColor: '#fca5a5', fillOpacity: 0.20, dashArray: '4 4'

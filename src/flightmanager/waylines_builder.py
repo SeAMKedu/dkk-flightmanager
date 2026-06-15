@@ -65,34 +65,42 @@ def _build_waypoint_list(
     inter_transits: list,
     strip_waypoints: list[list[tuple[float, float, float]]] | None = None,
     transit_waypoints: list[list[tuple[float, float, float]]] | None = None,
+    adv_min_height_m: float | None = None,
 ) -> tuple[list[tuple], list[int], list[int]]:
     """Build flat (x, y, alt, strip_idx, is_start, is_end) waypoint list.
 
     Returns (wps, strip_start_wp_idx, strip_end_wp_idx).
     Each entry: (x3067, y3067, alt_m, strip_idx_or_None, is_start, is_end).
 
-    When *strip_waypoints* is provided and a strip has more than 2 points,
-    intermediate waypoints with individual altitudes are inserted so the drone
-    climbs/descends continuously along the strip.
-
-    When *transit_waypoints* is provided, each inter-strip transit uses the
-    pre-computed 1:1-compliant altitude at every waypoint instead of a single
-    fixed ``max(end_alt, start_alt)`` value.
+    U-turn altitude strategy: strip start/end waypoints at each transition are
+    clamped to ``min(strip_end_alt, next_strip_start_alt)`` so short U-turns
+    stay level.  Transit altitude is the flat minimum across all sampled transit
+    waypoints.  When any transit waypoint is constrained below H_max (path passes
+    near a building), the entire transit uses ``adv_min_height_m`` instead — the
+    10 m sampling interval can miss the true closest approach, and flying at H_min
+    keeps the 1:1 exclusion radius at its minimum while the keepout-hole routing
+    guarantees the path itself clears the building.
     """
     wps: list[tuple] = []
     strip_start_wp_idx: list[int] = []
     strip_end_wp_idx: list[int] = []
     n = len(strips_3067)
 
-    def _strip_end_alt(i: int) -> float:
+    def _raw_end_alt(i: int) -> float:
         if strip_waypoints and strip_waypoints[i]:
             return strip_waypoints[i][-1][2]
         return altitude_profile[i]
 
-    def _strip_start_alt(i: int) -> float:
+    def _raw_start_alt(i: int) -> float:
         if strip_waypoints and strip_waypoints[i]:
             return strip_waypoints[i][0][2]
         return altitude_profile[i]
+
+    # Pre-compute a level "turn altitude" for every inter-strip transition.
+    turn_alts = [
+        min(_raw_end_alt(i), _raw_start_alt(i + 1))
+        for i in range(n - 1)
+    ]
 
     # Waypoint tuple: (x3067, y3067, alt_m, strip_idx, is_start, is_end)
     # strip_idx:
@@ -103,44 +111,57 @@ def _build_waypoint_list(
     for i, (x1, y1, x2, y2) in enumerate(strips_3067):
         wps_for_strip = strip_waypoints[i] if strip_waypoints else None
 
+        # Strip endpoint altitudes are overridden by the adjacent turn altitude
+        # so the strip-to-transit altitude boundary is seamless.
+        sa_override = turn_alts[i - 1] if i > 0     else None   # start of strip i
+        ea_override = turn_alts[i]     if i < n - 1 else None   # end   of strip i
+
         if wps_for_strip and len(wps_for_strip) > 2:
             # Variable-altitude strip — emit intermediate waypoints so the drone
             # climbs/descends continuously rather than flying level.
             # strip_waypoints entries are (x, y, alt, speed) 4-tuples.
             strip_start_wp_idx.append(len(wps))
-            sx, sy, sa = wps_for_strip[0][0], wps_for_strip[0][1], wps_for_strip[0][2]
+            sx, sy = wps_for_strip[0][0], wps_for_strip[0][1]
+            sa = sa_override if sa_override is not None else wps_for_strip[0][2]
             wps.append((sx, sy, sa, i, True, False))
 
             for wp in wps_for_strip[1:-1]:
                 mx, my, ma = wp[0], wp[1], wp[2]
-                # strip_idx=i marks this as an instrip waypoint (not transit)
                 wps.append((mx, my, ma, i, False, False))
 
             strip_end_wp_idx.append(len(wps))
-            ex, ey, ea = wps_for_strip[-1][0], wps_for_strip[-1][1], wps_for_strip[-1][2]
+            ex, ey = wps_for_strip[-1][0], wps_for_strip[-1][1]
+            ea = ea_override if ea_override is not None else wps_for_strip[-1][2]
             wps.append((ex, ey, ea, i, False, True))
         else:
-            # Constant-altitude strip (original behaviour)
+            # Constant-altitude strip
             alt = altitude_profile[i]
+            sa = sa_override if sa_override is not None else alt
+            ea = ea_override if ea_override is not None else alt
             strip_start_wp_idx.append(len(wps))
-            wps.append((x1, y1, alt, i, True, False))
+            wps.append((x1, y1, sa, i, True, False))
             strip_end_wp_idx.append(len(wps))
-            wps.append((x2, y2, alt, i, False, True))
+            wps.append((x2, y2, ea, i, False, True))
 
         if i < n - 1:
             transit = inter_transits[i]
+            transit_alt = turn_alts[i]
             if transit_waypoints and i < len(transit_waypoints) and transit_waypoints[i]:
-                # Use 1:1-compliant altitude at each transit waypoint.
-                # transit_waypoints[i] covers the full transit path including
-                # endpoints (which are already emitted as strip start/end
-                # waypoints), so we emit only the intermediate points.
-                for tx, ty, ta in transit_waypoints[i][1:-1]:
-                    wps.append((tx, ty, ta, None, False, False))
-            else:
-                # Fallback: single altitude for all intermediate transit points.
-                transit_alt = max(_strip_end_alt(i), _strip_start_alt(i + 1))
-                for tx, ty in transit[1:-1]:
-                    wps.append((tx, ty, transit_alt, None, False, False))
+                tw_min = min(ta for _, _, ta in transit_waypoints[i])
+                if adv_min_height_m is not None and altitude_profile:
+                    H_max_est = max(altitude_profile)
+                    if tw_min < H_max_est * 0.99:
+                        # Transit is building-constrained. Coarse 10 m sampling can
+                        # miss the true closest approach, so using the sampled
+                        # minimum is not safe. Drop to adv_min_height_m where the
+                        # keepout-hole routing already guarantees safe clearance.
+                        transit_alt = min(transit_alt, adv_min_height_m)
+                    else:
+                        transit_alt = min(transit_alt, tw_min)
+                else:
+                    transit_alt = min(transit_alt, tw_min)
+            for tx, ty in transit[1:-1]:
+                wps.append((tx, ty, transit_alt, None, False, False))
 
     return wps, strip_start_wp_idx, strip_end_wp_idx
 
@@ -192,6 +213,7 @@ def build_waylines(  # noqa: C901
     wps, strip_start_wp_idx, strip_end_wp_idx = _build_waypoint_list(
         route.strips_3067, altitude_profile, inter_transits,
         strip_waypoints, transit_waypoints,
+        adv_min_height_m=cfg.adv_min_height_m,
     )
     total_wps = len(wps)
 

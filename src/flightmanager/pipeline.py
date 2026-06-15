@@ -317,6 +317,8 @@ def export_job(  # noqa: C901
             drone_cfg,
             config.flight.overlap_front_pct,
             strip_waypoints=kmz_results[0].strip_waypoints,
+            transit_waypoints=kmz_results[0].transit_waypoints,
+            adv_min_height_m=config.flight.adv_min_height_m if config.flight.advanced_mode else None,
         )
 
     return manifest, route_geojson
@@ -440,6 +442,7 @@ def analyse_survey(  # noqa: C901
     )
 
     # Build buildings data for map display
+    from flightmanager.obstacle_heights import building_height_m as _bldg_h
     buildings_data = []
     for b in inp.buildings:
         is_ko = b.kohdeluokka in relevant_codes
@@ -448,6 +451,8 @@ def analyse_survey(  # noqa: C901
         buildings_data.append({
             "geojson": dict(mapping(b_4326)),
             "kohdeluokka": b.kohdeluokka,
+            "kerrosluku": b.kerrosluku,
+            "height_m": round(_bldg_h(b), 1),
             "is_keepout": is_ko,
             "buffer_geojson": dict(mapping(buf_geom_4326)) if buf_geom_4326 else None,
         })
@@ -538,6 +543,9 @@ def analyse_survey(  # noqa: C901
             "zone_count": len(zone_result.intersecting_zones),
             "zones_attribution": zone_result.attribution,
             "home_buffer_m": buf,
+            "home_buffer_max_m": round(config.flight.adv_max_height_m or flight_height_m, 2)
+                                 if config.flight.advanced_mode else None,
+            "advanced_mode": config.flight.advanced_mode,
             "has_parcels": any(hasattr(g, "parcel_id") for g in inp.input_geoms),
             "has_properties": any(hasattr(g, "property_id") for g in inp.input_geoms),
             "route_angle_deg_auto":  _route_data.get("route_angle_deg_auto"),
@@ -831,11 +839,12 @@ def _compute_route_geojson(
         angle = _route.compute_auto_angle(survey_3067)
         strip_wps: list | None = None
 
+        transit_wps: list | None = None
         if config.flight.advanced_mode:
             try:
                 from flightmanager.adaptive_route import compute_adaptive_route
                 H_max = config.flight.adv_max_height_m or H
-                rr, altitude_profile, strip_wps, _ = compute_adaptive_route(
+                rr, altitude_profile, strip_wps, transit_wps = compute_adaptive_route(
                     survey_3067, angle, buildings, power_lines,
                     drone=drone_cfg,
                     H_max=H_max,
@@ -865,7 +874,9 @@ def _compute_route_geojson(
             home_3067=home_3067,
         )
 
-        gj = _route_result_to_geojson(rr, altitude_profile, drone_cfg, ovf, strip_waypoints=strip_wps)
+        gj = _route_result_to_geojson(rr, altitude_profile, drone_cfg, ovf,
+                                      strip_waypoints=strip_wps, transit_waypoints=transit_wps,
+                                      adv_min_height_m=config.flight.adv_min_height_m if config.flight.advanced_mode else None)
         return {
             "route_angle_deg_auto":  round(angle, 1),
             "route_strip_count":     rr.strip_count,
@@ -884,13 +895,15 @@ def _route_result_to_geojson(
     drone_cfg,
     overlap_front_pct: float,
     strip_waypoints: list | None = None,
+    transit_waypoints: list | None = None,
+    adv_min_height_m: float | None = None,
 ) -> dict:
     """Convert a RouteResult + altitude profile to strips/transits GeoJSON dicts.
 
-    When *strip_waypoints* is provided (advanced mode), each strip feature
-    carries the full waypoint coordinates and a ``wpt_alts`` property so
-    the frontend can render a per-segment altitude gradient in 2D and
-    correct height ramp in 3D.
+    When *strip_waypoints* is provided (advanced mode), each strip feature carries
+    the full waypoint coordinates and ``wpt_alts``/``wpt_speeds`` properties.
+    When *transit_waypoints* is provided, each transit feature carries ``wpt_alts``
+    so the 3D view can render per-point 1:1-compliant altitudes along long transits.
     """
     from shapely.geometry import LineString, mapping as _mapping
 
@@ -907,16 +920,46 @@ def _route_result_to_geojson(
             props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2)}
         return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": props}
 
-    def _path_feat(pts):
+    # transit_waypoints covers only inter-strip transits (N-1 entries).
+    # When home_3067 was set, transit_segs_3067 has N+1 entries:
+    #   [home→strip0, inter-strip×(N-1), stripN-1→home]
+    # The inter-strip transits are at indices 1..N-1; their transit_waypoints
+    # indices are 0..N-2.  Without home, segs[0..N-2] maps directly to
+    # transit_waypoints[0..N-2].
+    n_strips = len(route.strips_3067)
+    has_home_transit = len(route.transit_segs_3067) == n_strips + 1
+
+    def _tw_idx(seg_idx: int) -> int | None:
+        """Map a transit_segs index to the corresponding transit_waypoints index."""
+        if has_home_transit:
+            # segs[0]=home_to (no wps), segs[1..N-1]=inter-strip, segs[N]=return (no wps)
+            if 1 <= seg_idx <= n_strips - 1:
+                return seg_idx - 1
+            return None
+        return seg_idx  # direct 1-to-1 when no home transits
+
+    def _path_feat(pts, seg_idx=None):
         line = reproject_to_4326(LineString(pts))
-        return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": {}}
+        props: dict = {}
+        tw_i = _tw_idx(seg_idx) if seg_idx is not None else None
+        if tw_i is not None and transit_waypoints and tw_i < len(transit_waypoints) and transit_waypoints[tw_i]:
+            tw_min = min(tw[2] for tw in transit_waypoints[tw_i])
+            if adv_min_height_m is not None and altitude_profile:
+                H_max_est = max(altitude_profile)
+                if tw_min < H_max_est * 0.99:
+                    props["altitude_m"] = round(adv_min_height_m, 1)
+                else:
+                    props["altitude_m"] = round(tw_min, 1)
+            else:
+                props["altitude_m"] = round(tw_min, 1)
+        return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": props}
 
     strips = [
         _seg_feat(i, *s, alt=altitude_profile[i],
                   speed=drone_cfg.auto_speed(altitude_profile[i], overlap_front_pct))
         for i, s in enumerate(route.strips_3067)
     ]
-    transits = [_path_feat(seg) for seg in route.transit_segs_3067]
+    transits = [_path_feat(seg, i) for i, seg in enumerate(route.transit_segs_3067)]
     return {
         "strips_geojson":   {"type": "FeatureCollection", "features": strips},
         "transits_geojson": {"type": "FeatureCollection", "features": transits},

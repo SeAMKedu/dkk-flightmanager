@@ -354,6 +354,7 @@ async function _fetchAccurateEstimate() {
     adv_max_height_m:          tpl ? tpl.adv_max_height_m           : null,
     adv_powerline_clearance_m: tpl ? tpl.adv_powerline_clearance_m  : null,
     adv_slope_f:               tpl ? tpl.adv_slope_f                : null,
+    adv_min_dip_m:             tpl ? tpl.adv_min_dip_m              : null,
   };
   try {
     var res = await fetch('/api/route_estimate', {

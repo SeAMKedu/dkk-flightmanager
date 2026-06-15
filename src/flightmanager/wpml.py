@@ -105,6 +105,7 @@ class KmzResult:
     route: RouteResult | None = None
     altitude_profile: list[float] = field(default_factory=list)
     strip_waypoints: list | None = None
+    transit_waypoints: list | None = None
     waylines_xml: str | None = None
 
 
@@ -163,8 +164,9 @@ def build_kmz(
     adv_route = None
     adv_alt_profile: list[float] = []
     adv_strip_wps = None
+    adv_transit_wps = None
     if flight_config.advanced_mode and drone is not None:
-        template_xml, waylines_xml, adv_route, adv_alt_profile, adv_strip_wps = _build_advanced_files(
+        template_xml, waylines_xml, adv_route, adv_alt_profile, adv_strip_wps, adv_transit_wps = _build_advanced_files(
             survey_4326, flight_config, speed_ms=speed_ms, drone=drone,
             height_m=height_m, buildings=buildings, power_lines=power_lines,
         )
@@ -196,6 +198,7 @@ def build_kmz(
         route=adv_route,
         altitude_profile=adv_alt_profile,
         strip_waypoints=adv_strip_wps,
+        transit_waypoints=adv_transit_wps,
         waylines_xml=waylines_xml,
     )
 
@@ -264,7 +267,7 @@ def _build_advanced_files(  # noqa: C901
         route, alt_profile, drone=drone, cfg=cfg,
         strip_waypoints=strip_wps, transit_waypoints=transit_wps,
     )
-    return template_xml, waylines_xml, route, alt_profile, strip_wps
+    return template_xml, waylines_xml, route, alt_profile, strip_wps, transit_wps
 
 
 # ---- template.kml builder ----

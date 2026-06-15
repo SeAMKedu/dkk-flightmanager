@@ -56,6 +56,7 @@ class RouteEstimateRequest(BaseModel):
     adv_max_height_m: float | None = None
     adv_powerline_clearance_m: float | None = None
     adv_slope_f: float | None = None
+    adv_min_dip_m: float | None = None
 
 
 class ExportRequest(PreviewRequest):
@@ -429,6 +430,7 @@ async def route_estimate(req: RouteEstimateRequest):
         H_min     = req.adv_min_height_m           or cfg_flight.adv_min_height_m
         clearance = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
         slope_f   = req.adv_slope_f                or cfg_flight.adv_slope_f
+        min_dip_m = req.adv_min_dip_m if req.adv_min_dip_m is not None else cfg_flight.adv_min_dip_m
         try:
             buildings, power_lines = _load_preview_obstacles(reproject_to_3067)
             result, altitude_profile, _strip_wps, _transit_wps = compute_adaptive_route(
@@ -438,7 +440,7 @@ async def route_estimate(req: RouteEstimateRequest):
                 overlap_front_pct=ovf, overlap_side_pct=ovs,
                 powerline_clearance_m=clearance,
                 slope_f=slope_f,
-                min_dip_m=cfg_flight.adv_min_dip_m,
+                min_dip_m=min_dip_m,
                 home_3067=home_3067,
             )
         except Exception as exc:
@@ -553,6 +555,8 @@ def _apply_template_settings(cfg, ts: dict) -> None:
         cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
     if ts.get("adv_slope_f") is not None:
         cfg.flight.adv_slope_f = float(ts["adv_slope_f"])
+    if ts.get("adv_min_dip_m") is not None:
+        cfg.flight.adv_min_dip_m = float(ts["adv_min_dip_m"])
 
     # Inverted-cone keepout: in adaptive flight the drone descends to H_min
     # near buildings, so the A2 exclusion buffer only needs to equal H_min —

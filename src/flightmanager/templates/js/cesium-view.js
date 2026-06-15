@@ -6,6 +6,7 @@
 
 import { st } from './state.js';
 import { map } from './map-init.js';
+import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
 
 // ── Module state ──────────────────────────────────────────────────────────────
 var _viewer = null;
@@ -20,10 +21,10 @@ var _currentEntities = [];
 var _dsmLayer = null;
 
 // Per-layer entity groups for visibility toggling
-var _entityGroups = {area: [], path: [], curtain: [], drone: []};
+var _entityGroups = {area: [], path: [], curtain: [], drone: [], keepout: []};
 
 // Layer visibility state — persists across re-renders
-var _layerVis = {dsm: true, area: true, path: true, curtain: true, drone: true};
+var _layerVis = {dsm: true, area: true, path: true, curtain: true, drone: true, keepout: true};
 
 // Playback
 var _isPlaying = false;
@@ -195,6 +196,35 @@ function _haversineM(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/** Return [lng, lat] centroid of a GeoJSON Polygon or Point geometry. */
+function _bldgCenter(geom) {
+  try {
+    if (geom.type === 'Point') return [geom.coordinates[0], geom.coordinates[1]];
+    if (geom.type === 'Polygon') {
+      var cs = geom.coordinates[0];
+      var lng = cs.reduce(function(s, c) { return s + c[0]; }, 0) / cs.length;
+      var lat = cs.reduce(function(s, c) { return s + c[1]; }, 0) / cs.length;
+      return [lng, lat];
+    }
+  } catch(e) {}
+  return null;
+}
+
+/** Build a Cesium PolygonHierarchy from a GeoJSON Polygon coordinate ring array. */
+function _polyHierarchy(polyCoords) {
+  /* eslint-disable no-undef */
+  var outer = polyCoords[0].map(function(c) {
+    return Cesium.Cartesian3.fromDegrees(c[0], c[1]);
+  });
+  var holes = polyCoords.slice(1).map(function(ring) {
+    return new Cesium.PolygonHierarchy(ring.map(function(c) {
+      return Cesium.Cartesian3.fromDegrees(c[0], c[1]);
+    }));
+  });
+  return new Cesium.PolygonHierarchy(outer, holes);
+  /* eslint-enable no-undef */
+}
+
 function _effectiveSpeedMs() {
   if (st._speedMsOverride !== null && st._speedMsOverride !== undefined) return st._speedMsOverride;
   var h = parseFloat(document.getElementById('hgt').value);
@@ -279,17 +309,6 @@ function _buildWaypoints(altM) {
     });
   }
 
-  function addStrip(strip, i) {
-    var wptAlts   = strip.properties && strip.properties.wpt_alts;
-    var wptSpeeds = strip.properties && strip.properties.wpt_speeds;
-    var coords    = strip.geometry.coordinates;
-    if (wptAlts && wptAlts.length === coords.length) {
-      addCoordsWithAlts(coords, wptAlts, wptSpeeds, stripSpeeds[i]);
-    } else {
-      addCoords(coords, stripAlts[i], stripSpeeds[i]);
-    }
-  }
-
   // Actual altitude at the START of strip idx (first wpt_alts entry, else strip min).
   function _startAlt(strip, idx) {
     var wa = strip.properties && strip.properties.wpt_alts;
@@ -302,26 +321,63 @@ function _buildWaypoints(altM) {
     return (wa && wa.length > 0) ? wa[wa.length - 1] : stripAlts[idx];
   }
 
+  // Pre-compute level turn altitude for every inter-strip transition:
+  // min(strip_end, next_strip_start) so consecutive U-turns stay at a
+  // consistent height rather than oscillating with building-proximity deltas.
+  var turnAlts = [];
+  for (var ti = 0; ti < N - 1; ti++) {
+    turnAlts.push(Math.min(_endAlt(strips[ti], ti), _startAlt(strips[ti + 1], ti + 1)));
+  }
+
+  // Add a strip's waypoints, levelling the first and last coord to the
+  // adjacent turn altitude so strip–transit boundaries are seamless.
+  function addStrip(strip, i) {
+    var wptAlts   = strip.properties && strip.properties.wpt_alts;
+    var wptSpeeds = strip.properties && strip.properties.wpt_speeds;
+    var coords    = strip.geometry.coordinates;
+    if (wptAlts && wptAlts.length === coords.length) {
+      var alts = wptAlts.slice();
+      if (i > 0)     alts[0]             = turnAlts[i - 1];
+      if (i < N - 1) alts[alts.length-1] = turnAlts[i];
+      addCoordsWithAlts(coords, alts, wptSpeeds, stripSpeeds[i]);
+    } else {
+      addCoords(coords, stripAlts[i], stripSpeeds[i]);
+    }
+  }
+
+  // Add a transit segment flying level at the minimum safe altitude.
+  // altitude_m from the feature is the 1:1 minimum over all sampled transit
+  // points; fall back to turnAlts[i] when not present (simple mode).
+  function addTransit(transit, i) {
+    var coords  = transit.geometry.coordinates;
+    var propAlt = transit.properties && transit.properties.altitude_m;
+    var tAlt    = (propAlt != null) ? propAlt : turnAlts[i];
+    var tSpd    = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
+    addCoords(coords, tAlt, tSpd);
+  }
+
   if (hasHome) {
     addCoords(transits[0].geometry.coordinates, _startAlt(strips[0], 0), stripSpeeds[0]);
     strips.forEach(function(strip, i) {
       addStrip(strip, i);
-      if (i < N - 1) {
-        var tAlt = (_endAlt(strip, i) + _startAlt(strips[i + 1], i + 1)) / 2;
-        var tSpd = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
-        addCoords(transits[i + 1].geometry.coordinates, tAlt, tSpd);
-      }
+      if (i < N - 1) addTransit(transits[i + 1], i);
     });
     addCoords(transits[N].geometry.coordinates, _endAlt(strips[N - 1], N - 1), stripSpeeds[N - 1]);
   } else {
+    // No home transit in the GeoJSON (simple mode or export without home transits).
+    // If a takeoff marker exists, bookend the animation so the drone starts and
+    // returns to the takeoff/landing spot.
+    var homePt = getTakeoffPt() || getTakeoffAuto();
+    if (homePt && strips.length > 0) {
+      _addPt(homePt[0], homePt[1], _startAlt(strips[0], 0), stripSpeeds[0]);
+    }
     strips.forEach(function(strip, i) {
       addStrip(strip, i);
-      if (i < N - 1) {
-        var tAlt = (_endAlt(strip, i) + _startAlt(strips[i + 1], i + 1)) / 2;
-        var tSpd = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
-        addCoords(transits[i].geometry.coordinates, tAlt, tSpd);
-      }
+      if (i < N - 1) addTransit(transits[i], i);
     });
+    if (homePt && strips.length > 0) {
+      _addPt(homePt[0], homePt[1], _endAlt(strips[N - 1], N - 1), stripSpeeds[N - 1]);
+    }
   }
 
   // Assign cumulative times using per-waypoint speed
@@ -477,6 +533,55 @@ function _renderScene() {
     },
   });
 
+  // ── 5. Keepout cylinders around buildings (advanced/variable-altitude mode only) ──
+  var _stats = st.previewData && st.previewData.stats;
+  var _advMode = _stats && _stats.advanced_mode;
+  if (_advMode && st.previewData.buildings && st.previewData.buildings.length) {
+    var minH    = (_stats.home_buffer_m    || 30);
+    var maxH    = (_stats.home_buffer_max_m || minH);
+    var redFill = Cesium.Color.fromCssColorString('#dc2626');
+
+    st.previewData.buildings.forEach(function(b) {
+      if (!b.is_keepout) return;
+      var ctr = _bldgCenter(b.geojson);
+      if (!ctr) return;
+      var bldgH  = b.height_m || 7;
+      var rMin   = Math.max(0.5, minH - bldgH);
+      var rMax   = Math.max(0.5, maxH - bldgH);
+
+      // Translucent cylinder: ground → minH
+      _addEntity('keepout', {
+        position: Cesium.Cartesian3.fromDegrees(ctr[0], ctr[1], minH / 2),
+        cylinder: {
+          length:       minH,
+          topRadius:    rMin,
+          bottomRadius: rMin,
+          material:     redFill.withAlpha(0.20),
+          outline:      true,
+          outlineColor: redFill.withAlpha(0.45),
+          outlineWidth: 1,
+        },
+      });
+
+      // Translucent frustum: minH → maxH (widens with altitude per 1:1 rule)
+      if (maxH > minH) {
+        var frustumLen = maxH - minH;
+        _addEntity('keepout', {
+          position: Cesium.Cartesian3.fromDegrees(ctr[0], ctr[1], minH + frustumLen / 2),
+          cylinder: {
+            length:       frustumLen,
+            bottomRadius: rMin,
+            topRadius:    rMax,
+            material:     redFill.withAlpha(0.20),
+            outline:      true,
+            outlineColor: redFill.withAlpha(0.45),
+            outlineWidth: 1,
+          },
+        });
+      }
+    });
+  }
+
   /* eslint-enable no-undef */
 
   // Fly to scene
@@ -490,7 +595,8 @@ function _renderScene() {
   document.getElementById('cesium-play-btn').textContent = '▶';
 
   // Build layer legend (after entities are placed so rows match reality)
-  _buildLegend(hasArea, hasDsm, jobColorHex, _useAltColor ? {min: _altMin, max: _altMax} : null);
+  var _hasKeeput = _advMode && _entityGroups.keepout.length > 0;
+  _buildLegend(hasArea, hasDsm, jobColorHex, _useAltColor ? {min: _altMin, max: _altMax} : null, _hasKeeput);
 }
 
 // ── Layer legend ──────────────────────────────────────────────────────────────
@@ -518,7 +624,7 @@ function _legRow(layer, iconHTML, label) {
   return row;
 }
 
-function _buildLegend(hasArea, hasDsm, colorHex, altRange) {
+function _buildLegend(hasArea, hasDsm, colorHex, altRange, hasKeeput) {
   var leg = document.getElementById('cesium-legend');
   if (!leg) return;
   leg.innerHTML = '<h4>Layers</h4>';
@@ -559,6 +665,12 @@ function _buildLegend(hasArea, hasDsm, colorHex, altRange) {
   leg.appendChild(_legRow('drone',
     '<div class="l-dot" style="background:#fff;border:1.5px solid #374151;"></div>',
     'Drone'));
+
+  if (hasKeeput) {
+    leg.appendChild(_legRow('keepout',
+      '<div class="l-swatch" style="background:#dc262655;border:1.5px solid #dc2626;"></div>',
+      'Keepout zones'));
+  }
 
   leg.style.display = 'block';
 }
