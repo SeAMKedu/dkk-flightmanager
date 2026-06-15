@@ -21,10 +21,10 @@ var _currentEntities = [];
 var _dsmLayer = null;
 
 // Per-layer entity groups for visibility toggling
-var _entityGroups = {area: [], path: [], curtain: [], drone: [], keepout: []};
+var _entityGroups = {area: [], path: [], curtain: [], drone: [], keepout: [], powerline: [], zone: []};
 
 // Layer visibility state — persists across re-renders
-var _layerVis = {dsm: true, area: true, path: true, curtain: true, drone: true, keepout: true};
+var _layerVis = {dsm: true, area: true, path: true, curtain: true, drone: true, keepout: true, powerline: true, zone: true};
 
 // Playback
 var _isPlaying = false;
@@ -533,52 +533,118 @@ function _renderScene() {
     },
   });
 
-  // ── 5. Keepout cylinders around buildings (advanced/variable-altitude mode only) ──
+  // ── 5. Keepout volumes around buildings ─────────────────────────────────────
+  //   A1/A3:      fixed 150 m radius × 150 m tall cylinder (aviation separation rule).
+  //   A2 advanced: cylinder ground→minH + frustum minH→maxH (widens per the 1:1 rule).
+  //   A2 simple:   single cylinder sized by the flat flight altitude.
   var _stats = st.previewData && st.previewData.stats;
   var _advMode = _stats && _stats.advanced_mode;
-  if (_advMode && st.previewData.buildings && st.previewData.buildings.length) {
-    var minH    = (_stats.home_buffer_m    || 30);
-    var maxH    = (_stats.home_buffer_max_m || minH);
+  var _sub = (_stats && _stats.subcategory) || 'A3';
+  var _flightAlt = (_stats && _stats.flight_height_m) || altM;
+  if (st.previewData.buildings && st.previewData.buildings.length) {
     var redFill = Cesium.Color.fromCssColorString('#dc2626');
+    var _A1A3_RADIUS_M = 150, _A1A3_HEIGHT_M = 150;
 
-    st.previewData.buildings.forEach(function(b) {
-      if (!b.is_keepout) return;
-      var ctr = _bldgCenter(b.geojson);
-      if (!ctr) return;
-      var bldgH  = b.height_m || 7;
-      var rMin   = Math.max(0.5, minH - bldgH);
-      var rMax   = Math.max(0.5, maxH - bldgH);
-
-      // Translucent cylinder: ground → minH
+    var _addKeepoutCyl = function(ctr, length, baseAlt, bottomR, topR) {
       _addEntity('keepout', {
-        position: Cesium.Cartesian3.fromDegrees(ctr[0], ctr[1], minH / 2),
+        position: Cesium.Cartesian3.fromDegrees(ctr[0], ctr[1], baseAlt + length / 2),
         cylinder: {
-          length:       minH,
-          topRadius:    rMin,
-          bottomRadius: rMin,
+          length:       length,
+          bottomRadius: bottomR,
+          topRadius:    topR,
           material:     redFill.withAlpha(0.20),
           outline:      true,
           outlineColor: redFill.withAlpha(0.45),
           outlineWidth: 1,
         },
       });
+    };
 
-      // Translucent frustum: minH → maxH (widens with altitude per 1:1 rule)
-      if (maxH > minH) {
-        var frustumLen = maxH - minH;
-        _addEntity('keepout', {
-          position: Cesium.Cartesian3.fromDegrees(ctr[0], ctr[1], minH + frustumLen / 2),
-          cylinder: {
-            length:       frustumLen,
-            bottomRadius: rMin,
-            topRadius:    rMax,
-            material:     redFill.withAlpha(0.20),
-            outline:      true,
-            outlineColor: redFill.withAlpha(0.45),
-            outlineWidth: 1,
+    st.previewData.buildings.forEach(function(b) {
+      if (!b.is_keepout) return;
+      var ctr = _bldgCenter(b.geojson);
+      if (!ctr) return;
+      var bldgH = b.height_m || 7;
+
+      if (_sub !== 'A2') {
+        // A1/A3 — fixed 150 m separation cylinder, regardless of altitude
+        _addKeepoutCyl(ctr, _A1A3_HEIGHT_M, 0, _A1A3_RADIUS_M, _A1A3_RADIUS_M);
+      } else if (_advMode) {
+        var minH = (_stats.home_buffer_m    || 30);
+        var maxH = (_stats.home_buffer_max_m || minH);
+        var rMin = Math.max(0.5, minH - bldgH);
+        var rMax = Math.max(0.5, maxH - bldgH);
+        _addKeepoutCyl(ctr, minH, 0, rMin, rMin);                       // ground → minH
+        if (maxH > minH) _addKeepoutCyl(ctr, maxH - minH, minH, rMin, rMax);  // frustum minH → maxH
+      } else {
+        // A2 simple flat-altitude — cylinder sized by the flight altitude
+        var rSimple = Math.max(0.5, _flightAlt);
+        _addKeepoutCyl(ctr, _flightAlt, 0, rSimple, rSimple);
+      }
+    });
+  }
+
+  // ── 6. Overhead power lines (rectangular keep-out pipe) ─────────────────────
+  //   Rendered as a corridor 60 m wide (30 m buffer each side) extruded 0→40 m,
+  //   which covers nearly all Finnish suurjännitejohto (110 kV+) overhead lines.
+  var _PL_WIDTH_M = 60, _PL_HEIGHT_M = 40;
+  if (st.previewData.power_lines && st.previewData.power_lines.length) {
+    var plFill = Cesium.Color.fromCssColorString('#d97706');
+    st.previewData.power_lines.forEach(function(pl) {
+      if (!pl.is_overhead || !pl.geojson) return;
+      var g = pl.geojson;
+      var segs = g.type === 'LineString'      ? [g.coordinates]
+               : g.type === 'MultiLineString' ? g.coordinates
+               : [];
+      segs.forEach(function(seg) {
+        if (!seg || seg.length < 2) return;
+        var positions = seg.map(function(c) { return Cesium.Cartesian3.fromDegrees(c[0], c[1]); });
+        _addEntity('powerline', {
+          corridor: {
+            positions:      positions,
+            width:          _PL_WIDTH_M,
+            height:         0,
+            extrudedHeight: _PL_HEIGHT_M,
+            cornerType:     Cesium.CornerType.MITERED,
+            material:       plFill.withAlpha(0.18),
+            outline:        true,
+            outlineColor:   plFill.withAlpha(0.5),
           },
         });
-      }
+      });
+    });
+  }
+
+  // ── 7. UAS restriction zones (extruded altitude bands → inverted pyramid) ────
+  //   Each zone is extruded from its floor (lower_limit_m_agl, 0 if GND) to its
+  //   ceiling (upper_limit_m_agl). Concentric airfield zones (A 0–50, C 50–120,
+  //   D 120+) stack into the classic stepped inverted pyramid. Ceiling-less zones
+  //   are capped at a viz height so they remain visible.
+  var _ZONE_VIZ_CAP_M = 150;
+  if (st.previewData.zone_hits && st.previewData.zone_hits.length) {
+    var zoneFill = Cesium.Color.fromCssColorString('#f97316');
+    st.previewData.zone_hits.forEach(function(z) {
+      var g = z.geojson;
+      if (!g) return;
+      var floor = (z.lower_limit_m_agl != null) ? z.lower_limit_m_agl : 0;
+      var ceil  = (z.upper_limit_m_agl != null) ? z.upper_limit_m_agl
+                                                : Math.max(floor + 20, _ZONE_VIZ_CAP_M);
+      if (ceil <= floor) ceil = floor + 10;
+      var polys = g.type === 'Polygon'      ? [g.coordinates]
+                : g.type === 'MultiPolygon' ? g.coordinates
+                : [];
+      polys.forEach(function(rings) {
+        _addEntity('zone', {
+          polygon: {
+            hierarchy:      _polyHierarchy(rings),
+            height:         floor,
+            extrudedHeight: ceil,
+            material:       zoneFill.withAlpha(z.context_only ? 0.08 : 0.14),
+            outline:        true,
+            outlineColor:   Cesium.Color.fromCssColorString('#ea580c').withAlpha(z.context_only ? 0.4 : 0.7),
+          },
+        });
+      });
     });
   }
 
@@ -595,8 +661,10 @@ function _renderScene() {
   document.getElementById('cesium-play-btn').textContent = '▶';
 
   // Build layer legend (after entities are placed so rows match reality)
-  var _hasKeeput = _advMode && _entityGroups.keepout.length > 0;
-  _buildLegend(hasArea, hasDsm, jobColorHex, _useAltColor ? {min: _altMin, max: _altMax} : null, _hasKeeput);
+  var _hasKeeput = _entityGroups.keepout.length > 0;
+  var _hasPowerlines = _entityGroups.powerline.length > 0;
+  var _hasZones = _entityGroups.zone.length > 0;
+  _buildLegend(hasArea, hasDsm, jobColorHex, _useAltColor ? {min: _altMin, max: _altMax} : null, _hasKeeput, _hasPowerlines, _hasZones);
 }
 
 // ── Layer legend ──────────────────────────────────────────────────────────────
@@ -624,7 +692,7 @@ function _legRow(layer, iconHTML, label) {
   return row;
 }
 
-function _buildLegend(hasArea, hasDsm, colorHex, altRange, hasKeeput) {
+function _buildLegend(hasArea, hasDsm, colorHex, altRange, hasKeeput, hasPowerlines, hasZones) {
   var leg = document.getElementById('cesium-legend');
   if (!leg) return;
   leg.innerHTML = '<h4>Layers</h4>';
@@ -670,6 +738,18 @@ function _buildLegend(hasArea, hasDsm, colorHex, altRange, hasKeeput) {
     leg.appendChild(_legRow('keepout',
       '<div class="l-swatch" style="background:#dc262655;border:1.5px solid #dc2626;"></div>',
       'Keepout zones'));
+  }
+
+  if (hasPowerlines) {
+    leg.appendChild(_legRow('powerline',
+      '<div class="l-swatch" style="background:#d9770633;border:1.5px solid #d97706;"></div>',
+      'Power lines'));
+  }
+
+  if (hasZones) {
+    leg.appendChild(_legRow('zone',
+      '<div class="l-swatch" style="background:#f9731626;border:1.5px solid #ea580c;"></div>',
+      'UAS zones'));
   }
 
   leg.style.display = 'block';
