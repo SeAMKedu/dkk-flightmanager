@@ -1,4 +1,23 @@
 #battery-timeline{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:600;pointer-events:none;background:rgba(15,23,42,.82);border-radius:8px;padding:5px 8px;backdrop-filter:blur(3px);display:none}
+
+/* Satellite overpass + weather forecast bar (top centre, mirrors battery timeline) */
+#forecast-bar{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:600;background:rgba(15,23,42,.86);border-radius:8px;padding:5px 8px 4px;backdrop-filter:blur(3px);display:none;max-width:min(86vw,860px);transition:top .15s ease}
+#forecast-bar.with-actions{top:54px}
+#forecast-bar .fc-loading{color:#cbd5e1;font:600 11px sans-serif;padding:6px 10px;text-align:center}
+#forecast-bar .fc-head{color:#93c5fd;font:700 9px/1 sans-serif;letter-spacing:.06em;text-transform:uppercase;text-align:center;margin:0 0 4px}
+#forecast-bar .fc-slots{display:flex;gap:2px;align-items:stretch}
+.fc-slot{flex:1 1 0;min-width:40px;display:flex;flex-direction:column;align-items:center;gap:1px;padding:3px 2px;border-radius:5px;cursor:default}
+.fc-slot.fc-today{background:rgba(245,158,11,.18);outline:1px solid rgba(245,158,11,.5)}
+.fc-date{color:#e2e8f0;font:700 10px/1.1 sans-serif;text-align:center}
+.fc-wx{width:22px;height:22px;color:#e2e8f0;margin:1px 0}
+.fc-wx-empty{opacity:.25}
+.fc-temp{color:#f8fafc;font:700 11px/1 sans-serif}
+.fc-temp .fc-tmin{color:#94a3b8;font-weight:500;margin-left:3px}
+.fc-wind{color:#94a3b8;font:500 9px/1 sans-serif;min-height:9px}
+.fc-wind .fc-u{margin-left:1px}
+.fc-sats{display:flex;flex-wrap:wrap;gap:2px;justify-content:center;margin-top:2px;min-height:12px}
+.fc-sat{color:#fff;font:700 8px/1 sans-serif;padding:2px 3px;border-radius:3px;letter-spacing:.02em}
+.fc-attr{color:#64748b;font:500 8px/1 sans-serif;text-align:right;margin-top:3px}
 #sb.mv-hidden{display:none}
 #legend.mv-hidden{display:none}
 #sp.sp-visible{display:block}

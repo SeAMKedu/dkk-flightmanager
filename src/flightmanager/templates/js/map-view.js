@@ -9,6 +9,7 @@ import { openDeleteModal, openMoveModal } from './modal-utils.js';
 import { clearTakeoffForMapView, _hideVlos } from './takeoff.js';
 import { getMvStatColor, getMvStatMode, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
 import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
+import { showForecastBar, destroyForecastBar, setForecastBarShifted } from './forecast-bar.js';
 import { hideCesiumView } from './cesium-view.js';
 // Circular — only called at runtime:
 import { saveEdit } from './polygon-edit.js';
@@ -92,6 +93,7 @@ export function closeMapView() {
   clearTimeout(_mvHoverTimer);
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
   destroyBatteryTimeline();
+  destroyForecastBar();
   _mvClearLayers();
   _mvHideDim();
   if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
@@ -213,6 +215,7 @@ function _mvApplyFilter(folderFilter, skipFit) {
   });
   stale.forEach(function(p){ _mvSelected.delete(p); });
   showBatteryTimeline(_mvAllFeatures, _mvSelected, _mvCurrentFolder, _mvLayers);
+  showForecastBar(_mvCurrentFolder);
   renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
   if (getMvStatMode() !== 'normal') {
     _mvLayers.forEach(function(item) {
@@ -433,6 +436,7 @@ export function mvClearSel() {
 function _mvUpdateSelBar() {
   var n = _mvSelected.size;
   document.getElementById('mv-actions').classList.toggle('visible', _mvMode && n > 0);
+  setForecastBarShifted(_mvMode && n > 0);
   document.getElementById('mv-sel-count').textContent = n + ' selected';
   document.getElementById('mv-merge-btn').disabled = n < 2;
   var openBtn = document.getElementById('mv-open-btn');
