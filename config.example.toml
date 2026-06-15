@@ -170,6 +170,50 @@ timeout_s = 60
 page_size = 100     # OGC API page size (limit= parameter)
 timeout_s = 60
 
+[satellites]
+# Earth-observation satellite overpass forecast for the job grid square(s).
+# Orbital data (OMM) is fetched from CelesTrak by NORAD id and cached; overpasses
+# are propagated locally with Skyfield. Shown on the map-view forecast bar.
+#
+# The Sentinel-2 MGRS tiling grid is NOT bundled (~20 MB). Download it from
+#   https://zenodo.org/records/10998972
+# and place it at the path below (tile id is in each feature's "Name" property).
+# If the file is missing, overpass info is simply omitted — nothing else breaks.
+grid_file = "data/sentinel2_tiling_grid_wgs84.geojson"
+# Only count near-nadir passes (peak elevation above this many degrees).
+min_elevation_deg = 60.0
+# How many days ahead to compute overpasses.
+days_ahead = 14
+# Re-fetch orbital elements if the cached copy is older than this. EO orbits are
+# stable, so a few days is fine for a "which day" listing.
+omm_max_age_days = 3
+# CelesTrak request timeout (seconds).
+timeout_s = 30
+#
+# Tracked satellites — NORAD ids verified against CelesTrak 2026-06-15.
+# Defaults (Sentinel-2 trio + Landsat 8/9) are applied if this list is omitted.
+# Adding any [[satellites.tracked]] entry replaces the whole default list.
+[[satellites.tracked]]
+norad_id = 40697
+name = "Sentinel-2A"
+enabled = true
+[[satellites.tracked]]
+norad_id = 42063
+name = "Sentinel-2B"
+enabled = true
+[[satellites.tracked]]
+norad_id = 60989
+name = "Sentinel-2C"
+enabled = true
+[[satellites.tracked]]
+norad_id = 39084
+name = "Landsat 8"
+enabled = true
+[[satellites.tracked]]
+norad_id = 49260
+name = "Landsat 9"
+enabled = true
+
 # ---------------------------------------------------------------------------
 # Drone / payload profiles
 #

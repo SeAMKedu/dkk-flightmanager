@@ -56,3 +56,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Large external data (not bundled — see README "Add the Sentinel-2 grid")
+data/sentinel2_tiling_grid_wgs84.geojson

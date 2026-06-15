@@ -755,6 +755,88 @@ def batch_cmd(
         raise typer.Exit(1)
 
 
+def _collect_job_centroids(out_dir: Path, folder: str | None) -> list[tuple[float, float]]:
+    """Return (lat, lon) centroids of all job polygons in *out_dir* (or one folder)."""
+    from shapely.geometry import shape
+
+    from flightmanager.job_store import best_polygon, is_job_dir
+
+    points: list[tuple[float, float]] = []
+    base = out_dir / folder if folder else out_dir
+    if not base.exists():
+        return points
+    for d in sorted(base.iterdir()):
+        if not d.is_dir() or not is_job_dir(d):
+            continue
+        geom = best_polygon(d)
+        if not geom:
+            continue
+        c = shape(geom).centroid
+        points.append((c.y, c.x))
+    return points
+
+
+@app.command("satellites")
+def satellites_cmd(
+    folder: Optional[str] = typer.Option(None, "--folder", help="Only consider jobs in this output subfolder."),
+    point: Optional[str] = typer.Option(None, "--point", help="Check a single 'lat,lon' point instead of jobs."),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """List upcoming satellite overpasses for the job grid square(s).
+
+    Computes near-nadir overpasses of the tracked Earth-observation satellites
+    (configured in [satellites]) over the Sentinel-2 MGRS tile(s) that the jobs
+    fall in. Requires the MGRS grid file (see [satellites].grid_file).
+
+      flightmanager satellites --folder my-group
+      flightmanager satellites --point 62.79,22.84
+    """
+    from collections import defaultdict
+
+    from flightmanager.satellites import overpasses_for_points
+
+    cfg = _load_cfg(config_path)
+
+    if point:
+        try:
+            lat_s, lon_s = point.split(",")
+            points = [(float(lat_s), float(lon_s))]
+        except ValueError:
+            typer.echo("Error: --point must be 'lat,lon'", err=True)
+            raise typer.Exit(1)
+    else:
+        points = _collect_job_centroids(Path(cfg.output.output_dir), folder)
+        if not points:
+            typer.echo("No job polygons found. Use --point to test a coordinate.", err=True)
+            raise typer.Exit(1)
+
+    typer.echo(f"Checking {len(points)} location(s)…")
+    result = overpasses_for_points(points, cfg.satellites, cfg.cache.cache_dir)
+
+    if not result.grid_ok:
+        typer.echo(f"⚠ {result.grid_msg}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"MGRS tile(s): {', '.join(result.tile_ids) or '(none)'}")
+    if result.grid_msg:
+        typer.echo(result.grid_msg)
+    if not result.overpasses:
+        typer.echo("No qualifying overpasses in the search window.")
+        raise typer.Exit(0)
+
+    by_day: dict[str, list] = defaultdict(list)
+    for op in result.overpasses:
+        by_day[op.peak_utc.strftime("%Y-%m-%d")].append(op)
+
+    typer.echo("")
+    for day in sorted(by_day):
+        typer.echo(day)
+        for op in by_day[day]:
+            t = op.peak_utc.strftime("%H:%M UTC")
+            typer.echo(f"  {t}  {op.name:<14} {op.tile_id:<6} peak {op.max_elev_deg:.0f}°")
+    typer.echo("")
+    typer.echo(result.attribution)
+
+
 @app.command("mcp")
 def mcp_cmd(
     config_path: str = typer.Option("config.toml", "--config", "-c"),

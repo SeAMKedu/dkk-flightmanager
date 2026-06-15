@@ -22,6 +22,7 @@ dependencies = [
     "tomli-w>=1.0",
     "mcp>=1.0",
     "filelock>=3.12",
+    "skyfield>=1.49",
 ]
 
 [project.optional-dependencies]

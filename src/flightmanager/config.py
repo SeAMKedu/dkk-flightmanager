@@ -280,6 +280,43 @@ class PropertiesConfig(BaseModel):
     timeout_s: int = Field(default=60, gt=0)
 
 
+class TrackedSatellite(BaseModel):
+    # Permanent NORAD Catalog Number — orbital data is fetched from CelesTrak by id.
+    norad_id: int = Field(gt=0)
+    # UI display name (free text; not used to look up orbital data).
+    name: str
+    # Toggle without removing the entry.
+    enabled: bool = True
+
+
+class SatellitesConfig(BaseModel):
+    # Earth-observation satellites whose overpasses are computed for the job grid.
+    # Defaults: the optical Sentinel-2 trio + Landsat 8/9 (good for agriculture).
+    # NORAD ids verified against CelesTrak 2026-06-15.
+    tracked: list[TrackedSatellite] = Field(default_factory=lambda: [
+        TrackedSatellite(norad_id=40697, name="Sentinel-2A"),
+        TrackedSatellite(norad_id=42063, name="Sentinel-2B"),
+        TrackedSatellite(norad_id=60989, name="Sentinel-2C"),
+        TrackedSatellite(norad_id=39084, name="Landsat 8"),
+        TrackedSatellite(norad_id=49260, name="Landsat 9"),
+    ])
+    # Path to the Sentinel-2 MGRS tiling-grid GeoJSON (tile id in the "Name"
+    # property). ~20 MB — NOT bundled. Download from https://zenodo.org/records/10998972
+    # and place at the path below. If missing, overpass features degrade gracefully.
+    grid_file: str = "data/sentinel2_tiling_grid_wgs84.geojson"
+    # CelesTrak OMM (Orbit Mean-Elements Message) JSON endpoint. {catnr} is the NORAD id.
+    omm_url: str = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=json"
+    # Only count overpasses whose peak elevation exceeds this (near-nadir capture).
+    min_elevation_deg: float = Field(default=60.0, ge=0, le=90)
+    # How many days ahead to search for overpasses.
+    days_ahead: int = Field(default=14, gt=0, le=30)
+    # Re-fetch OMM if the cached copy is older than this. Sun-synchronous EO orbits
+    # are stable, so multi-day-old elements are fine for a "which day" listing.
+    omm_max_age_days: int = Field(default=3, gt=0)
+    # CelesTrak request timeout (seconds).
+    timeout_s: int = Field(default=30, gt=0)
+
+
 class AppConfig(BaseModel):
     flight: FlightConfig
     home_safety: HomeSafetyConfig = Field(default_factory=HomeSafetyConfig)
@@ -290,6 +327,7 @@ class AppConfig(BaseModel):
     properties: PropertiesConfig = Field(default_factory=PropertiesConfig)
     zones: ZonesConfig = Field(default_factory=ZonesConfig)
     powerlines: PowerLinesConfig = Field(default_factory=PowerLinesConfig)
+    satellites: SatellitesConfig = Field(default_factory=SatellitesConfig)
     # Drone / payload profiles.  The built-in list covers common DJI mapping drones.
     # Add [[drones]] entries in config.toml to extend or override.
     default_drone: str = "m3m-ms"

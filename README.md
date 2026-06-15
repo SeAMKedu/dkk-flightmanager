@@ -188,6 +188,24 @@ The MML API key is free — obtain one at https://www.maanmittauslaitos.fi/rajap
 
 `flightmanager` reads the `.env` file automatically on startup, so no extra steps are needed. Ruokavirasto parcel data is open and requires no key.
 
+### 5 — (Optional) Add the Sentinel-2 grid for satellite overpasses
+
+The satellite-overpass feature maps your jobs onto Sentinel-2 MGRS tiles and computes upcoming near-nadir overpasses of the tracked Earth-observation satellites. This needs the Sentinel-2 tiling-grid GeoJSON, which is **not bundled** (~20 MB). Download it once and place it where `config.toml` expects it:
+
+```bash
+mkdir -p data
+# Download sentinel2_tiling_grid_wgs84.geojson from:
+#   https://zenodo.org/records/10998972
+# and save it to data/sentinel2_tiling_grid_wgs84.geojson
+```
+
+Override the location with `grid_file` in the `[satellites]` section if you keep it elsewhere. Orbital elements are fetched from CelesTrak on demand and cached locally; no key is required. If the grid file is absent, overpass info is simply omitted — nothing else is affected. List overpasses from the CLI:
+
+```bash
+flightmanager satellites --folder my-group   # tiles + overpasses for a job folder
+flightmanager satellites --point 62.79,22.84 # check a single lat,lon
+```
+
 ## Browser UI
 
 The recommended way to use the tool is the built-in browser UI:
