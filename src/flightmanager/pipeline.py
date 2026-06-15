@@ -339,6 +339,7 @@ def analyse_survey(  # noqa: C901
     refresh: bool = False,
     progress_cb: Callable[[str, str, int], None] | None = None,
     custom_polygon_4326: Any | None = None,
+    takeoff_point_4326: list | None = None,
 ) -> dict:
     """Run parcels → buildings → geometry → zones; return GeoJSON dict.
 
@@ -494,14 +495,17 @@ def analyse_survey(  # noqa: C901
 
     _cb(progress_cb, "complete", "Preview complete", 100)
 
-    # Suggest takeoff/landing position: boundary point minimising max VLOS distance.
-    try:
-        _tkx, _tky = suggest_takeoff_point(survey_geom.survey_3067)
-        from shapely.geometry import Point as _Point
-        _tk_4326 = reproject_to_4326(_Point(_tkx, _tky))
-        takeoff_point_4326 = [_tk_4326.x, _tk_4326.y]
-    except Exception:
-        takeoff_point_4326 = None
+    # Takeoff/landing position: honour a caller-supplied point (e.g. the user's
+    # dragged/saved marker) so the route's home legs anchor where the user expects;
+    # otherwise suggest the boundary point minimising max VLOS distance.
+    if takeoff_point_4326 is None:
+        try:
+            _tkx, _tky = suggest_takeoff_point(survey_geom.survey_3067)
+            from shapely.geometry import Point as _Point
+            _tk_4326 = reproject_to_4326(_Point(_tkx, _tky))
+            takeoff_point_4326 = [_tk_4326.x, _tk_4326.y]
+        except Exception:
+            takeoff_point_4326 = None
 
     # Route estimate: actual strip intersections for flight-time/photo preview.
     _route_data = _compute_route_geojson(

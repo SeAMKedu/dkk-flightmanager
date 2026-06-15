@@ -39,6 +39,7 @@ class PreviewRequest(BaseModel):
     custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
     route_angle_deg: float | None = None
     speed_ms: float | None = None
+    takeoff_point_4326: list | None = None  # [lon, lat] — user's pinned takeoff, if any
     template_settings: dict | None = None  # per-job template/waylines overrides
 
 
@@ -120,6 +121,7 @@ async def start_preview(req: PreviewRequest):
                 property_ids=req.property_ids or None,
                 progress_cb=cb,
                 custom_polygon_4326=custom_poly_geom,
+                takeoff_point_4326=req.takeoff_point_4326 or None,
             )
             _st.last_preview_result = result
             print(f"[preview] job {job_id[:8]} done")
@@ -390,10 +392,9 @@ def _load_preview_obstacles(reproject_to_3067):
 @router.post("/api/route_estimate")
 async def route_estimate(req: RouteEstimateRequest):
     """Quick route estimate: actual strip intersections, no pipeline needed."""
-    from shapely.geometry import LineString, Point, shape as _shape
+    from shapely.geometry import Point, shape as _shape
     from flightmanager import route as _route
-    from flightmanager.geometry import reproject_to_3067, reproject_to_4326
-    from shapely.geometry import mapping
+    from flightmanager.geometry import reproject_to_3067
 
     cfg = _st.config
     drone = next((d for d in cfg.drones if d.name == req.drone), None) if req.drone else None
@@ -448,10 +449,13 @@ async def route_estimate(req: RouteEstimateRequest):
             print(f"[route_estimate] adaptive route failed: {exc}")
             result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
             altitude_profile = [H_max] * result.strip_count
+            _strip_wps = _transit_wps = None
+        adv_min_h = H_min
     else:
         result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
         altitude_profile = [H] * result.strip_count
-        _strip_wps = None
+        _strip_wps = _transit_wps = None
+        adv_min_h = None
 
     flight_time = _route.estimate_flight_time(
         result,
@@ -462,30 +466,15 @@ async def route_estimate(req: RouteEstimateRequest):
         home_3067=home_3067,
     )
 
-    def _seg_to_feature(i: int, x1: float, y1: float, x2: float, y2: float,
-                        alt: float, strip_speed: float):
-        wps = _strip_wps[i] if _strip_wps and i < len(_strip_wps) else None
-        if wps and len(wps) > 2:
-            line_4326  = reproject_to_4326(LineString([(wp[0], wp[1]) for wp in wps]))
-            wpt_alts   = [round(wp[2], 1) for wp in wps]
-            wpt_speeds = [round(wp[3], 2) for wp in wps]
-            props = {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2),
-                     "wpt_alts": wpt_alts, "wpt_speeds": wpt_speeds}
-        else:
-            line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
-            props = {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2)}
-        return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": props}
-
-    def _path_to_feature(pts: list) -> dict:
-        line_4326 = reproject_to_4326(LineString(pts))
-        return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
-
-    strips_features = [
-        _seg_to_feature(i, *s, alt=altitude_profile[i],
-                        strip_speed=drone.auto_speed(altitude_profile[i], ovf))
-        for i, s in enumerate(result.strips_3067)
-    ]
-    transit_features = [_path_to_feature(s) for s in result.transit_segs_3067]
+    # Build strips/transits GeoJSON via the same helper the preview/export paths use,
+    # so transit features carry the 1:1-safe ``altitude_m`` (the 3D view falls back to
+    # strip-end turn altitudes otherwise, dipping into building frustums).
+    from flightmanager.pipeline import _route_result_to_geojson
+    gj = _route_result_to_geojson(
+        result, altitude_profile, drone, ovf,
+        strip_waypoints=_strip_wps, transit_waypoints=_transit_wps,
+        adv_min_height_m=adv_min_h,
+    )
 
     return {
         "strip_count":       result.strip_count,
@@ -495,8 +484,8 @@ async def route_estimate(req: RouteEstimateRequest):
         "angle_deg_used":    round(angle_deg, 1),
         "over_one_battery":  flight_time > drone.battery_minutes,
         "battery_minutes":   drone.battery_minutes,
-        "strips_geojson":    {"type": "FeatureCollection", "features": strips_features},
-        "transits_geojson":  {"type": "FeatureCollection", "features": transit_features},
+        "strips_geojson":    gj["strips_geojson"],
+        "transits_geojson":  gj["transits_geojson"],
         "advanced_mode":     req.advanced_mode,
         "altitude_profile":  [round(a, 1) for a in altitude_profile],
     }
