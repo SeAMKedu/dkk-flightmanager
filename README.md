@@ -279,14 +279,17 @@ Preview runs automatically whenever a parameter changes. The map shows the surve
 
 ### 3D flight preview
 
-> **Work in progress**
-
 Click the **3D** button in the map controls (top-left, next to the layer switcher) to switch from the Leaflet 2D view to an interactive CesiumJS 3D globe. The button is enabled once a route estimate has been computed.
 
 In 3D view:
 - The flight path is rendered as a tube. In simple mode all strips are shown in a single colour. In **variable-altitude** mode (ADV active) strips are colour-coded by altitude using the same viridis palette as the DSM overlay (purple = low altitude near buildings, yellow = high altitude over open field) and a colour legend appears in the top-right corner of the 3D view.
 - A translucent curtain hangs below the path to visualise the ground clearance profile.
-- **Playback controls** appear at the bottom of the 3D view: ▶ play/pause, ⟳ reset, a time scrubber, and a playback-speed selector. The drone icon animates along the route in real time.
+- **Obstacle and restriction volumes** are drawn around the route so you can eyeball clearances:
+  - **Building keep-out** (red) — in A2, a 1:1 climb envelope around each keep-out building: a cylinder from ground to the minimum altitude plus a widening frustum up to the maximum in variable-altitude mode, or a single cylinder sized by the flat flight altitude in simple mode. In A1/A3 a fixed 150 m radius × 150 m tall separation cylinder per the aviation rule.
+  - **Power lines** (amber) — each overhead 110 kV+ line as a 60 m wide × 40 m tall rectangular keep-out pipe.
+  - **UAS zones** (orange) — each restriction zone extruded from its altitude floor to its ceiling, so an airfield's concentric A/B/C/D bands stack into the characteristic stepped inverted pyramid.
+- A **layer legend** (top-right) lists every active layer — DSM, area, flight path, curtain, drone, keep-out, power lines, UAS zones — each with an eye toggle for visibility.
+- **Playback controls** appear at the bottom of the 3D view: ▶ play/pause, ⟳ reset, a time scrubber, and a playback-speed selector. The drone icon animates along the route in real time, with an altitude/speed telemetry readout.
 - Click **2D** (the mirror of the toggle, shown over the Cesium view) to return to the Leaflet map.
 
 The 3D view loads CesiumJS from a CDN on first use; subsequent activations are instant.
