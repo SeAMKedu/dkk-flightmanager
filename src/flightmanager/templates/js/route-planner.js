@@ -39,10 +39,12 @@ function _getRouteParams() {
   };
 }
 
-function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
+// Simple scanline clip — just parallel lines at the given angle, no ordering or transits.
+// Used for the instant rough preview; Python supplies the accurate route after 500 ms.
+function _computeRoughLines(polygon4326, angleDeg, stripM, fpAcross) {
   var ring = polygon4326.type === 'Polygon' ? polygon4326.coordinates[0]
            : (polygon4326.coordinates[0] ? polygon4326.coordinates[0][0] : null);
-  if (!ring || ring.length < 3) return { lines: [], photoCount: 0 };
+  if (!ring || ring.length < 3) return [];
 
   var lat0 = 0, lon0 = 0;
   ring.forEach(function(c) { lon0 += c[0]; lat0 += c[1]; });
@@ -55,39 +57,22 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
 
   var rotRad = (angleDeg - 90) * Math.PI / 180;
   var cosR = Math.cos(rotRad), sinR = Math.sin(rotRad);
-  function rotPt(p)  { return [p[0]*cosR - p[1]*sinR, p[0]*sinR + p[1]*cosR]; }
-
-  var rp = pts.map(rotPt);
-  var minY = Infinity, maxY = -Infinity, sumX = 0;
-  rp.forEach(function(p) {
-    if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1]; sumX += p[0];
-  });
-  var midX = sumX / rp.length;
-
-  var home = getTakeoffPt() || getTakeoffAuto();
-  var homeRotY = (minY + maxY) / 2, homeRotX = midX;
-  if (home) {
-    var hx = (home[0] - lon0) * mLon, hy = (home[1] - lat0) * mLat;
-    homeRotX = hx * cosR - hy * sinR;
-    homeRotY = hx * sinR + hy * cosR;
-  }
-
-  var firstOffset = (fpAcross != null ? fpAcross : stripM) / 2;
-  var stripsY = [];
-  for (var y = minY + firstOffset; y <= maxY + 1e-6; y += stripM) stripsY.push(y);
-  if (Math.abs(homeRotY - maxY) < Math.abs(homeRotY - minY)) stripsY.reverse();
-
-  var firstFromLeft = homeRotX <= midX;
+  function rotPt(p) { return [p[0]*cosR - p[1]*sinR, p[0]*sinR + p[1]*cosR]; }
   var backCos = Math.cos(-rotRad), backSin = Math.sin(-rotRad);
   function unrot(px, py) { return [px*backCos - py*backSin, px*backSin + py*backCos]; }
 
-  var n = rp.length, lines = [], photoCount = 0;
-  stripsY.forEach(function(yS, idx) {
+  var rp = pts.map(rotPt);
+  var minY = Infinity, maxY = -Infinity;
+  rp.forEach(function(p) { if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1]; });
+
+  var firstOffset = (fpAcross != null ? fpAcross : stripM) / 2;
+  var n = rp.length, lines = [];
+  for (var y = minY + firstOffset; y <= maxY + 1e-6; y += stripM) {
     var xs = [];
     for (var i = 0; i < n - 1; i++) {
       var ay = rp[i][1], by = rp[i+1][1];
-      if ((ay <= yS && by > yS) || (by <= yS && ay > yS)) {
-        var t = (yS - ay) / (by - ay);
+      if ((ay <= y && by > y) || (by <= y && ay > y)) {
+        var t = (y - ay) / (by - ay);
         xs.push(rp[i][0] + t * (rp[i+1][0] - rp[i][0]));
       }
     }
@@ -95,83 +80,35 @@ function _computeStripsJS(polygon4326, angleDeg, stripM, photoM, fpAcross) {
     for (var j = 0; j + 1 < xs.length; j += 2) {
       var x0 = xs[j], x1 = xs[j+1];
       if (x1 <= x0 + 0.1) continue;
-      var fml = (idx % 2 === 0) ? firstFromLeft : !firstFromLeft;
-      var pa = unrot(fml ? x0 : x1, yS), pb = unrot(fml ? x1 : x0, yS);
+      var pa = unrot(x0, y), pb = unrot(x1, y);
       lines.push([
         [lat0 + pa[1]/mLat, lon0 + pa[0]/mLon],
         [lat0 + pb[1]/mLat, lon0 + pb[0]/mLon],
       ]);
-      photoCount += Math.ceil((x1 - x0) / photoM) + 1;
     }
+  }
+  return lines;
+}
+
+function _drawRoughPreview(polygon4326, angleDeg, stripM, fpAcross) {
+  if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
+  lrs.route = null; lrs.coverage = null;
+
+  var lines = _computeRoughLines(polygon4326, angleDeg, stripM, fpAcross);
+  if (!lines.length) return;
+
+  var g = L.layerGroup();
+  lines.forEach(function(line) {
+    L.polyline(line, {color: '#f59e0b', weight: 1.5, opacity: 0.45,
+                      dashArray: '5 5', interactive: false}).addTo(g);
   });
-
-  var rpOpen = rp.slice(0, rp.length - 1);
-  var nRing   = rpOpen.length;
-
-  function geoToRot(ll) {
-    var px = (ll[1] - lon0) * mLon, py = (ll[0] - lat0) * mLat;
-    return [px * cosR - py * sinR, px * sinR + py * cosR];
-  }
-  function rotToGeo(rxy) {
-    var lx = rxy[0] * backCos - rxy[1] * backSin;
-    var ly = rxy[0] * backSin + rxy[1] * backCos;
-    return [lat0 + ly / mLat, lon0 + lx / mLon];
-  }
-  function inRing(rx, ry) {
-    var inside = false;
-    for (var i = 0, j = nRing - 1; i < nRing; j = i++) {
-      var xi = rpOpen[i][0], yi = rpOpen[i][1], xj = rpOpen[j][0], yj = rpOpen[j][1];
-      if (((yi > ry) !== (yj > ry)) && (rx < (xj - xi) * (ry - yi) / (yj - yi) + xi))
-        inside = !inside;
-    }
-    return inside;
-  }
-  function nearestSegIdx(rx, ry) {
-    var bestD = Infinity, best = 0;
-    for (var i = 0; i < nRing; i++) {
-      var ax = rpOpen[i][0], ay = rpOpen[i][1];
-      var bx = rpOpen[(i + 1) % nRing][0], by = rpOpen[(i + 1) % nRing][1];
-      var dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
-      var t = l2 < 1e-10 ? 0 : Math.max(0, Math.min(1, ((rx - ax) * dx + (ry - ay) * dy) / l2));
-      var d = Math.hypot(rx - (ax + t * dx), ry - (ay + t * dy));
-      if (d < bestD) { bestD = d; best = i; }
-    }
-    return best;
-  }
-  function boundaryTransit(p1geo, p2geo) {
-    var p1r = geoToRot(p1geo), p2r = geoToRot(p2geo);
-    var mx = (p1r[0] + p2r[0]) / 2, my = (p1r[1] + p2r[1]) / 2;
-    if (inRing(mx, my)) return [p1geo, p2geo];
-    var i1 = nearestSegIdx(p1r[0], p1r[1]);
-    var i2 = nearestSegIdx(p2r[0], p2r[1]);
-    if (i1 === i2) return [p1geo, p2geo];
-    var stepsCW  = ((i2 - i1) % nRing + nRing) % nRing;
-    var stepsCCW = ((i1 - i2) % nRing + nRing) % nRing;
-    var cwMid  = [], ccwMid = [];
-    for (var s = 0; s < stepsCW;  s++) cwMid.push(rotToGeo(rpOpen[(i1 + 1 + s) % nRing]));
-    for (var s = 0; s < stepsCCW; s++) ccwMid.push(rotToGeo(rpOpen[(i1 - s + nRing) % nRing]));
-    function plenGeo(pts) {
-      var d = 0;
-      for (var k = 0; k + 1 < pts.length; k++)
-        d += Math.hypot((pts[k+1][1]-pts[k][1])*mLon, (pts[k+1][0]-pts[k][0])*mLat);
-      return d;
-    }
-    var cwPath  = [p1geo].concat(cwMid,  [p2geo]);
-    var ccwPath = [p1geo].concat(ccwMid, [p2geo]);
-    return plenGeo(cwPath) <= plenGeo(ccwPath) ? cwPath : ccwPath;
-  }
-
-  var transits = [];
-  var homePt = _routeAngleAdjusting ? null : (getTakeoffPt() || getTakeoffAuto());
-  if (lines.length) {
-    if (homePt) transits.push([homePt, lines[0][0]]);
-    for (var ti = 0; ti < lines.length - 1; ti++) {
-      transits.push(boundaryTransit(lines[ti][1], lines[ti+1][0]));
-    }
-    if (homePt) transits.push([lines[lines.length-1][1], homePt]);
-  }
-
-  return { lines: lines, transits: transits, photoCount: photoCount };
+  _routeLayer = g; lrs.route = g;
+  var btn = document.getElementById('leg-route');
+  if (btn && !btn.classList.contains('off')) g.addTo(map);
+  var row = document.getElementById('leg-route-row');
+  if (row) row.style.display = '';
+  notifyCesiumRouteReady(null, null);
 }
 
 export function _clearRouteLayer() {
@@ -224,7 +161,7 @@ function _altColor(t) {
   return '#' + [r,g,bv].map(function(x){return x.toString(16).padStart(2,'0');}).join('');
 }
 
-function _drawRouteLines(lines, transits, fpAcross, altitudes) {
+function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   if (!lines || !lines.length) { lrs.route = null; lrs.coverage = null; return; }
@@ -232,22 +169,39 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes) {
   var lat0 = lines[0][0][0], lon0 = lines[0][0][1];
   var mLat = 111132.0, mLon = mLat * Math.cos(lat0 * Math.PI / 180);
 
-  // Compute altitude range for color mapping
-  var hasAlt = altitudes && altitudes.length === lines.length;
-  var altMin = hasAlt ? Math.min.apply(null, altitudes) : 0;
-  var altMax = hasAlt ? Math.max.apply(null, altitudes) : 1;
+  var hasAlt     = altitudes    && altitudes.length    === lines.length;
+  var hasWptAlts = wptAltsList  && wptAltsList.length  === lines.length;
+
+  // Global altitude range across all waypoints for consistent colour mapping
+  var allAlts = [];
+  if (hasWptAlts) {
+    wptAltsList.forEach(function(wa) { if (wa) wa.forEach(function(a) { allAlts.push(a); }); });
+  }
+  if (!allAlts.length && hasAlt) allAlts = altitudes;
+  var altMin   = allAlts.length ? Math.min.apply(null, allAlts) : 0;
+  var altMax   = allAlts.length ? Math.max.apply(null, allAlts) : 1;
   var altRange = (altMax - altMin) || 1;
 
   var g = L.layerGroup();
   var defaultColor = '#f59e0b';
   lines.forEach(function(line, idx) {
-    var color = hasAlt
-      ? _altColor((altitudes[idx] - altMin) / altRange)
-      : defaultColor;
-    var arrowColor = hasAlt ? color : '#b45309';
-    L.polyline(line, {color: color, weight: 2, opacity: 0.9, interactive: false}).addTo(g);
-    var ll1 = line[0], ll2 = line[1];
+    var wptAlts = hasWptAlts ? wptAltsList[idx] : null;
+    if (wptAlts && wptAlts.length === line.length && wptAlts.length > 2) {
+      // Gradient: one Leaflet polyline segment per waypoint pair, coloured by mid-altitude
+      for (var k = 0; k < line.length - 1; k++) {
+        var midAlt = (wptAlts[k] + wptAlts[k + 1]) / 2;
+        var segColor = _altColor((midAlt - altMin) / altRange);
+        L.polyline([line[k], line[k + 1]], {color: segColor, weight: 2, opacity: 0.9, interactive: false}).addTo(g);
+      }
+    } else {
+      var color = hasAlt ? _altColor((altitudes[idx] - altMin) / altRange) : defaultColor;
+      L.polyline(line, {color: color, weight: 2, opacity: 0.9, interactive: false}).addTo(g);
+    }
+    // Direction arrow at strip midpoint (use start→end for bearing regardless of inner coords)
+    var ll1 = line[0], ll2 = line[line.length - 1];
     var mid = [(ll1[0]+ll2[0])/2, (ll1[1]+ll2[1])/2];
+    var stripAlt = hasAlt ? altitudes[idx] : null;
+    var arrowColor = stripAlt != null ? _altColor((stripAlt - altMin) / altRange) : '#b45309';
     var dx = (ll2[1]-ll1[1])*mLon, dy = (ll2[0]-ll1[0])*mLat;
     var deg = Math.atan2(-dy, dx) * 180 / Math.PI;
     var arrowHtml =
@@ -273,9 +227,9 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes) {
   // Altitude legend — show gradient bar with min/max when altitudes vary
   var altRow = document.getElementById('leg-alt-row');
   if (altRow) {
-    if (hasAlt) {
-      var altMin2 = Math.round(Math.min.apply(null, altitudes));
-      var altMax2 = Math.round(Math.max.apply(null, altitudes));
+    if (allAlts.length) {
+      var altMin2 = Math.round(altMin);
+      var altMax2 = Math.round(altMax);
       var minEl = document.getElementById('leg-alt-min');
       var maxEl = document.getElementById('leg-alt-max');
       if (minEl) minEl.textContent = altMin2 + ' m';
@@ -296,7 +250,8 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes) {
       var color = hasAlt ? _altColor((altitudes[idx] - altMin) / altRange) : '#f59e0b';
       var covStyle = {color: color, weight: 0.8, opacity: 0.5,
                       fillColor: color, fillOpacity: 0.15, interactive: false};
-      var corners = _stripCoverageRect(line[0], line[1], fpAcross, lat0, lon0, mLat, mLon);
+      // Coverage rect uses only the endpoints, not intermediate waypoints
+      var corners = _stripCoverageRect(line[0], line[line.length - 1], fpAcross, lat0, lon0, mLat, mLon);
       if (corners) L.polygon(corners, covStyle).addTo(cg);
     });
     _coverageLayer = cg; lrs.coverage = cg;
@@ -309,20 +264,24 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes) {
 
 function _drawRouteGeoJSON(stripsGeojson, transitsGeojson) {
   if (!stripsGeojson || !stripsGeojson.features || !stripsGeojson.features.length) return;
-  var lines = stripsGeojson.features.map(function(f) {
+  var features = stripsGeojson.features;
+  var lines = features.map(function(f) {
     return f.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
   });
-  var altitudes = stripsGeojson.features.map(function(f) {
+  var altitudes = features.map(function(f) {
     return f.properties && f.properties.altitude_m != null ? f.properties.altitude_m : null;
+  });
+  var wptAltsList = features.map(function(f) {
+    return f.properties && f.properties.wpt_alts ? f.properties.wpt_alts : null;
   });
   var _validAlts = altitudes.filter(function(a) { return a !== null; });
   var _altVaries = _validAlts.length > 1 &&
     (Math.max.apply(null, _validAlts) - Math.min.apply(null, _validAlts)) > 1.0;
-  if (!_altVaries) altitudes = null;
+  if (!_altVaries) { altitudes = null; wptAltsList = null; }
   var transits = (transitsGeojson && transitsGeojson.features || []).map(function(f) {
     return f.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
   });
-  _drawRouteLines(lines, transits, _lastFpAcross, altitudes);
+  _drawRouteLines(lines, transits, _lastFpAcross, altitudes, wptAltsList);
   notifyCesiumRouteReady(stripsGeojson, transitsGeojson);
 }
 
@@ -336,22 +295,45 @@ export function updateRouteStats(data) {
   se.textContent = (data && data.strip_count     != null) ? data.strip_count                              : '—';
   pe.textContent = (data && data.photo_count     != null) ? '~' + data.photo_count                        : '—';
   te.textContent = (data && data.flight_time_min != null) ? '~' + Math.round(data.flight_time_min) + ' min' : '—';
+
+  var minEl = document.getElementById('rstat-spd-min');
+  var avgEl = document.getElementById('rstat-spd-avg');
+  var maxEl = document.getElementById('rstat-spd-max');
+  if (!minEl) return;
+  var speeds = data && data.strips_geojson && data.strips_geojson.features
+    ? data.strips_geojson.features.map(function(f) { return f.properties && f.properties.speed_ms; }).filter(function(v) { return v != null; })
+    : [];
+  if (speeds.length) {
+    var mn = speeds.reduce(function(a, b) { return Math.min(a, b); }, Infinity);
+    var mx = speeds.reduce(function(a, b) { return Math.max(a, b); }, -Infinity);
+    var av = speeds.reduce(function(a, b) { return a + b; }, 0) / speeds.length;
+    minEl.textContent = mn.toFixed(1) + ' m/s';
+    avgEl.textContent = av.toFixed(1) + ' m/s';
+    maxEl.textContent = mx.toFixed(1) + ' m/s';
+  } else {
+    minEl.textContent = '—';
+    avgEl.textContent = '—';
+    maxEl.textContent = '—';
+  }
 }
 
-export function updateRouteOverlay() {
+export function updateRouteOverlay(cachedStrips, cachedTransits) {
   if (!st.previewData || !st.previewData.survey) { _clearRouteLayer(); updateRouteStats(null); return; }
   var p = _getRouteParams();
   if (!p) { _clearRouteLayer(); updateRouteStats(null); return; }
   _lastFpAcross = p.fpAcross;
-  var r = _computeStripsJS(st.previewData.survey, p.angle, p.stripM, p.photoM, p.fpAcross);
-  _drawRouteLines(r.lines, r.transits, p.fpAcross);
-  updateRouteStats({ strip_count: r.lines.length, photo_count: r.photoCount, flight_time_min: null });
+  if (cachedStrips) {
+    _drawRouteGeoJSON(cachedStrips, cachedTransits);
+    return;
+  }
+  _drawRoughPreview(st.previewData.survey, p.angle, p.stripM, p.fpAcross);
+  updateRouteStats(null);
   _scheduleAccurateEstimate();
 }
 
 function _scheduleAccurateEstimate() {
   if (_routeDebounceTimer) clearTimeout(_routeDebounceTimer);
-  _routeDebounceTimer = setTimeout(_fetchAccurateEstimate, 800);
+  _routeDebounceTimer = setTimeout(_fetchAccurateEstimate, 500);
 }
 
 async function _fetchAccurateEstimate() {
@@ -372,6 +354,7 @@ async function _fetchAccurateEstimate() {
     adv_max_height_m:          tpl ? tpl.adv_max_height_m           : null,
     adv_powerline_clearance_m: tpl ? tpl.adv_powerline_clearance_m  : null,
     adv_slope_f:               tpl ? tpl.adv_slope_f                : null,
+    adv_min_dip_m:             tpl ? tpl.adv_min_dip_m              : null,
   };
   try {
     var res = await fetch('/api/route_estimate', {

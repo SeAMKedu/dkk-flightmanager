@@ -113,8 +113,14 @@ class FlightConfig(BaseModel):
     # Advanced (obstacle-aware) waypoint mode
     advanced_mode: bool = Field(default=False)
     adv_min_height_m: float = Field(default=30.0, ge=0)
+    # Maximum altitude in adaptive sweep mode.  None (default) means the drone
+    # flies at the GSD-derived height when clear of obstacles.  Set explicitly
+    # to allow flying higher than the GSD target in open areas (coarser GSD but
+    # fewer strips and faster coverage).
+    adv_max_height_m: float | None = Field(default=None, ge=0)
     adv_powerline_clearance_m: float = Field(default=70.0, ge=0)
-    adv_slope_f: float = Field(default=0.20, gt=0)
+    adv_slope_f: float = Field(default=0.30, gt=0)
+    adv_min_dip_m: float = Field(default=40.0, ge=0)
 
     @property
     def derived_flight_height_m(self) -> float:

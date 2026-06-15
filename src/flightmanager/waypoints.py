@@ -71,7 +71,7 @@ def budget_estimate(
     angle_deg   = _route.compute_auto_angle(survey_3067)
     result      = _route.compute_route(
         survey_3067, angle_deg, strip_m, photo_m,
-        footprint_width_m=footprint_m, home_3067=home_3067,
+        home_3067=home_3067,
     )
     flight_time_min = _route.estimate_flight_time(
         result,

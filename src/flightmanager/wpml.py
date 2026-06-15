@@ -24,11 +24,14 @@ Battery budget:
 from __future__ import annotations
 
 import logging
-import math
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from flightmanager.route import RouteResult
 
 from lxml import etree
 from shapely.geometry.base import BaseGeometry
@@ -36,7 +39,6 @@ from shapely.geometry.base import BaseGeometry
 from flightmanager.config import (
     M3E_FOCAL_LENGTH_MM,
     M3E_IMAGE_HEIGHT_PX,
-    M3E_IMAGE_WIDTH_PX,
     M3E_PIXEL_PITCH_UM,
     DroneConfig,
     FlightConfig,
@@ -100,6 +102,11 @@ class KmzResult:
     over_one_battery: bool
     drone_name: str = "m3m"
     strip_speed_ms: float = 0.0
+    route: RouteResult | None = None
+    altitude_profile: list[float] = field(default_factory=list)
+    strip_waypoints: list | None = None
+    transit_waypoints: list | None = None
+    waylines_xml: str | None = None
 
 
 # ---- Main entry point ----
@@ -154,8 +161,12 @@ def build_kmz(
     if dsm_path is not None and dsm_path.exists():
         dsm_kmz_name = f"wpmz/res/dsm/{dsm_path.name}"
 
+    adv_route = None
+    adv_alt_profile: list[float] = []
+    adv_strip_wps = None
+    adv_transit_wps = None
     if flight_config.advanced_mode and drone is not None:
-        template_xml, waylines_xml = _build_advanced_files(
+        template_xml, waylines_xml, adv_route, adv_alt_profile, adv_strip_wps, adv_transit_wps = _build_advanced_files(
             survey_4326, flight_config, speed_ms=speed_ms, drone=drone,
             height_m=height_m, buildings=buildings, power_lines=power_lines,
         )
@@ -184,12 +195,17 @@ def build_kmz(
         over_one_battery=budget["over_one_battery"],
         drone_name=drone.name if drone else "m3m",
         strip_speed_ms=speed_ms,
+        route=adv_route,
+        altitude_profile=adv_alt_profile,
+        strip_waypoints=adv_strip_wps,
+        transit_waypoints=adv_transit_wps,
+        waylines_xml=waylines_xml,
     )
 
 
 # ---- Advanced mode: compute route + altitudes + build files ----
 
-def _build_advanced_files(
+def _build_advanced_files(  # noqa: C901
     survey_4326: BaseGeometry,
     cfg: FlightConfig,
     *,
@@ -198,58 +214,60 @@ def _build_advanced_files(
     height_m: float,
     buildings: list | None,
     power_lines: list | None,
-) -> tuple[str, str]:
-    """Compute obstacle-aware altitude profile and return (template_xml, waylines_xml)."""
+) -> tuple[str, str, RouteResult, list[float], list]:
+    """Adaptive-sweep route + altitude profile → (template_xml, waylines_xml, route, alt_profile, strip_wps).
+
+    Uses variable strip spacing: strips pinch together near buildings (drone
+    flies lower → smaller footprint) and widen in open areas (drone rises to
+    H_max).  H_max defaults to *height_m* (GSD target) unless ``adv_max_height_m``
+    is set in *cfg*, which allows flying higher in unobstructed areas.
+    """
     from flightmanager.geometry import reproject_to_3067
-    from flightmanager.route import compute_route, compute_auto_angle
-    from flightmanager.obstacle_heights import compute_altitude_profile
+    from flightmanager.route import compute_auto_angle
+    from flightmanager.adaptive_route import compute_adaptive_route
     from flightmanager.waylines_builder import build_waylines
 
     survey_3067 = reproject_to_3067(survey_4326)
     angle_deg   = compute_auto_angle(survey_3067)
 
-    sensor_h_m  = drone.image_height_px * drone.pixel_pitch_um * 1e-6
-    sensor_w_m  = drone.image_width_px  * drone.pixel_pitch_um * 1e-6
-    fp_h_m      = height_m * sensor_h_m / (drone.focal_length_mm * 1e-3)
-    fp_w_m      = height_m * sensor_w_m / (drone.focal_length_mm * 1e-3)
-    strip_m     = fp_w_m * (1.0 - cfg.overlap_side_pct  / 100.0)
-    photo_m     = fp_h_m * (1.0 - cfg.overlap_front_pct / 100.0)
+    H_max = cfg.adv_max_height_m if cfg.adv_max_height_m is not None else height_m
 
-    route = compute_route(
+    route, alt_profile, strip_wps, transit_wps = compute_adaptive_route(
         survey_3067,
         angle_deg=angle_deg,
-        strip_spacing_m=max(1.0, strip_m),
-        photo_spacing_m=max(0.5, photo_m),
-        footprint_width_m=fp_w_m,
+        buildings=buildings or [],
+        power_lines=power_lines or [],
+        drone=drone,
+        H_max=H_max,
+        H_min=cfg.adv_min_height_m,
+        overlap_front_pct=cfg.overlap_front_pct,
+        overlap_side_pct=cfg.overlap_side_pct,
+        powerline_clearance_m=cfg.adv_powerline_clearance_m,
+        slope_f=cfg.adv_slope_f,
+        min_dip_m=cfg.adv_min_dip_m,
     )
 
     if route.strip_count == 0:
-        raise ValueError("Route computation produced no strips — polygon too small?")
+        raise ValueError("Adaptive route produced no strips — polygon too small?")
 
-    alt_profile = compute_altitude_profile(
-        route,
-        buildings or [],
-        power_lines or [],
-        flight_height_m=height_m,
-        min_h=cfg.adv_min_height_m,
-        powerline_clearance_m=cfg.adv_powerline_clearance_m,
-        overlap_front_pct=cfg.overlap_front_pct,
-        overlap_side_pct=cfg.overlap_side_pct,
-        slope_f=cfg.adv_slope_f,
-        drone=drone,
-    )
-
+    n_instrip_wps  = sum(max(0, len(wps) - 2) for wps in strip_wps)
+    n_transit_wps  = sum(max(0, len(wps) - 2) for wps in transit_wps)
     log.info(
-        "Advanced mode: %d strips, altitude range %.1f–%.1f m",
+        "Adaptive advanced mode: %d strips, altitude %.1f–%.1f m, "
+        "%d instrip + %d transit intermediate waypoints (H_max=%.1f)",
         len(alt_profile), min(alt_profile), max(alt_profile),
+        n_instrip_wps, n_transit_wps, H_max,
     )
 
     template_xml = _build_template_kml(
         survey_4326, cfg, dsm_kmz_name=None, speed_ms=speed_ms, drone=drone,
         template_type="waypoint",
     )
-    waylines_xml = build_waylines(route, alt_profile, drone=drone, cfg=cfg)
-    return template_xml, waylines_xml
+    waylines_xml = build_waylines(
+        route, alt_profile, drone=drone, cfg=cfg,
+        strip_waypoints=strip_wps, transit_waypoints=transit_wps,
+    )
+    return template_xml, waylines_xml, route, alt_profile, strip_wps, transit_wps
 
 
 # ---- template.kml builder ----

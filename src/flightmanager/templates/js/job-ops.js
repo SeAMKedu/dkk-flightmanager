@@ -74,7 +74,7 @@ export async function _doOpenJob(path) {
           st._routeAngleAuto = st.previewData.stats.route_angle_deg_auto;
           _renderAngleControl();
         }
-        updateRouteOverlay();
+        updateRouteOverlay(st.previewData.strips_geojson, st.previewData.transits_geojson);
         resetLegend(_legendUserVis);
         renderStatus(st.previewData.stats);
         if (st.previewData.stats) {
@@ -82,6 +82,7 @@ export async function _doOpenJob(path) {
             strip_count:     st.previewData.stats.route_strip_count,
             photo_count:     st.previewData.stats.route_photo_count,
             flight_time_min: st.previewData.stats.route_flight_time_min,
+            strips_geojson:  st.previewData.strips_geojson,
           });
         }
         document.getElementById('rstbtn').disabled = false;

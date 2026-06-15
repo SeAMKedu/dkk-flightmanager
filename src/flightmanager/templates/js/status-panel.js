@@ -46,6 +46,11 @@ export function renderStatus(s) {
    +'<div class="sbox"><div class="slbl">Photos</div><div class="sval" id="rstat-photos">—</div></div>'
    +'<div class="sbox"><div class="slbl">Flight time</div><div class="sval" id="rstat-time">—</div></div>'
    +'</div>'
+   +'<div class="sgrid">'
+   +'<div class="sbox"><div class="slbl">Min speed</div><div class="sval" id="rstat-spd-min">—</div></div>'
+   +'<div class="sbox"><div class="slbl">Avg speed</div><div class="sval" id="rstat-spd-avg">—</div></div>'
+   +'<div class="sbox"><div class="slbl">Max speed</div><div class="sval" id="rstat-spd-max">—</div></div>'
+   +'</div>'
    +'</div>'
    +(rh ? '<div class="rlist">'+rh+'</div>' : '')
    +'</div>';

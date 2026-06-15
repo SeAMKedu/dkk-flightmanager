@@ -39,6 +39,7 @@ class PreviewRequest(BaseModel):
     custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
     route_angle_deg: float | None = None
     speed_ms: float | None = None
+    takeoff_point_4326: list | None = None  # [lon, lat] — user's pinned takeoff, if any
     template_settings: dict | None = None  # per-job template/waylines overrides
 
 
@@ -56,6 +57,7 @@ class RouteEstimateRequest(BaseModel):
     adv_max_height_m: float | None = None
     adv_powerline_clearance_m: float | None = None
     adv_slope_f: float | None = None
+    adv_min_dip_m: float | None = None
 
 
 class ExportRequest(PreviewRequest):
@@ -110,15 +112,16 @@ async def start_preview(req: PreviewRequest):
             return
         try:
             from shapely.geometry import shape as _shape
-            from flightmanager.pipeline import run_preview
+            from flightmanager.pipeline import analyse_survey
 
             custom_poly_geom = _shape(req.custom_polygon) if req.custom_polygon else None
-            result = run_preview(
+            result = analyse_survey(
                 cfg,
                 parcel_ids=req.parcel_ids or None,
                 property_ids=req.property_ids or None,
                 progress_cb=cb,
                 custom_polygon_4326=custom_poly_geom,
+                takeoff_point_4326=req.takeoff_point_4326 or None,
             )
             _st.last_preview_result = result
             print(f"[preview] job {job_id[:8]} done")
@@ -181,13 +184,13 @@ async def start_export(req: ExportRequest):
         lock = _acquire_pipeline_lock(job_id, loop, queue, "export")
         if lock is None:
             return
-        # Snapshot the preview result before run_job so a concurrent preview
+        # Snapshot the preview result before export_job so a concurrent preview
         # can't overwrite the global between job completion and the file write.
         preview_snapshot = _st.last_preview_result
         try:
-            from flightmanager.pipeline import run_job
+            from flightmanager.pipeline import export_job
 
-            manifest = run_job(
+            manifest, route_geojson = export_job(
                 req.job_name,
                 cfg,
                 parcel_ids=req.parcel_ids or None,
@@ -201,7 +204,7 @@ async def start_export(req: ExportRequest):
                 job_dir.parent.mkdir(parents=True, exist_ok=True)
             else:
                 job_dir = Path(output_dir) / req.job_name
-            _write_job_params(job_dir, req, manifest, preview_snapshot)
+            _write_job_params(job_dir, req, manifest, preview_snapshot, route_geojson)
             output_files = {
                 k: str(p)
                 for k, p in {
@@ -347,13 +350,51 @@ async def start_batch(req: BatchRequest):
     return {"job_id": job_id}
 
 
+def _load_preview_obstacles(reproject_to_3067):
+    """Return (buildings, power_lines) from the last stored preview result."""
+    from flightmanager.buildings import Building
+    from flightmanager.powerlines import PowerLine
+    from shapely.geometry import shape as _shape_geom
+
+    preview = _st.last_preview_result or {}
+    buildings: list[Building] = []
+    for bd in preview.get("buildings", []):
+        try:
+            geom_3067 = reproject_to_3067(_shape_geom(bd["geojson"]))
+            buildings.append(Building(
+                mtk_id=0,
+                kohdeluokka=bd.get("kohdeluokka", 42210),
+                kayttotarkoitus=None,
+                geometry=geom_3067,
+                alkupvm=None,
+                kerrosluku=None,
+            ))
+        except Exception:
+            pass
+
+    power_lines: list[PowerLine] = []
+    for pl in preview.get("power_lines", []):
+        try:
+            geom_3067 = reproject_to_3067(_shape_geom(pl["geojson"]))
+            power_lines.append(PowerLine(
+                mtk_id=0,
+                kohdeluokka=22312,
+                is_overhead=bool(pl.get("is_overhead", True)),
+                geometry=geom_3067,
+                alkupvm=None,
+            ))
+        except Exception:
+            pass
+
+    return buildings, power_lines
+
+
 @router.post("/api/route_estimate")
 async def route_estimate(req: RouteEstimateRequest):
     """Quick route estimate: actual strip intersections, no pipeline needed."""
-    from shapely.geometry import LineString, Point, shape as _shape
+    from shapely.geometry import Point, shape as _shape
     from flightmanager import route as _route
-    from flightmanager.geometry import reproject_to_3067, reproject_to_4326
-    from shapely.geometry import mapping
+    from flightmanager.geometry import reproject_to_3067
 
     cfg = _st.config
     drone = next((d for d in cfg.drones if d.name == req.drone), None) if req.drone else None
@@ -383,99 +424,57 @@ async def route_estimate(req: RouteEstimateRequest):
         hp = reproject_to_3067(Point(req.takeoff_point_4326))
         home_3067 = (hp.x, hp.y)
 
-    result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m,
-                                  footprint_width_m=footprint_m, home_3067=home_3067)
+    if req.advanced_mode:
+        from flightmanager.adaptive_route import compute_adaptive_route
+        cfg_flight = cfg.flight
+        H_max     = req.adv_max_height_m          or cfg_flight.adv_max_height_m or H
+        H_min     = req.adv_min_height_m           or cfg_flight.adv_min_height_m
+        clearance = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
+        slope_f   = req.adv_slope_f                or cfg_flight.adv_slope_f
+        min_dip_m = req.adv_min_dip_m if req.adv_min_dip_m is not None else cfg_flight.adv_min_dip_m
+        try:
+            buildings, power_lines = _load_preview_obstacles(reproject_to_3067)
+            result, altitude_profile, _strip_wps, _transit_wps = compute_adaptive_route(
+                poly_3067, angle_deg, buildings, power_lines,
+                drone=drone,
+                H_max=H_max, H_min=H_min,
+                overlap_front_pct=ovf, overlap_side_pct=ovs,
+                powerline_clearance_m=clearance,
+                slope_f=slope_f,
+                min_dip_m=min_dip_m,
+                home_3067=home_3067,
+            )
+        except Exception as exc:
+            import traceback; traceback.print_exc()
+            print(f"[route_estimate] adaptive route failed: {exc}")
+            result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
+            altitude_profile = [H_max] * result.strip_count
+            _strip_wps = _transit_wps = None
+        adv_min_h = H_min
+    else:
+        result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
+        altitude_profile = [H] * result.strip_count
+        _strip_wps = _transit_wps = None
+        adv_min_h = None
+
     flight_time = _route.estimate_flight_time(
         result,
-        flight_height_m=H,
+        flight_height_m=altitude_profile[0] if altitude_profile else H,
         auto_speed_ms=speed_ms,
         transit_speed_ms=cfg.flight.transitional_speed_ms,
         takeoff_security_height_m=cfg.flight.takeoff_security_height_m,
         home_3067=home_3067,
     )
 
-    # Altitude profile — uniform unless advanced_mode is active
-    altitude_profile: list[float] = [H] * len(result.strips_3067)
-    if req.advanced_mode and result.strips_3067:
-        try:
-            from flightmanager.obstacle_heights import compute_altitude_profile
-            from flightmanager.buildings import Building
-            from flightmanager.powerlines import PowerLine
-            from shapely.geometry import shape as _shape_geom
-
-            preview = _st.last_preview_result or {}
-            buildings: list[Building] = []
-            for bd in preview.get("buildings", []):
-                try:
-                    geom_4326 = _shape_geom(bd["geojson"])
-                    geom_3067 = reproject_to_3067(geom_4326)
-                    buildings.append(Building(
-                        mtk_id=0,
-                        kohdeluokka=bd.get("kohdeluokka", 42210),
-                        kayttotarkoitus=None,
-                        geometry=geom_3067,
-                        alkupvm=None,
-                        kerrosluku=None,
-                    ))
-                except Exception:
-                    pass
-
-            power_lines: list[PowerLine] = []
-            for pl in preview.get("power_lines", []):
-                try:
-                    geom_4326 = _shape_geom(pl["geojson"])
-                    geom_3067 = reproject_to_3067(geom_4326)
-                    power_lines.append(PowerLine(
-                        mtk_id=0,
-                        kohdeluokka=22312,
-                        is_overhead=bool(pl.get("is_overhead", True)),
-                        geometry=geom_3067,
-                        alkupvm=None,
-                    ))
-                except Exception:
-                    pass
-
-            cfg_flight = _st.config.flight
-            min_h      = req.adv_min_height_m          or cfg_flight.adv_min_height_m
-            max_h      = req.adv_max_height_m           or H
-            clearance  = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
-            slope_f    = req.adv_slope_f                or cfg_flight.adv_slope_f
-
-            altitude_profile = compute_altitude_profile(
-                result,
-                buildings=buildings,
-                power_lines=power_lines,
-                flight_height_m=max_h,
-                min_h=min_h,
-                powerline_clearance_m=clearance,
-                overlap_front_pct=ovf,
-                overlap_side_pct=ovs,
-                slope_f=slope_f,
-                drone=drone,
-            )
-        except Exception as _adv_exc:
-            import traceback
-            traceback.print_exc()
-            print(f"[route_estimate] altitude profile failed: {_adv_exc}")
-
-    def _seg_to_feature(x1, y1, x2, y2, alt: float, strip_speed: float):
-        line_4326 = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
-        return {
-            "type": "Feature",
-            "geometry": dict(mapping(line_4326)),
-            "properties": {"altitude_m": round(alt, 1), "speed_ms": round(strip_speed, 2)},
-        }
-
-    def _path_to_feature(pts: list) -> dict:
-        line_4326 = reproject_to_4326(LineString(pts))
-        return {"type": "Feature", "geometry": dict(mapping(line_4326)), "properties": {}}
-
-    strips_features = [
-        _seg_to_feature(*s, alt=altitude_profile[i],
-                        strip_speed=drone.auto_speed(altitude_profile[i], ovf))
-        for i, s in enumerate(result.strips_3067)
-    ]
-    transit_features = [_path_to_feature(s) for s in result.transit_segs_3067]
+    # Build strips/transits GeoJSON via the same helper the preview/export paths use,
+    # so transit features carry the 1:1-safe ``altitude_m`` (the 3D view falls back to
+    # strip-end turn altitudes otherwise, dipping into building frustums).
+    from flightmanager.pipeline import _route_result_to_geojson
+    gj = _route_result_to_geojson(
+        result, altitude_profile, drone, ovf,
+        strip_waypoints=_strip_wps, transit_waypoints=_transit_wps,
+        adv_min_height_m=adv_min_h,
+    )
 
     return {
         "strip_count":       result.strip_count,
@@ -485,8 +484,8 @@ async def route_estimate(req: RouteEstimateRequest):
         "angle_deg_used":    round(angle_deg, 1),
         "over_one_battery":  flight_time > drone.battery_minutes,
         "battery_minutes":   drone.battery_minutes,
-        "strips_geojson":    {"type": "FeatureCollection", "features": strips_features},
-        "transits_geojson":  {"type": "FeatureCollection", "features": transit_features},
+        "strips_geojson":    gj["strips_geojson"],
+        "transits_geojson":  gj["transits_geojson"],
         "advanced_mode":     req.advanced_mode,
         "altitude_profile":  [round(a, 1) for a in altitude_profile],
     }
@@ -520,6 +519,40 @@ def _acquire_pipeline_lock(job_id: str, loop, queue, label: str):
         with _st.job_lock:
             _st.active_job_id = None
         return None
+
+
+def _apply_template_settings(cfg, ts: dict) -> None:
+    """Apply template_settings dict fields (overlaps, safety, advanced mode) to cfg in-place."""
+    if ts.get("overlap_front_pct") is not None:
+        cfg.flight.overlap_front_pct = int(ts["overlap_front_pct"])
+    if ts.get("overlap_side_pct") is not None:
+        cfg.flight.overlap_side_pct = int(ts["overlap_side_pct"])
+    if ts.get("takeoff_security_height_m") is not None:
+        cfg.flight.takeoff_security_height_m = float(ts["takeoff_security_height_m"])
+    if ts.get("rth_height_m") is not None:
+        cfg.flight.rth_height_m = float(ts["rth_height_m"])
+    if ts.get("rc_lost_action") is not None:
+        cfg.flight.rc_lost_action = str(ts["rc_lost_action"])
+    if ts.get("finish_action") is not None:
+        cfg.flight.finish_action = str(ts["finish_action"])
+    cfg.flight.advanced_mode = bool(ts.get("advanced_mode", False))
+    if ts.get("adv_min_height_m") is not None:
+        cfg.flight.adv_min_height_m = float(ts["adv_min_height_m"])
+    if ts.get("adv_max_height_m") is not None:
+        cfg.flight.adv_max_height_m = float(ts["adv_max_height_m"])
+    if ts.get("adv_powerline_clearance_m") is not None:
+        cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
+    if ts.get("adv_slope_f") is not None:
+        cfg.flight.adv_slope_f = float(ts["adv_slope_f"])
+    if ts.get("adv_min_dip_m") is not None:
+        cfg.flight.adv_min_dip_m = float(ts["adv_min_dip_m"])
+
+    # Inverted-cone keepout: in adaptive flight the drone descends to H_min
+    # near buildings, so the A2 exclusion buffer only needs to equal H_min —
+    # not the (potentially much larger) nominal height used for GSD.  The
+    # altitude algorithm enforces the 1:1 rule at higher altitudes in-flight.
+    if cfg.flight.advanced_mode and cfg.home_safety.operating_subcategory == "A2":
+        cfg.home_safety.home_buffer_m = cfg.flight.adv_min_height_m
 
 
 def _prepare_config(req: PreviewRequest):
@@ -561,28 +594,19 @@ def _prepare_config(req: PreviewRequest):
     if req.speed_ms is not None and req.speed_ms > 0:
         cfg.flight.auto_flight_speed_ms = req.speed_ms
 
-    ts = req.template_settings or {}
-    if ts.get("overlap_front_pct") is not None:
-        cfg.flight.overlap_front_pct = int(ts["overlap_front_pct"])
-    if ts.get("overlap_side_pct") is not None:
-        cfg.flight.overlap_side_pct = int(ts["overlap_side_pct"])
-    if ts.get("takeoff_security_height_m") is not None:
-        cfg.flight.takeoff_security_height_m = float(ts["takeoff_security_height_m"])
-    if ts.get("rth_height_m") is not None:
-        cfg.flight.rth_height_m = float(ts["rth_height_m"])
-    if ts.get("rc_lost_action") is not None:
-        cfg.flight.rc_lost_action = str(ts["rc_lost_action"])
-    if ts.get("finish_action") is not None:
-        cfg.flight.finish_action = str(ts["finish_action"])
-    cfg.flight.advanced_mode = bool(ts.get("advanced_mode", False))
-    if ts.get("adv_min_height_m") is not None:
-        cfg.flight.adv_min_height_m = float(ts["adv_min_height_m"])
-    if ts.get("adv_powerline_clearance_m") is not None:
-        cfg.flight.adv_powerline_clearance_m = float(ts["adv_powerline_clearance_m"])
-    if ts.get("adv_slope_f") is not None:
-        cfg.flight.adv_slope_f = float(ts["adv_slope_f"])
+    _apply_template_settings(cfg, req.template_settings or {})
 
     return cfg
+
+
+def _merge_preview_and_route(preview_result: dict | None, route_geojson: dict | None) -> dict | None:
+    """Merge preview snapshot with KMZ-derived route GeoJSON, dropping the DSM thumbnail."""
+    if not preview_result:
+        return None
+    merged = {k: v for k, v in preview_result.items() if k != "dsm_b64"}
+    if route_geojson:
+        merged.update(route_geojson)
+    return merged
 
 
 def _write_job_params(
@@ -590,6 +614,7 @@ def _write_job_params(
     req: ExportRequest,
     manifest: dict,
     preview_result: dict | None = None,
+    route_geojson: dict | None = None,
 ) -> None:
     """Write job_params.json and thumbnail.svg alongside the manifest."""
     params = {
@@ -618,10 +643,7 @@ def _write_job_params(
         "custom_polygon_4326": req.custom_polygon,
         "takeoff_point_4326":  req.takeoff_point_4326,
         "color": req.color or None,
-        "last_preview_geojson": (
-            {k: v for k, v in preview_result.items() if k != "dsm_b64"}
-            if preview_result else None
-        ),
+        "last_preview_geojson": _merge_preview_and_route(preview_result, route_geojson),
     }
     # Preserve existing color, sort_order, and skipped from prior save
     if (job_dir / "job_params.json").exists():

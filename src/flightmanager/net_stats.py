@@ -8,6 +8,7 @@ exit to display a human-readable table; call ``get()`` to retrieve raw numbers
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 _lock = threading.Lock()
 

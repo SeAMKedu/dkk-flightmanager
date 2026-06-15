@@ -120,11 +120,22 @@ def _auto_simplify(geom: BaseGeometry, max_vertices: int) -> BaseGeometry:
     if vc_chosen <= max_vertices:
         return geom_chosen
 
-    # Knee is above the hard cap — binary-search down to the cap.
+    return _binary_search_cap(geom, start_tol=tol_chosen, knee_geom=geom_chosen,
+                              max_vertices=max_vertices)
+
+
+def _binary_search_cap(
+    geom: BaseGeometry,
+    *,
+    start_tol: float,
+    knee_geom: BaseGeometry,
+    max_vertices: int,
+) -> BaseGeometry:
+    """Binary-search for the smallest tolerance that keeps vertex count ≤ max_vertices."""
     log.info("Knee vertex count %d exceeds cap %d, falling back to binary search",
-             vc_chosen, max_vertices)
-    lo, hi = float(tol_chosen), 500.0
-    result = geom_chosen
+             vertex_count(knee_geom), max_vertices)
+    lo, hi = start_tol, 500.0
+    result = knee_geom
     for _ in range(20):
         mid = (lo + hi) / 2.0
         candidate = _simplify_within(geom, mid)

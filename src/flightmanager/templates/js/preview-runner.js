@@ -5,7 +5,7 @@ import { xbUpdate } from './dirty-tracking.js';
 import { map } from './map-init.js';
 import { getParams, showError, clearError, updateFolderHint, getFitBoundsFlag } from './form-controls.js';
 import { _legendUserVis, resetLegend } from './legend.js';
-import { setTakeoffAuto, getTakeoffUserMoved, _renderTakeoffMarker } from './takeoff.js';
+import { setTakeoffAuto, getTakeoffUserMoved, getTakeoffPt, _renderTakeoffMarker } from './takeoff.js';
 import { renderMap, onPreviewDone } from './map-layers.js';
 import { renderStatus } from './status-panel.js';
 import { loadJobsList, setJpOpen } from './jobs-panel.js';
@@ -16,6 +16,9 @@ export async function startPreview() {
   clearError();
   var p = getParams();
   if (st.polyModified) p.custom_polygon = st.editedPoly;
+  // Send the user's pinned/saved takeoff so the route's home legs anchor there;
+  // leave null until the user moves it so auto-suggest keeps tracking polygon edits.
+  if (getTakeoffUserMoved()) p.takeoff_point_4326 = getTakeoffPt() || null;
   if (!p.parcel_ids.length && !p.property_ids.length && !p.custom_polygon) {
     showError('Enter at least one parcel ID or property ID.'); return;
   }

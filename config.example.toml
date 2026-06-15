@@ -30,7 +30,8 @@ rc_lost_action = "goBack"
 # advanced_mode = false
 # adv_min_height_m = 30          # lowest permitted AGL altitude (A2 1:1 rule floor)
 # adv_powerline_clearance_m = 70 # minimum AGL height over 110 kV overhead lines
-# adv_slope_f = 0.20             # max altitude-change fraction per photo interval (slope factor)
+# adv_slope_f = 0.30             # altitude transition steepness: higher = steeper climbs starting closer to obstacles
+# adv_min_dip_m = 40.0           # obstacle dips narrower than this (m) are filled; set 0 to disable
 
 [home_safety]
 # EU Open-category subcategory.

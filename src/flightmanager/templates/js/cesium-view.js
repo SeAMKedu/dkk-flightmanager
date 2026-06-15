@@ -6,6 +6,7 @@
 
 import { st } from './state.js';
 import { map } from './map-init.js';
+import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
 
 // ── Module state ──────────────────────────────────────────────────────────────
 var _viewer = null;
@@ -20,10 +21,10 @@ var _currentEntities = [];
 var _dsmLayer = null;
 
 // Per-layer entity groups for visibility toggling
-var _entityGroups = {area: [], path: [], curtain: [], drone: []};
+var _entityGroups = {area: [], path: [], curtain: [], drone: [], keepout: [], powerline: [], zone: []};
 
 // Layer visibility state — persists across re-renders
-var _layerVis = {dsm: true, area: true, path: true, curtain: true, drone: true};
+var _layerVis = {dsm: true, area: true, path: true, curtain: true, drone: true, keepout: true, powerline: true, zone: true};
 
 // Playback
 var _isPlaying = false;
@@ -31,6 +32,7 @@ var _playbackTime = 0;
 var _totalDuration = 0;
 var _lastTickTime = null;
 var _dronePositionProperty = null;
+var _waypoints = [];
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -167,6 +169,7 @@ function _clearScene() {
   Object.keys(_entityGroups).forEach(function(k) { _entityGroups[k] = []; });
   if (_dsmLayer) { _viewer.imageryLayers.remove(_dsmLayer); _dsmLayer = null; }
   _dronePositionProperty = null;
+  _waypoints = [];
   _playbackTime = 0;
   _totalDuration = 0;
   _isPlaying = false;
@@ -191,6 +194,35 @@ function _haversineM(lat1, lon1, lat2, lon2) {
   var a = Math.sin(dφ/2) * Math.sin(dφ/2) +
           Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ/2) * Math.sin(dλ/2);
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Return [lng, lat] centroid of a GeoJSON Polygon or Point geometry. */
+function _bldgCenter(geom) {
+  try {
+    if (geom.type === 'Point') return [geom.coordinates[0], geom.coordinates[1]];
+    if (geom.type === 'Polygon') {
+      var cs = geom.coordinates[0];
+      var lng = cs.reduce(function(s, c) { return s + c[0]; }, 0) / cs.length;
+      var lat = cs.reduce(function(s, c) { return s + c[1]; }, 0) / cs.length;
+      return [lng, lat];
+    }
+  } catch(e) {}
+  return null;
+}
+
+/** Build a Cesium PolygonHierarchy from a GeoJSON Polygon coordinate ring array. */
+function _polyHierarchy(polyCoords) {
+  /* eslint-disable no-undef */
+  var outer = polyCoords[0].map(function(c) {
+    return Cesium.Cartesian3.fromDegrees(c[0], c[1]);
+  });
+  var holes = polyCoords.slice(1).map(function(ring) {
+    return new Cesium.PolygonHierarchy(ring.map(function(c) {
+      return Cesium.Cartesian3.fromDegrees(c[0], c[1]);
+    }));
+  });
+  return new Cesium.PolygonHierarchy(outer, holes);
+  /* eslint-enable no-undef */
 }
 
 function _effectiveSpeedMs() {
@@ -253,47 +285,106 @@ function _buildWaypoints(altM) {
 
   var pts = [];
 
+  function _addPt(lon, lat, h, spd) {
+    var last = pts.length > 0 ? pts[pts.length - 1] : null;
+    if (last && Math.abs(last.lon - lon) < 1e-9 && Math.abs(last.lat - lat) < 1e-9) {
+      // Duplicate lat/lon at a boundary: update height/speed instead of a zero-length segment
+      // (which causes NaN in Cesium polylineVolume).
+      last.height = h;
+      last.speed = spd;
+    } else {
+      pts.push({lon: lon, lat: lat, height: h, speed: spd});
+    }
+  }
+
   function addCoords(coords, h, spd) {
-    coords.forEach(function(c) {
-      var last = pts.length > 0 ? pts[pts.length - 1] : null;
-      if (last && Math.abs(last.lon - c[0]) < 1e-9 && Math.abs(last.lat - c[1]) < 1e-9) {
-        // Duplicate lat/lon at a boundary: update height/speed instead of creating a
-        // zero-length horizontal segment (which causes NaN in Cesium polylineVolume).
-        last.height = h;
-        last.speed = spd;
-      } else {
-        pts.push({lon: c[0], lat: c[1], height: h, speed: spd});
-      }
+    coords.forEach(function(c) { _addPt(c[0], c[1], h, spd); });
+  }
+
+  function addCoordsWithAlts(coords, alts, speeds, defaultSpd) {
+    coords.forEach(function(c, k) {
+      var h   = (alts[k]   !== undefined) ? alts[k]   : alts[alts.length - 1];
+      var spd = (speeds && speeds[k] !== undefined) ? speeds[k] : defaultSpd;
+      _addPt(c[0], c[1], h, spd);
     });
   }
 
+  // Actual altitude at the START of strip idx (first wpt_alts entry, else strip min).
+  function _startAlt(strip, idx) {
+    var wa = strip.properties && strip.properties.wpt_alts;
+    return (wa && wa.length > 0) ? wa[0] : stripAlts[idx];
+  }
+
+  // Actual altitude at the END of strip idx (last wpt_alts entry, else strip min).
+  function _endAlt(strip, idx) {
+    var wa = strip.properties && strip.properties.wpt_alts;
+    return (wa && wa.length > 0) ? wa[wa.length - 1] : stripAlts[idx];
+  }
+
+  // Pre-compute level turn altitude for every inter-strip transition:
+  // min(strip_end, next_strip_start) so consecutive U-turns stay at a
+  // consistent height rather than oscillating with building-proximity deltas.
+  var turnAlts = [];
+  for (var ti = 0; ti < N - 1; ti++) {
+    turnAlts.push(Math.min(_endAlt(strips[ti], ti), _startAlt(strips[ti + 1], ti + 1)));
+  }
+
+  // Add a strip's waypoints, levelling the first and last coord to the
+  // adjacent turn altitude so strip–transit boundaries are seamless.
+  function addStrip(strip, i) {
+    var wptAlts   = strip.properties && strip.properties.wpt_alts;
+    var wptSpeeds = strip.properties && strip.properties.wpt_speeds;
+    var coords    = strip.geometry.coordinates;
+    if (wptAlts && wptAlts.length === coords.length) {
+      var alts = wptAlts.slice();
+      if (i > 0)     alts[0]             = turnAlts[i - 1];
+      if (i < N - 1) alts[alts.length-1] = turnAlts[i];
+      addCoordsWithAlts(coords, alts, wptSpeeds, stripSpeeds[i]);
+    } else {
+      addCoords(coords, stripAlts[i], stripSpeeds[i]);
+    }
+  }
+
+  // Add a transit segment flying level at the minimum safe altitude.
+  // altitude_m from the feature is the 1:1 minimum over all sampled transit
+  // points; fall back to turnAlts[i] when not present (simple mode).
+  function addTransit(transit, i) {
+    var coords  = transit.geometry.coordinates;
+    var propAlt = transit.properties && transit.properties.altitude_m;
+    var tAlt    = (propAlt != null) ? propAlt : turnAlts[i];
+    var tSpd    = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
+    addCoords(coords, tAlt, tSpd);
+  }
+
   if (hasHome) {
-    addCoords(transits[0].geometry.coordinates, stripAlts[0], stripSpeeds[0]);
+    addCoords(transits[0].geometry.coordinates, _startAlt(strips[0], 0), stripSpeeds[0]);
     strips.forEach(function(strip, i) {
-      addCoords(strip.geometry.coordinates, stripAlts[i], stripSpeeds[i]);
-      if (i < N - 1) {
-        var tAlt = (stripAlts[i] + stripAlts[i + 1]) / 2;
-        var tSpd = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
-        addCoords(transits[i + 1].geometry.coordinates, tAlt, tSpd);
-      }
+      addStrip(strip, i);
+      if (i < N - 1) addTransit(transits[i + 1], i);
     });
-    addCoords(transits[N].geometry.coordinates, stripAlts[N - 1], stripSpeeds[N - 1]);
+    addCoords(transits[N].geometry.coordinates, _endAlt(strips[N - 1], N - 1), stripSpeeds[N - 1]);
   } else {
+    // No home transit in the GeoJSON (simple mode or export without home transits).
+    // If a takeoff marker exists, bookend the animation so the drone starts and
+    // returns to the takeoff/landing spot.
+    var homePt = getTakeoffPt() || getTakeoffAuto();
+    if (homePt && strips.length > 0) {
+      _addPt(homePt[0], homePt[1], _startAlt(strips[0], 0), stripSpeeds[0]);
+    }
     strips.forEach(function(strip, i) {
-      addCoords(strip.geometry.coordinates, stripAlts[i], stripSpeeds[i]);
-      if (i < N - 1) {
-        var tAlt = (stripAlts[i] + stripAlts[i + 1]) / 2;
-        var tSpd = (stripSpeeds[i] + stripSpeeds[i + 1]) / 2;
-        addCoords(transits[i].geometry.coordinates, tAlt, tSpd);
-      }
+      addStrip(strip, i);
+      if (i < N - 1) addTransit(transits[i], i);
     });
+    if (homePt && strips.length > 0) {
+      _addPt(homePt[0], homePt[1], _endAlt(strips[N - 1], N - 1), stripSpeeds[N - 1]);
+    }
   }
 
   // Assign cumulative times using per-waypoint speed
   var t = 0;
   return pts.map(function(p, i) {
     if (i > 0) t += _haversineM(pts[i - 1].lat, pts[i - 1].lon, p.lat, p.lon) / pts[i - 1].speed;
-    return {lon: p.lon, lat: p.lat, height: p.height, time: t};
+    return {lon: p.lon, lat: p.lat, height: p.height, speed: p.speed, time: t};
   });
 }
 
@@ -302,7 +393,8 @@ function _renderScene() {
   _clearScene();
 
   var altM      = parseFloat(document.getElementById('hgt').value) || 60;
-  var waypoints = _buildWaypoints(altM);
+  _waypoints = _buildWaypoints(altM);
+  var waypoints = _waypoints;
   if (!waypoints.length) return;
 
   _totalDuration = waypoints[waypoints.length - 1].time;
@@ -441,6 +533,121 @@ function _renderScene() {
     },
   });
 
+  // ── 5. Keepout volumes around buildings ─────────────────────────────────────
+  //   A1/A3:      fixed 150 m radius × 150 m tall cylinder (aviation separation rule).
+  //   A2 advanced: cylinder ground→minH + frustum minH→maxH (widens per the 1:1 rule).
+  //   A2 simple:   single cylinder sized by the flat flight altitude.
+  var _stats = st.previewData && st.previewData.stats;
+  var _advMode = _stats && _stats.advanced_mode;
+  var _sub = (_stats && _stats.subcategory) || 'A3';
+  var _flightAlt = (_stats && _stats.flight_height_m) || altM;
+  if (st.previewData.buildings && st.previewData.buildings.length) {
+    var redFill = Cesium.Color.fromCssColorString('#dc2626');
+    var _A1A3_RADIUS_M = 150, _A1A3_HEIGHT_M = 150;
+
+    var _addKeepoutCyl = function(ctr, length, baseAlt, bottomR, topR) {
+      _addEntity('keepout', {
+        position: Cesium.Cartesian3.fromDegrees(ctr[0], ctr[1], baseAlt + length / 2),
+        cylinder: {
+          length:       length,
+          bottomRadius: bottomR,
+          topRadius:    topR,
+          material:     redFill.withAlpha(0.20),
+          outline:      true,
+          outlineColor: redFill.withAlpha(0.45),
+          outlineWidth: 1,
+        },
+      });
+    };
+
+    st.previewData.buildings.forEach(function(b) {
+      if (!b.is_keepout) return;
+      var ctr = _bldgCenter(b.geojson);
+      if (!ctr) return;
+      var bldgH = b.height_m || 7;
+
+      if (_sub !== 'A2') {
+        // A1/A3 — fixed 150 m separation cylinder, regardless of altitude
+        _addKeepoutCyl(ctr, _A1A3_HEIGHT_M, 0, _A1A3_RADIUS_M, _A1A3_RADIUS_M);
+      } else if (_advMode) {
+        var minH = (_stats.home_buffer_m    || 30);
+        var maxH = (_stats.home_buffer_max_m || minH);
+        var rMin = Math.max(0.5, minH - bldgH);
+        var rMax = Math.max(0.5, maxH - bldgH);
+        _addKeepoutCyl(ctr, minH, 0, rMin, rMin);                       // ground → minH
+        if (maxH > minH) _addKeepoutCyl(ctr, maxH - minH, minH, rMin, rMax);  // frustum minH → maxH
+      } else {
+        // A2 simple flat-altitude — cylinder sized by the flight altitude
+        var rSimple = Math.max(0.5, _flightAlt);
+        _addKeepoutCyl(ctr, _flightAlt, 0, rSimple, rSimple);
+      }
+    });
+  }
+
+  // ── 6. Overhead power lines (rectangular keep-out pipe) ─────────────────────
+  //   Rendered as a corridor 60 m wide (30 m buffer each side) extruded 0→40 m,
+  //   which covers nearly all Finnish suurjännitejohto (110 kV+) overhead lines.
+  var _PL_WIDTH_M = 60, _PL_HEIGHT_M = 40;
+  if (st.previewData.power_lines && st.previewData.power_lines.length) {
+    var plFill = Cesium.Color.fromCssColorString('#d97706');
+    st.previewData.power_lines.forEach(function(pl) {
+      if (!pl.is_overhead || !pl.geojson) return;
+      var g = pl.geojson;
+      var segs = g.type === 'LineString'      ? [g.coordinates]
+               : g.type === 'MultiLineString' ? g.coordinates
+               : [];
+      segs.forEach(function(seg) {
+        if (!seg || seg.length < 2) return;
+        var positions = seg.map(function(c) { return Cesium.Cartesian3.fromDegrees(c[0], c[1]); });
+        _addEntity('powerline', {
+          corridor: {
+            positions:      positions,
+            width:          _PL_WIDTH_M,
+            height:         0,
+            extrudedHeight: _PL_HEIGHT_M,
+            cornerType:     Cesium.CornerType.MITERED,
+            material:       plFill.withAlpha(0.18),
+            outline:        true,
+            outlineColor:   plFill.withAlpha(0.5),
+          },
+        });
+      });
+    });
+  }
+
+  // ── 7. UAS restriction zones (extruded altitude bands → inverted pyramid) ────
+  //   Each zone is extruded from its floor (lower_limit_m_agl, 0 if GND) to its
+  //   ceiling (upper_limit_m_agl). Concentric airfield zones (A 0–50, C 50–120,
+  //   D 120+) stack into the classic stepped inverted pyramid. Ceiling-less zones
+  //   are capped at a viz height so they remain visible.
+  var _ZONE_VIZ_CAP_M = 150;
+  if (st.previewData.zone_hits && st.previewData.zone_hits.length) {
+    var zoneFill = Cesium.Color.fromCssColorString('#f97316');
+    st.previewData.zone_hits.forEach(function(z) {
+      var g = z.geojson;
+      if (!g) return;
+      var floor = (z.lower_limit_m_agl != null) ? z.lower_limit_m_agl : 0;
+      var ceil  = (z.upper_limit_m_agl != null) ? z.upper_limit_m_agl
+                                                : Math.max(floor + 20, _ZONE_VIZ_CAP_M);
+      if (ceil <= floor) ceil = floor + 10;
+      var polys = g.type === 'Polygon'      ? [g.coordinates]
+                : g.type === 'MultiPolygon' ? g.coordinates
+                : [];
+      polys.forEach(function(rings) {
+        _addEntity('zone', {
+          polygon: {
+            hierarchy:      _polyHierarchy(rings),
+            height:         floor,
+            extrudedHeight: ceil,
+            material:       zoneFill.withAlpha(z.context_only ? 0.08 : 0.14),
+            outline:        true,
+            outlineColor:   Cesium.Color.fromCssColorString('#ea580c').withAlpha(z.context_only ? 0.4 : 0.7),
+          },
+        });
+      });
+    });
+  }
+
   /* eslint-enable no-undef */
 
   // Fly to scene
@@ -454,7 +661,10 @@ function _renderScene() {
   document.getElementById('cesium-play-btn').textContent = '▶';
 
   // Build layer legend (after entities are placed so rows match reality)
-  _buildLegend(hasArea, hasDsm, jobColorHex, _useAltColor ? {min: _altMin, max: _altMax} : null);
+  var _hasKeeput = _entityGroups.keepout.length > 0;
+  var _hasPowerlines = _entityGroups.powerline.length > 0;
+  var _hasZones = _entityGroups.zone.length > 0;
+  _buildLegend(hasArea, hasDsm, jobColorHex, _useAltColor ? {min: _altMin, max: _altMax} : null, _hasKeeput, _hasPowerlines, _hasZones);
 }
 
 // ── Layer legend ──────────────────────────────────────────────────────────────
@@ -482,7 +692,7 @@ function _legRow(layer, iconHTML, label) {
   return row;
 }
 
-function _buildLegend(hasArea, hasDsm, colorHex, altRange) {
+function _buildLegend(hasArea, hasDsm, colorHex, altRange, hasKeeput, hasPowerlines, hasZones) {
   var leg = document.getElementById('cesium-legend');
   if (!leg) return;
   leg.innerHTML = '<h4>Layers</h4>';
@@ -523,6 +733,24 @@ function _buildLegend(hasArea, hasDsm, colorHex, altRange) {
   leg.appendChild(_legRow('drone',
     '<div class="l-dot" style="background:#fff;border:1.5px solid #374151;"></div>',
     'Drone'));
+
+  if (hasKeeput) {
+    leg.appendChild(_legRow('keepout',
+      '<div class="l-swatch" style="background:#dc262655;border:1.5px solid #dc2626;"></div>',
+      'Keepout zones'));
+  }
+
+  if (hasPowerlines) {
+    leg.appendChild(_legRow('powerline',
+      '<div class="l-swatch" style="background:#d9770633;border:1.5px solid #d97706;"></div>',
+      'Power lines'));
+  }
+
+  if (hasZones) {
+    leg.appendChild(_legRow('zone',
+      '<div class="l-swatch" style="background:#f9731626;border:1.5px solid #ea580c;"></div>',
+      'UAS zones'));
+  }
 
   leg.style.display = 'block';
 }
@@ -573,6 +801,30 @@ function _updateTimeDisplay() {
   var s  = Math.floor(_playbackTime % 60);
   var el = document.getElementById('cesium-time-display');
   if (el) el.textContent = m + ':' + String(s).padStart(2, '0');
+  _updateTelemetryDisplay();
+}
+
+function _updateTelemetryDisplay() {
+  var altEl = document.getElementById('cesium-tel-alt');
+  var spdEl = document.getElementById('cesium-tel-spd');
+  if (!altEl || !spdEl || !_waypoints.length) return;
+  var wps = _waypoints;
+  var t   = _playbackTime;
+
+  // Find surrounding waypoints
+  var i = 0;
+  while (i < wps.length - 1 && wps[i + 1].time <= t) i++;
+
+  var wp0 = wps[i];
+  var wp1 = wps[Math.min(i + 1, wps.length - 1)];
+  var dt  = wp1.time - wp0.time;
+  var f   = dt > 0 ? Math.min(1, (t - wp0.time) / dt) : 0;
+
+  var alt = wp0.height + f * (wp1.height - wp0.height);
+  var spd = wp0.speed  + f * (wp1.speed  - wp0.speed);
+
+  altEl.textContent = alt.toFixed(1);
+  spdEl.textContent = spd.toFixed(1);
 }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
@@ -600,6 +852,14 @@ function _showLoadingMsg(show) {
 function _showPlayback(show) {
   var panel = document.getElementById('cesium-playback');
   if (panel) panel.classList.toggle('active', show);
+  var tel = document.getElementById('cesium-telemetry');
+  if (tel) tel.classList.toggle('active', show);
+  if (!show) {
+    var altEl = document.getElementById('cesium-tel-alt');
+    var spdEl = document.getElementById('cesium-tel-spd');
+    if (altEl) altEl.textContent = '—';
+    if (spdEl) spdEl.textContent = '—';
+  }
 }
 
 function _positionOverlayBtn(show) {

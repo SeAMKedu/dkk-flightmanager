@@ -52,7 +52,7 @@ export function onPreviewDone(payload) {
       st._routeAngleAuto = payload.stats.route_angle_deg_auto;
       _renderAngleControl();
     }
-    updateRouteOverlay();
+    updateRouteOverlay(payload.strips_geojson, payload.transits_geojson);
     // _legendUserVis persists user eye choices across renders and job switches.
     // Empty on first render → resetLegend applies startOff defaults.
     resetLegend(_legendUserVis);
@@ -66,6 +66,7 @@ export function onPreviewDone(payload) {
         strip_count:      payload.stats.route_strip_count,
         photo_count:      payload.stats.route_photo_count,
         flight_time_min:  payload.stats.route_flight_time_min,
+        strips_geojson:   payload.strips_geojson,
       });
     }
   } catch(e) {
@@ -119,14 +120,23 @@ export function renderMap(data) {
     }).addTo(map);
   }
 
-  // Keep-out circles
-  var koBuf = data.stats && data.stats.home_buffer_m;
+  // Keep-out circles — inner at min/nominal altitude, outer (translucent) at max altitude
+  var koBuf    = data.stats && data.stats.home_buffer_m;
+  var koBufMax = data.stats && data.stats.home_buffer_max_m;
   if (koBuf && data.buildings && data.buildings.length) {
     var kg = L.layerGroup();
     data.buildings.forEach(function(b) {
       if (!b.is_keepout) return;
       var pt = centroid(b.geojson);
       if (!pt) return;
+      // Outer (max-altitude) keepout circle — only in advanced mode
+      if (koBufMax && koBufMax > koBuf) {
+        L.circle(pt, {
+          radius: koBufMax, color: '#dc2626', weight: 1,
+          fillColor: '#fca5a5', fillOpacity: 0.07, dashArray: '2 6'
+        }).addTo(kg);
+      }
+      // Inner (min/nominal altitude) keepout circle
       L.circle(pt, {
         radius: koBuf, color: '#dc2626', weight: 1,
         fillColor: '#fca5a5', fillOpacity: 0.20, dashArray: '4 4'

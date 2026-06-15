@@ -13,7 +13,8 @@ var _defaults = {
   adv_min_height_m: 30,
   adv_max_height_m: null,
   adv_powerline_clearance_m: 70,
-  adv_slope_f: 0.20,
+  adv_slope_f: 0.30,
+  adv_min_dip_m: 40,
 };
 
 function _el(id) { return document.getElementById(id); }
@@ -25,6 +26,8 @@ export function initTplDefaults(cfg) {
   if (cfg.rth_height_m != null)               _defaults.rth_height_m               = cfg.rth_height_m;
   if (cfg.finish_action  != null)             _defaults.finish_action              = cfg.finish_action;
   if (cfg.rc_lost_action != null)             _defaults.rc_lost_action             = cfg.rc_lost_action;
+  if (cfg.adv_slope_f    != null)             _defaults.adv_slope_f                = cfg.adv_slope_f;
+  if (cfg.adv_min_dip_m  != null)             _defaults.adv_min_dip_m              = cfg.adv_min_dip_m;
   restoreTplSettings({});
 }
 
@@ -40,7 +43,7 @@ export function initTplModal() {
   });
 
   ['tpl-takeoff-sec', 'tpl-rth-height', 'tpl-rc-lost', 'tpl-finish-action',
-   'tpl-adv-min-height', 'tpl-adv-max-height', 'tpl-adv-powerline', 'tpl-adv-slope-f',
+   'tpl-adv-min-height', 'tpl-adv-max-height', 'tpl-adv-powerline', 'tpl-adv-slope-f', 'tpl-adv-min-dip',
   ].forEach(function(id) {
     _el(id).addEventListener('change', markDirty);
   });
@@ -80,6 +83,9 @@ export function getTplSettings() {
     adv_max_height_m:          parseFloat(_el('tpl-adv-max-height').value) || null,
     adv_powerline_clearance_m: parseFloat(_el('tpl-adv-powerline').value)  || _defaults.adv_powerline_clearance_m,
     adv_slope_f:               parseFloat(_el('tpl-adv-slope-f').value)    || _defaults.adv_slope_f,
+    adv_min_dip_m:             parseFloat(_el('tpl-adv-min-dip').value)    >= 0
+                                 ? parseFloat(_el('tpl-adv-min-dip').value)
+                                 : _defaults.adv_min_dip_m,
   };
 }
 
@@ -104,12 +110,13 @@ export function restoreTplSettings(s) {
   _el('tpl-adv-max-height').value      = v('adv_max_height_m',          '') || '';
   _el('tpl-adv-powerline').value       = v('adv_powerline_clearance_m', d.adv_powerline_clearance_m);
   _el('tpl-adv-slope-f').value         = v('adv_slope_f',               d.adv_slope_f);
+  _el('tpl-adv-min-dip').value         = v('adv_min_dip_m',             d.adv_min_dip_m);
   _updateAdvancedState();
 }
 
 function _updateAdvancedState() {
   var adv = _el('tpl-advanced').checked;
-  ['tpl-adv-min-height', 'tpl-adv-max-height', 'tpl-adv-powerline', 'tpl-adv-slope-f'].forEach(function(id) {
+  ['tpl-adv-min-height', 'tpl-adv-max-height', 'tpl-adv-powerline', 'tpl-adv-slope-f', 'tpl-adv-min-dip'].forEach(function(id) {
     _el(id).disabled = !adv;
   });
   var dot = _el('adv-dot');

@@ -237,48 +237,22 @@ async def get_job(path: str):
     return {"params": params, "cache_stale": stale, "folder": folder}
 
 
-@router.patch("/api/jobs/{path:path}")
-async def update_job(path: str, body: dict):
-    output_dir = Path(_st.config.output.output_dir).resolve()
-    folder, name, job_dir = resolve_job_dir(output_dir, path)
-    if not job_dir.is_dir():
-        raise HTTPException(404, detail=f"Job '{path}' not found")
+def _rename_job(job_dir: Path, old_name: str, new_name: str, folder: str | None) -> dict:  # noqa: C901
+    """Rename a job directory and all name-prefixed files inside it.
 
-    # Simple field update (color, sort_order, skipped — no rename)
-    if "new_name" not in body and ("color" in body or "sort_order" in body or "skipped" in body):
-        params_path = job_dir / "job_params.json"
-        if params_path.exists():
-            try:
-                data = json.loads(params_path.read_text(encoding="utf-8"))
-                if "color" in body:
-                    data["color"] = body["color"]
-                if "sort_order" in body:
-                    so = body["sort_order"]
-                    data["sort_order"] = int(so) if so is not None else None
-                if "skipped" in body:
-                    data["skipped"] = bool(body["skipped"])
-                params_path.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
-            except Exception as exc:
-                raise HTTPException(500, detail=f"Could not update job: {exc}")
-        return {"path": path, "color": body.get("color"), "sort_order": body.get("sort_order"), "skipped": body.get("skipped")}
-
-    # Rename
-    new_name: str = body.get("new_name", "").strip()
-    if not new_name:
-        raise HTTPException(400, detail="new_name is required")
-    if new_name == name:
-        return {"path": path, "name": name, "folder": folder}
-
+    Applies an atomic rename with rollback: file renames are attempted first;
+    if any fail the already-renamed files are reversed before raising.
+    The directory rename is the final step — if it fails, file renames roll back.
+    Returns the new {path, name, folder} dict.
+    """
     new_dir = job_dir.parent / new_name
     if new_dir.exists():
         raise HTTPException(409, detail=f"Job '{new_name}' already exists in this location")
 
     renames: list[tuple[Path, Path]] = []
     for f in job_dir.iterdir():
-        if f.name.startswith(f"{name}.") or f.name.startswith(f"{name}_"):
-            suffix = f.name[len(name):]
+        if f.name.startswith(f"{old_name}.") or f.name.startswith(f"{old_name}_"):
+            suffix = f.name[len(old_name):]
             renames.append((f, job_dir / f"{new_name}{suffix}"))
 
     done: list[tuple[Path, Path]] = []
@@ -318,6 +292,43 @@ async def update_job(path: str, body: dict):
 
     new_path = f"{folder}/{new_name}" if folder else new_name
     return {"path": new_path, "name": new_name, "folder": folder}
+
+
+@router.patch("/api/jobs/{path:path}")
+async def update_job(path: str, body: dict):
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+
+    # Simple field update (color, sort_order, skipped — no rename)
+    if "new_name" not in body and ("color" in body or "sort_order" in body or "skipped" in body):
+        params_path = job_dir / "job_params.json"
+        if params_path.exists():
+            try:
+                data = json.loads(params_path.read_text(encoding="utf-8"))
+                if "color" in body:
+                    data["color"] = body["color"]
+                if "sort_order" in body:
+                    so = body["sort_order"]
+                    data["sort_order"] = int(so) if so is not None else None
+                if "skipped" in body:
+                    data["skipped"] = bool(body["skipped"])
+                params_path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception as exc:
+                raise HTTPException(500, detail=f"Could not update job: {exc}")
+        return {"path": path, "color": body.get("color"), "sort_order": body.get("sort_order"), "skipped": body.get("skipped")}
+
+    # Rename
+    new_name: str = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(400, detail="new_name is required")
+    if new_name == name:
+        return {"path": path, "name": name, "folder": folder}
+
+    return _rename_job(job_dir, name, new_name, folder)
 
 
 @router.post("/api/jobs/{path:path}/clone")
@@ -495,38 +506,39 @@ async def reveal_job(path: str):
 # ---------------------------------------------------------------------------
 
 
+def _build_operation_polygon(pts: list):
+    """Build a valid Shapely polygon from 3 (triangle) or 4 (quad) points.
+
+    Returns the polygon or raises HTTPException(400) on invalid input.
+    """
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from shapely.validation import make_valid
+
+    if len(pts) == 3:
+        poly = ShapelyPolygon(pts)
+        if not poly.is_valid:
+            poly = make_valid(poly)
+        return poly
+    if len(pts) == 4:
+        for order in [[pts[0], pts[1], pts[2], pts[3]], [pts[0], pts[1], pts[3], pts[2]]]:
+            candidate = ShapelyPolygon(order)
+            if not candidate.is_valid:
+                candidate = make_valid(candidate)
+            if candidate.is_valid and not candidate.is_empty and candidate.area > 0:
+                return candidate
+        raise HTTPException(400, detail="Selected points do not form a valid quadrilateral")
+    raise HTTPException(400, detail=f"Expected 3 or 4 points, got {len(pts)}")
+
+
 @router.post("/api/polygon_op")
 async def polygon_op(req: PolygonOpRequest):
-    from shapely.geometry import Polygon as ShapelyPolygon, mapping, shape
+    from shapely.geometry import mapping, shape
     from shapely.ops import unary_union
-    from shapely.validation import make_valid
 
     try:
         survey = shape(req.polygon)
         pts = [(c[0], c[1]) for c in req.points]  # lng, lat
-
-        if len(pts) == 3:
-            quad = ShapelyPolygon(pts)
-            if not quad.is_valid:
-                quad = make_valid(quad)
-        elif len(pts) == 4:
-            quad = None
-            for order in [
-                [pts[0], pts[1], pts[2], pts[3]],
-                [pts[0], pts[1], pts[3], pts[2]],
-            ]:
-                candidate = ShapelyPolygon(order)
-                if not candidate.is_valid:
-                    candidate = make_valid(candidate)
-                if candidate.is_valid and not candidate.is_empty and candidate.area > 0:
-                    quad = candidate
-                    break
-            if quad is None:
-                raise HTTPException(
-                    400, detail="Selected points do not form a valid quadrilateral"
-                )
-        else:
-            raise HTTPException(400, detail=f"Expected 3 or 4 points, got {len(pts)}")
+        quad = _build_operation_polygon(pts)
 
         if not quad.is_valid or quad.is_empty:
             raise HTTPException(400, detail="Selected points do not form a valid shape")
@@ -548,18 +560,89 @@ async def polygon_op(req: PolygonOpRequest):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/merge")
-async def merge_jobs(req: MergeRequest):
-    if len(req.job_paths) < 2:
-        raise HTTPException(400, detail="At least two jobs are required to merge")
-    new_name = req.new_name.strip()
-    if not new_name:
-        raise HTTPException(400, detail="new_name is required")
+def _unique_ids(id_lists: list[list[str]]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for ids in id_lists:
+        for x in ids:
+            if x not in seen:
+                seen.add(x)
+                result.append(x)
+    return result
 
-    output_dir = Path(_st.config.output.output_dir).resolve()
 
+def _merge_by_ids(all_params: list[tuple[Path, dict]], new_name: str) -> dict:
+    """Combine parcel/property IDs from all sources into one skeleton job."""
+    parcel_ids = _unique_ids([p.get("inputs", {}).get("parcel_ids") or [] for _, p in all_params])
+    property_ids = _unique_ids([p.get("inputs", {}).get("property_ids") or [] for _, p in all_params])
+    first = all_params[0][1]
+    return {
+        "job_name": new_name,
+        "saved_at": None,
+        "inputs":   {"parcel_ids": parcel_ids, "property_ids": property_ids},
+        "flight":   first.get("flight", {}),
+        "polygon":  first.get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
+        "safety":   first.get("safety",  {"preview_radius_m": None}),
+        "custom_polygon_4326": None,
+        "batch_created": False,
+        "color": None,
+        "last_preview_geojson": None,
+        "merge_strategy": "ids",
+    }
+
+
+def _merge_by_polygon(all_params: list[tuple[Path, dict]], new_name: str) -> dict:
+    """Union custom polygons from all sources into a single merged job."""
+    from shapely.geometry import mapping, shape
+    from shapely.ops import unary_union
+    from shapely.validation import make_valid
+
+    polys = []
+    for job_dir, p in all_params:
+        geojson = p.get("custom_polygon_4326") or (
+            (p.get("last_preview_geojson") or {}).get("survey")
+        )
+        if not geojson:
+            raise HTTPException(
+                400,
+                detail=f"Job '{job_dir.name}' has no polygon — run a preview first",
+            )
+        try:
+            geom = shape(geojson)
+            if not geom.is_valid:
+                geom = make_valid(geom)
+            polys.append(geom)
+        except Exception as exc:
+            raise HTTPException(400, detail=f"Invalid geometry for '{job_dir.name}': {exc}")
+
+    merged = unary_union(polys)
+    if not merged.is_valid:
+        merged = make_valid(merged)
+    if merged.is_empty:
+        raise HTTPException(400, detail="Union produced empty geometry")
+
+    parcel_ids = _unique_ids([p.get("inputs", {}).get("parcel_ids") or [] for _, p in all_params])
+    property_ids = _unique_ids([p.get("inputs", {}).get("property_ids") or [] for _, p in all_params])
+    first = all_params[0][1]
+    return {
+        "job_name": new_name,
+        "saved_at": None,
+        "inputs":  {"parcel_ids": parcel_ids, "property_ids": property_ids},
+        "flight":  first.get("flight", {}),
+        "polygon": first.get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
+        "safety":  first.get("safety",  {"preview_radius_m": None}),
+        "custom_polygon_4326": dict(mapping(merged)),
+        "batch_created": False,
+        "color": None,
+        "last_preview_geojson": None,
+        "merge_strategy": "polygon_union",
+    }
+
+
+def _load_job_params(output_dir: Path, job_paths: list[str]) -> list[tuple[Path, dict]]:
+    """Load job_params.json for each path. Raises HTTPException on missing/unreadable files."""
     all_params: list[tuple[Path, dict]] = []
-    for path in req.job_paths:
+    for path in job_paths:
         _, _, job_dir = resolve_job_dir(output_dir, path)
         params_path = job_dir / "job_params.json"
         if not params_path.exists():
@@ -569,99 +652,45 @@ async def merge_jobs(req: MergeRequest):
         except Exception as exc:
             raise HTTPException(500, detail=f"Could not read params for '{path}': {exc}")
         all_params.append((job_dir, p))
+    return all_params
+
+
+def _delete_merged_sources(output_dir: Path, job_paths: list[str]) -> None:
+    """Delete source job dirs and prune now-empty parent folders after a merge."""
+    for path in job_paths:
+        _, _, job_dir = resolve_job_dir(output_dir, path)
+        if job_dir.is_dir():
+            shutil.rmtree(job_dir)
+    for path in job_paths:
+        parts = path.strip("/").split("/", 1)
+        if len(parts) == 2:
+            parent = output_dir / parts[0]
+            if parent.is_dir():
+                remaining = [d for d in parent.iterdir() if not d.name.startswith(".")]
+                if not remaining:
+                    shutil.rmtree(parent)
+
+
+@router.post("/api/merge")
+async def merge_jobs(req: MergeRequest):
+    if len(req.job_paths) < 2:
+        raise HTTPException(400, detail="At least two jobs are required to merge")
+    new_name = req.new_name.strip()
+    if not new_name:
+        raise HTTPException(400, detail="new_name is required")
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    all_params = _load_job_params(output_dir, req.job_paths)
 
     def _is_id_job(job_dir: Path, p: dict) -> bool:
         inputs = p.get("inputs", {})
         has_ids = bool(inputs.get("parcel_ids") or inputs.get("property_ids"))
         return has_ids and p.get("batch_created", False) and not any(job_dir.glob("*.kmz"))
 
-    use_id_strategy = all(_is_id_job(d, p) for d, p in all_params)
-
-    if use_id_strategy:
-        parcel_ids: list[str] = []
-        property_ids: list[str] = []
-        for _, p in all_params:
-            inputs = p.get("inputs", {})
-            parcel_ids.extend(inputs.get("parcel_ids") or [])
-            property_ids.extend(inputs.get("property_ids") or [])
-        seen: set[str] = set()
-        parcel_ids   = [x for x in parcel_ids   if not (x in seen or seen.add(x))]  # type: ignore[func-returns-value]
-        seen.clear()
-        property_ids = [x for x in property_ids if not (x in seen or seen.add(x))]  # type: ignore[func-returns-value]
-
-        first = all_params[0][1]
-        merged_params = {
-            "job_name": new_name,
-            "saved_at": None,
-            "inputs":   {"parcel_ids": parcel_ids, "property_ids": property_ids},
-            "flight":   first.get("flight", {}),
-            "polygon":  first.get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
-            "safety":   first.get("safety",  {"preview_radius_m": None}),
-            "custom_polygon_4326": None,
-            "batch_created": False,
-            "color": None,
-            "last_preview_geojson": None,
-            "merge_strategy": "ids",
-        }
+    if all(_is_id_job(d, p) for d, p in all_params):
+        merged_params = _merge_by_ids(all_params, new_name)
     else:
-        from shapely.geometry import mapping, shape
-        from shapely.ops import unary_union
-        from shapely.validation import make_valid
-
-        polys = []
-        for job_dir, p in all_params:
-            geojson = p.get("custom_polygon_4326") or (
-                (p.get("last_preview_geojson") or {}).get("survey")
-            )
-            if not geojson:
-                raise HTTPException(
-                    400,
-                    detail=f"Job '{job_dir.name}' has no polygon — run a preview first",
-                )
-            try:
-                geom = shape(geojson)
-                if not geom.is_valid:
-                    geom = make_valid(geom)
-                polys.append(geom)
-            except Exception as exc:
-                raise HTTPException(400, detail=f"Invalid geometry for '{job_dir.name}': {exc}")
-
-        merged = unary_union(polys)
-        if not merged.is_valid:
-            merged = make_valid(merged)
-        if merged.is_empty:
-            raise HTTPException(400, detail="Union produced empty geometry")
-
-        all_parcel_ids: list[str] = []
-        all_property_ids: list[str] = []
-        seen2: set[str] = set()
-        for _, p in all_params:
-            inp = p.get("inputs", {})
-            for pid in inp.get("parcel_ids") or []:
-                if pid not in seen2:
-                    seen2.add(pid)
-                    all_parcel_ids.append(pid)
-        seen2.clear()
-        for _, p in all_params:
-            inp = p.get("inputs", {})
-            for pid in inp.get("property_ids") or []:
-                if pid not in seen2:
-                    seen2.add(pid)
-                    all_property_ids.append(pid)
-
-        merged_params = {
-            "job_name": new_name,
-            "saved_at": None,
-            "inputs":  {"parcel_ids": all_parcel_ids, "property_ids": all_property_ids},
-            "flight":  all_params[0][1].get("flight", {}),
-            "polygon": all_params[0][1].get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
-            "safety":  all_params[0][1].get("safety",  {"preview_radius_m": None}),
-            "custom_polygon_4326": dict(mapping(merged)),
-            "batch_created": False,
-            "color": None,
-            "last_preview_geojson": None,
-            "merge_strategy": "polygon_union",
-        }
+        merged_params = _merge_by_polygon(all_params, new_name)
 
     dest_parent = (output_dir / req.folder) if req.folder else output_dir
     dest_parent.mkdir(parents=True, exist_ok=True)
@@ -681,18 +710,7 @@ async def merge_jobs(req: MergeRequest):
     )
 
     if req.delete_sources:
-        for path in req.job_paths:
-            _, _, job_dir = resolve_job_dir(output_dir, path)
-            if job_dir.is_dir():
-                shutil.rmtree(job_dir)
-        for path in req.job_paths:
-            parts = path.strip("/").split("/", 1)
-            if len(parts) == 2:
-                parent = output_dir / parts[0]
-                if parent.is_dir():
-                    remaining = [d for d in parent.iterdir() if not d.name.startswith(".")]
-                    if not remaining:
-                        shutil.rmtree(parent)
+        _delete_merged_sources(output_dir, req.job_paths)
 
     card = read_job_card(dest_dir, folder=req.folder)
     card["merge_strategy"] = merged_params["merge_strategy"]
@@ -716,6 +734,19 @@ async def create_folder(body: dict):
     folder_dir.mkdir(parents=True, exist_ok=True)
     (folder_dir / ".dkk-folder").write_text("", encoding="utf-8")
     return {"name": folder_name}
+
+
+def _copy_route_job(job_dir: Path, job_name: str, dest_path: Path) -> int:
+    """Copy KMZ files and homes.kml from one job to dest_path. Returns file count."""
+    count = 0
+    for kmz_file in sorted(job_dir.glob("*.kmz")):
+        shutil.copy2(kmz_file, dest_path / kmz_file.name)
+        count += 1
+    homes_kml = job_dir / "homes.kml"
+    if homes_kml.exists():
+        shutil.copy2(homes_kml, dest_path / f"{job_name}_homes.kml")
+        count += 1
+    return count
 
 
 @router.post("/api/export-route")
@@ -752,14 +783,7 @@ async def export_route(body: dict):
             if not card.get("takeoff_point_4326") or card.get("skipped", False):
                 continue
             _, _, job_dir = resolve_job_dir(output_dir, card["path"])
-            job_name = card["name"]
-            for kmz_file in sorted(job_dir.glob("*.kmz")):
-                shutil.copy2(kmz_file, dest_path / kmz_file.name)
-                copied += 1
-            homes_kml = job_dir / "homes.kml"
-            if homes_kml.exists():
-                shutil.copy2(homes_kml, dest_path / f"{job_name}_homes.kml")
-                copied += 1
+            copied += _copy_route_job(job_dir, card["name"], dest_path)
 
     return {"ok": True, "copied": copied, "dest_dir": str(dest_path)}
 

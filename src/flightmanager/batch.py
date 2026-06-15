@@ -14,9 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from flightmanager.config import AppConfig
 from flightmanager.geometry import reproject_to_4326
