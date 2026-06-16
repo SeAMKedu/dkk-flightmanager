@@ -101,11 +101,13 @@
    translate3d positioning transform on the icon element is not overridden */
 .ld-mid{background:transparent!important;border:none!important;overflow:visible!important}
 .ld-mid::before{content:''!important;position:absolute!important;width:7px!important;height:7px!important;top:50%!important;left:50%!important;transform:translate(-50%,-50%) rotate(45deg)!important;background:#fff!important;border:1px solid #94a3b8!important;box-sizing:border-box!important}
-.leaflet-control-layers{border:none!important;background:none!important;box-shadow:none!important}
-.leaflet-control-layers-toggle{width:30px!important;height:30px!important;background-color:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);background-size:18px 18px!important}
-.leaflet-control-layers-expanded{padding:6px 8px!important;background:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);font-size:12px;min-width:80px}
-.leaflet-control-layers-expanded label{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;color:#1e293b;margin:3px 0;cursor:pointer}
-.leaflet-control-layers-expanded input{width:auto;margin:0;cursor:pointer}
+.base-layer-ctrl{background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.4)}
+.base-layer-icon{width:26px;height:26px;background:center/18px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath fill='%23555' d='M1 12.5l8 4 8-4-8-4zm0-4l8 4 8-4-8-4zm8-8L1 5l8 4 8-4z'/%3E%3C/svg%3E")}
+.base-layer-panel{display:none;flex-direction:column;gap:2px;padding:3px;border-top:1px solid #e2e8f0}
+.base-layer-ctrl:hover .base-layer-panel{display:flex}
+.base-layer-btn{width:46px;height:24px;background:#fff;border:1px solid transparent;border-radius:3px;font-size:11px;font-weight:600;color:#374151;cursor:pointer;transition:background .12s,color .12s,border-color .12s;padding:0;line-height:24px;text-align:center;white-space:nowrap}
+.base-layer-btn:hover:not(.active){background:#f1f5f9;border-color:#cbd5e1}
+.base-layer-btn.active{background:#3b82f6;color:#fff;border-color:#2563eb}
 .meas-clear-ctrl{width:30px!important;height:30px!important;background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;padding:0;font-size:18px;font-weight:700;line-height:30px;text-align:center;color:#444;cursor:pointer;display:block}
 .meas-clear-ctrl:hover{background:#f4f4f4;color:#111}
 .takeoff-icon{cursor:grab;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
