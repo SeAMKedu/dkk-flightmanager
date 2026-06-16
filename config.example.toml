@@ -223,6 +223,14 @@ forecast_days = 14
 # Re-fetch a cached forecast if older than this many hours.
 cache_max_age_hours = 3
 timeout_s = 30
+# Daytime window (local time): temperature/wind/weather are averaged over these
+# hours only, and satellite passes outside the window are hidden behind a count
+# marker in the bar.
+daytime_start_h = 6
+daytime_end_h = 18
+# A daytime pass on a day whose daytime cloud cover is at or below this percentage
+# is flagged as a "clear window" (likely usable optical image) and highlighted.
+clear_sky_max_cloud_pct = 30
 # Optional: drone max wind limit (m/s) for the future "golden window" highlight.
 # drone_wind_limit_ms = 12.0
 

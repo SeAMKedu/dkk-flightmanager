@@ -32,12 +32,14 @@ from flightmanager.config import SatellitesConfig, WeatherConfig
 log = logging.getLogger(__name__)
 
 _CACHE_FILENAME = ".forecast_cache.json"
+# Bump when the payload shape changes so stale per-folder caches are invalidated.
+_CACHE_VERSION = 3
 
 
 def _fingerprint(centroids: list[tuple[float, float]], day: str) -> str:
-    """Stable hash of rounded centroids + date — cheap to compute, no I/O."""
+    """Stable hash of payload version + rounded centroids + date — cheap, no I/O."""
     rounded = sorted((round(lat, 3), round(lon, 3)) for lat, lon in centroids)
-    payload = json.dumps({"pts": rounded, "day": day}, sort_keys=True)
+    payload = json.dumps({"v": _CACHE_VERSION, "pts": rounded, "day": day}, sort_keys=True)
     return hashlib.sha1(payload.encode()).hexdigest()
 
 
@@ -125,14 +127,21 @@ def build_forecast(
     if op_result.tile_ids and first_center:
         rep = first_center.centers.get(op_result.tile_ids[0])
     rep_lat, rep_lon = _representative_point(rep, centroids)
-    days = wx.fetch_forecast(rep_lat, rep_lon, wx_cfg, cache_dir, session)
+    weather = wx.fetch_forecast(rep_lat, rep_lon, wx_cfg, cache_dir, session)
 
     payload = {
         "generated_at": now.isoformat(),
         "tile_ids": op_result.tile_ids,
         "grid_ok": op_result.grid_ok,
         "grid_msg": op_result.grid_msg,
-        "days": wx.build_day_slots(days, op_result.overpasses),
+        "utc_offset_s": weather.utc_offset_s,
+        "daytime_window": [wx_cfg.daytime_start_h, wx_cfg.daytime_end_h],
+        "days": wx.build_day_slots(
+            weather, op_result.overpasses,
+            daytime_start_h=wx_cfg.daytime_start_h,
+            daytime_end_h=wx_cfg.daytime_end_h,
+            clear_sky_max_cloud_pct=wx_cfg.clear_sky_max_cloud_pct,
+        ),
         "attribution": {
             "weather": wx.attribution(wx_cfg),
             "satellites": op_result.attribution,

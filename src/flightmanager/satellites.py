@@ -196,21 +196,34 @@ def fetch_omm(
     return out
 
 
+# CelesTrak's gp.php has no multi-id query, so each NORAD is fetched separately and
+# can intermittently time out. A couple of quick retries smooths cold-start drops
+# (warm loads come from the per-id disk cache and never reach here).
+_OMM_RETRIES = 2
+_OMM_RETRY_BACKOFF_S = 1.0
+
+
 def _fetch_one_omm(nid: int, cfg: SatellitesConfig, sess: requests.Session) -> dict | None:
     url = cfg.omm_url.format(catnr=nid)
-    try:
-        log.info("Fetching OMM for NORAD %d from CelesTrak", nid)
-        resp = sess.get(url, timeout=cfg.timeout_s)
-        resp.raise_for_status()
-        _ns.record_download("satellites", len(resp.content))
-        data = resp.json()
-    except Exception as exc:
-        log.error("Failed to fetch OMM for %d: %s", nid, exc)
-        return None
-    if not isinstance(data, list) or not data:
-        log.warning("CelesTrak returned no element set for NORAD %d", nid)
-        return None
-    return data[0]
+    for attempt in range(_OMM_RETRIES + 1):
+        try:
+            log.info("Fetching OMM for NORAD %d from CelesTrak", nid)
+            resp = sess.get(url, timeout=cfg.timeout_s)
+            resp.raise_for_status()
+            _ns.record_download("satellites", len(resp.content))
+            data = resp.json()
+        except Exception as exc:
+            if attempt < _OMM_RETRIES:
+                time.sleep(_OMM_RETRY_BACKOFF_S * (attempt + 1))
+                continue
+            log.error("Failed to fetch OMM for %d after %d attempts: %s",
+                      nid, _OMM_RETRIES + 1, exc)
+            return None
+        if not isinstance(data, list) or not data:
+            log.warning("CelesTrak returned no element set for NORAD %d", nid)
+            return None
+        return data[0]
+    return None
 
 
 def _cache_fresh(path: Path, max_age_days: int) -> bool:

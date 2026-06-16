@@ -334,6 +334,15 @@ class WeatherConfig(BaseModel):
     timeout_s: int = Field(default=30, gt=0)
     # Optional drone max wind limit (m/s) for the deferred "golden window" highlight.
     drone_wind_limit_ms: float | None = None
+    # Daytime window (local time) used for the forecast bar: temperature, wind, and
+    # weather are aggregated over these hours only (night is irrelevant for mapping),
+    # and satellite passes outside this window are hidden behind a count marker.
+    daytime_start_h: int = Field(default=6, ge=0, le=23)
+    daytime_end_h: int = Field(default=18, ge=1, le=24)
+    # A daytime satellite pass on a day whose daytime cloud cover is at or below this
+    # percentage is flagged as a "clear window" (good chance of a usable optical image)
+    # and highlighted in the forecast bar.
+    clear_sky_max_cloud_pct: int = Field(default=30, ge=0, le=100)
 
 
 class AppConfig(BaseModel):

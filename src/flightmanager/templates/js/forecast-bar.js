@@ -15,6 +15,7 @@ import { escHtml } from './utils.js';
 var _fcContainer = null;
 var _fcLoadedKey = null;   // folder key currently rendered (undefined = not loaded)
 var _fcReqSeq = 0;         // guards against out-of-order async responses
+var _fcCollapsed = (function(){ try { return localStorage.getItem('fcCollapsed') === '1'; } catch(e){ return false; } })();
 
 // Short codes + family colours for the satellite badges.
 var _SAT_CODE = {
@@ -66,8 +67,19 @@ function _fcEnsureContainer() {
     _fcContainer = document.createElement('div');
     _fcContainer.id = 'forecast-bar';
     document.getElementById('map').appendChild(_fcContainer);
+    // Delegated: collapse toggle survives innerHTML rebuilds.
+    _fcContainer.addEventListener('click', function(e) {
+      if (e.target.closest('.fc-collapse')) _fcToggleCollapse();
+    });
   }
+  _fcContainer.classList.toggle('collapsed', _fcCollapsed);
   _fcContainer.style.display = 'block';
+}
+
+function _fcToggleCollapse() {
+  _fcCollapsed = !_fcCollapsed;
+  try { localStorage.setItem('fcCollapsed', _fcCollapsed ? '1' : '0'); } catch (e) {}
+  _fcContainer.classList.toggle('collapsed', _fcCollapsed);
 }
 
 async function _fcFetchAndRender(folder) {
@@ -88,81 +100,132 @@ async function _fcFetchAndRender(folder) {
   }
 }
 
+function _fcCollapseBtn() {
+  return '<button class="fc-collapse" title="Collapse / expand forecast" aria-label="Collapse forecast">'
+    + '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" '
+    + 'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg></button>';
+}
+
 function _fcRender(data) {
   var days = (data && data.days) || [];
+  var tiles = (data && (data.tile_ids || []).join(', ')) || '';
+  var headLabel = tiles || (data && data.grid_msg) || 'Forecast';
+
+  var out = ['<div class="fc-head">' + _fcCollapseBtn()
+    + '<span class="fc-head-label">' + escHtml(headLabel) + '</span></div>'];
+
   if (!days.length) {
-    var msg = (data && data.grid_msg) || 'No forecast available.';
-    _fcContainer.innerHTML = '<div class="fc-loading">' + escHtml(msg) + '</div>';
+    out.push('<div class="fc-body"><div class="fc-loading">'
+      + escHtml((data && data.grid_msg) || 'No forecast available.') + '</div></div>');
+    _fcContainer.innerHTML = out.join('');
     _fcContainer.dataset.loaded = '1';
     return;
   }
 
-  var today = new Date().toISOString().slice(0, 10);
-  var tiles = (data.tile_ids || []).join(', ');
-  var out = [];
-  out.push('<div class="fc-head">' + escHtml(tiles || 'No MGRS tile') + '</div>');
-  out.push('<div class="fc-slots">');
-  days.forEach(function (slot) { out.push(_fcSlot(slot, today)); });
+  var today = new Date().toLocaleDateString('en-CA');  // local YYYY-MM-DD
+  var n = days.length;
+
+  // Row-labelled grid: a left header column names each row; units live in the
+  // labels so cell values stay bare. Cells flow row-major into the column track.
+  out.push('<div class="fc-body"><div class="fc-grid" style="grid-template-columns:'
+    + 'auto repeat(' + n + ',minmax(38px,1fr))">');
+  out.push(_fcRow('Date', 'fc-r-date', days, today, _cellDate));
+  out.push(_fcRow('Weather', 'fc-r-wx', days, today, _cellWx));
+  out.push(_fcRow('Temp °C', 'fc-r-temp', days, today, _cellTemp));
+  out.push(_fcRow('Wind m/s', 'fc-r-wind', days, today, _cellWind));
+  out.push(_fcRow('Cloud %', 'fc-r-cloud', days, today, _cellCloud));
+  out.push(_fcRow('Satellites', 'fc-r-sats', days, today, _cellSats));
   out.push('</div>');
 
   var attr = (data.attribution && data.attribution.weather) || '';
-  if (attr) out.push('<div class="fc-attr" title="' + escHtml(
-    (data.attribution.weather || '') + ' ' + (data.attribution.satellites || '')
-  ) + '">' + escHtml(attr) + '</div>');
+  var dw = data.daytime_window || [6, 18];
+  var note = 'Daytime ' + dw[0] + '–' + dw[1] + ' only · ☀ = clear-sky window'
+    + (attr ? ' · ' + attr : '');
+  out.push('<div class="fc-attr" title="' + escHtml(
+    note + ' ' + ((data.attribution && data.attribution.satellites) || '')
+  ) + '">' + escHtml(note) + '</div>');
+  out.push('</div>');
 
   _fcContainer.innerHTML = out.join('');
   _fcContainer.dataset.loaded = '1';
 }
 
-function _fcSlot(slot, today) {
+// Emit one grid row: a label cell followed by one cell per day.
+function _fcRow(label, rowCls, days, today, cellFn) {
+  var out = ['<div class="fc-rlabel ' + rowCls + '">' + escHtml(label) + '</div>'];
+  days.forEach(function (slot) {
+    var todayCls = slot.date === today ? ' fc-col-today' : '';
+    out.push('<div class="fc-cell ' + rowCls + todayCls + '" title="'
+      + escHtml(_fcTooltip(slot)) + '">' + cellFn(slot) + '</div>');
+  });
+  return out.join('');
+}
+
+function _cellDate(slot) {
   var dt = new Date(slot.date + 'T00:00:00Z');
   var wd = dt.toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
   var dom = dt.toLocaleDateString(undefined, { day: 'numeric', timeZone: 'UTC' });
-  var isToday = slot.date === today;
+  return '<span class="fc-wd">' + escHtml(wd) + '</span> ' + escHtml(dom);
+}
+
+function _cellWx(slot) {
+  if (!slot.weather) return '<svg class="fc-wx fc-wx-empty"></svg>';
+  return '<svg class="fc-wx" aria-hidden="true"><use href="#ic-wx-'
+    + escHtml(slot.weather.icon || 'unknown') + '"/></svg>';
+}
+
+function _cellTemp(slot) {
   var w = slot.weather;
+  return (w && w.t_avg_c != null) ? Math.round(w.t_avg_c) + '°' : '–';
+}
 
-  var parts = ['<div class="fc-slot' + (isToday ? ' fc-today' : '') + '" title="'
-    + escHtml(_fcTooltip(slot)) + '">'];
-  parts.push('<div class="fc-date">' + escHtml(wd) + ' ' + escHtml(dom) + '</div>');
+function _cellWind(slot) {
+  var w = slot.weather;
+  return (w && w.wind_avg_ms != null) ? String(Math.round(w.wind_avg_ms)) : '–';
+}
 
-  if (w) {
-    parts.push('<svg class="fc-wx" aria-hidden="true"><use href="#ic-wx-'
-      + escHtml(w.icon || 'unknown') + '"/></svg>');
-    var tmax = w.t_max_c == null ? '–' : Math.round(w.t_max_c) + '°';
-    var tmin = w.t_min_c == null ? '' : '<span class="fc-tmin">' + Math.round(w.t_min_c) + '°</span>';
-    parts.push('<div class="fc-temp">' + tmax + tmin + '</div>');
-    var wind = w.wind_max_ms == null ? '' : Math.round(w.wind_max_ms) + '<span class="fc-u">m/s</span>';
-    parts.push('<div class="fc-wind">' + wind + '</div>');
-  } else {
-    parts.push('<div class="fc-wx fc-wx-empty"></div>');
-    parts.push('<div class="fc-temp">–</div>');
-    parts.push('<div class="fc-wind"></div>');
-  }
+function _cellCloud(slot) {
+  var w = slot.weather;
+  if (!w || w.cloud_pct == null) return '–';
+  var cl = Math.round(w.cloud_pct);
+  var cls = cl <= 30 ? 'fc-cloudv-clear' : (cl > 70 ? 'fc-cloudv-over' : '');
+  return '<span class="' + cls + '">' + cl + '</span>';
+}
 
-  parts.push('<div class="fc-sats">');
-  (slot.satellites || []).forEach(function (s) {
-    parts.push('<span class="fc-sat" style="background:' + _satColor(s.name) + '">'
-      + escHtml(_satCode(s.name)) + '</span>');
+function _cellSats(slot) {
+  var sats = slot.satellites || [];
+  var dayPasses = sats.filter(function (s) { return s.daytime; });
+  var nightCount = sats.length - dayPasses.length;
+  var out = [];
+  dayPasses.forEach(function (s) {
+    var clear = s.clear_window ? ' fc-sat-clear' : '';
+    out.push('<span class="fc-sat' + clear + '" style="background:' + _satColor(s.name)
+      + '">' + escHtml(_satCode(s.name)) + '</span>');
   });
-  parts.push('</div>');
+  if (nightCount > 0) {
+    out.push('<span class="fc-sat fc-sat-night">+' + nightCount + '☾</span>');
+  }
+  return '<div class="fc-sats">' + out.join('') + '</div>';
+}
 
-  parts.push('</div>');
-  return parts.join('');
+function _satLine(s) {
+  var t = new Date(s.peak_local || s.peak_utc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return s.name + '  ' + t + '  ' + Math.round(s.max_elev_deg) + '°';
 }
 
 function _fcTooltip(slot) {
-  var lines = [slot.date];
+  var lines = [slot.date + '  (daytime avg)'];
   var w = slot.weather;
   if (w) {
     lines.push(w.label || '');
-    if (w.t_max_c != null) lines.push('Temp ' + Math.round(w.t_min_c) + '…' + Math.round(w.t_max_c) + ' °C');
-    if (w.wind_max_ms != null) lines.push('Wind max ' + w.wind_max_ms + ' m/s');
+    if (w.t_avg_c != null) lines.push('Temp ' + Math.round(w.t_avg_c) + ' °C');
+    if (w.wind_avg_ms != null) lines.push('Wind ' + w.wind_avg_ms + ' m/s  (flight)');
+    if (w.cloud_pct != null) lines.push('Cloud ' + Math.round(w.cloud_pct) + ' %  (imaging)');
     if (w.precip_mm != null) lines.push('Precip ' + w.precip_mm + ' mm');
-    if (w.cloud_pct != null) lines.push('Cloud ' + Math.round(w.cloud_pct) + ' %');
   }
   (slot.satellites || []).forEach(function (s) {
-    var t = new Date(s.peak_utc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    lines.push(s.name + '  ' + t + '  ' + Math.round(s.max_elev_deg) + '°  ' + s.tile_id);
+    var mark = s.daytime ? (s.clear_window ? ' ☀ clear window' : '') : ' (low light)';
+    lines.push(_satLine(s) + '  ' + s.tile_id + mark);
   });
   return lines.filter(Boolean).join('\n');
 }
