@@ -143,7 +143,7 @@ function _fcRender(data) {
 
   var attr = (data.attribution && data.attribution.weather) || '';
   var dw = data.daytime_window || [6, 18];
-  var note = 'Daytime ' + dw[0] + '–' + dw[1] + ' only · ☀ clear-sky · ★ golden (flyable + clear)'
+  var note = 'Daytime ' + dw[0] + '–' + dw[1] + ' only · ☀ clear-sky · green = golden (flyable + clear)'
     + (attr ? ' · ' + attr : '');
   out.push('<div class="fc-attr" title="' + escHtml(
     note + ' ' + ((data.attribution && data.attribution.satellites) || '')
@@ -170,9 +170,10 @@ function _fcRow(label, rowCls, days, today, cellFn) {
 function _cellDate(slot) {
   var dt = new Date(slot.date + 'T00:00:00Z');
   var wd = dt.toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
-  var dom = dt.toLocaleDateString(undefined, { day: 'numeric', timeZone: 'UTC' });
-  var star = slot.golden ? '<span class="fc-golden-star">★</span>' : '';
-  return '<span class="fc-wd">' + escHtml(wd) + '</span> ' + escHtml(dom) + star;
+  var parts = slot.date.split('-');  // [yyyy, mm, dd] → day.month (e.g. 22.6)
+  var dm = parseInt(parts[2], 10) + '.' + parseInt(parts[1], 10);
+  return '<span class="fc-wd">' + escHtml(wd) + '</span>'
+    + '<span class="fc-dm">' + dm + '</span>';
 }
 
 function _cellWx(slot) {
@@ -223,7 +224,7 @@ function _satLine(s) {
 
 function _fcTooltip(slot) {
   var lines = [slot.date + '  (daytime avg)'];
-  if (slot.golden) lines.push('★ Golden: flyable weather + clear-sky satellite pass');
+  if (slot.golden) lines.push('Golden day: flyable weather + clear-sky satellite pass');
   var w = slot.weather;
   if (w) {
     lines.push(w.label || '');

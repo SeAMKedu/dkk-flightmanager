@@ -24,11 +24,11 @@
 .fc-cell.fc-col-golden.fc-col-today{background:rgba(245,158,11,.16)}
 .fc-cell.fc-r-date.fc-col-golden{border-radius:4px 4px 0 0;box-shadow:inset 0 2px 0 #22c55e}
 .fc-cell.fc-r-sats.fc-col-golden{border-radius:0 0 4px 4px}
-.fc-golden-star{color:#22c55e;margin-left:2px;font-size:9px;vertical-align:top}
 .fc-warn{color:#fde047;background:rgba(180,83,9,.25);font:600 10px/1.3 sans-serif;padding:4px 8px;border-radius:5px;margin-bottom:5px;text-align:center}
 /* Per-row value sizing: wind + cloud are the primary pilot metrics. */
-.fc-cell.fc-r-date{color:#e2e8f0;font:600 11px/1.1 sans-serif}
+.fc-cell.fc-r-date{flex-direction:column;color:#e2e8f0;font:600 10px/1.15 sans-serif;white-space:nowrap}
 .fc-r-date .fc-wd{font-weight:800}
+.fc-r-date .fc-dm{font-weight:600;color:#cbd5e1}
 .fc-wx{width:21px;height:21px;color:#e2e8f0}
 .fc-wx-empty{opacity:.25}
 .fc-cell.fc-r-temp{color:#cbd5e1;font:600 11px/1 sans-serif}
