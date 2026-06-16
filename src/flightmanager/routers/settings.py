@@ -212,6 +212,60 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "label": "Default drone",
         "description": "The drone profile used for new jobs when not overridden per-job in the UI.",
     },
+    # ── Satellites ────────────────────────────────────────────────────────────
+    "satellites.grid_file": {
+        "label": "MGRS grid file", "unit": "",
+        "description": "Path to the Sentinel-2 tiling-grid GeoJSON (~20 MB, not bundled). Download from zenodo.org/records/10998972.",
+    },
+    "satellites.min_elevation_deg": {
+        "label": "Min overpass elevation", "unit": "°",
+        "description": "Only count near-nadir passes whose peak elevation exceeds this. Higher = stricter (more directly overhead).",
+    },
+    "satellites.days_ahead": {
+        "label": "Overpass search window", "unit": "days",
+        "description": "How many days ahead to compute satellite overpasses.",
+    },
+    "satellites.omm_max_age_days": {
+        "label": "Orbit data max age", "unit": "days",
+        "description": "Re-fetch orbital elements from CelesTrak when the cached copy is older than this.",
+    },
+    "satellites.timeout_s": {
+        "label": "CelesTrak timeout", "unit": "s",
+        "description": "Request timeout when fetching orbital elements.",
+    },
+    # ── Weather ───────────────────────────────────────────────────────────────
+    "weather.provider": {
+        "label": "Weather provider", "unit": "",
+        "description": "Source for the forecast bar. Open-Meteo is recommended; FMI is not implemented yet (selecting it shows no weather).",
+    },
+    "weather.forecast_days": {
+        "label": "Forecast days", "unit": "days",
+        "description": "How many days of weather to request (Open-Meteo serves up to 16).",
+    },
+    "weather.cache_max_age_hours": {
+        "label": "Forecast cache age", "unit": "h",
+        "description": "Re-fetch a cached forecast when it is older than this.",
+    },
+    "weather.daytime_start_h": {
+        "label": "Daytime start", "unit": "h",
+        "description": "Local hour the daytime window starts. Weather is averaged over the daytime window only.",
+    },
+    "weather.daytime_end_h": {
+        "label": "Daytime end", "unit": "h",
+        "description": "Local hour the daytime window ends.",
+    },
+    "weather.clear_sky_max_cloud_pct": {
+        "label": "Clear-sky cloud limit", "unit": "%",
+        "description": "A daytime pass under cloud at or below this (at its overpass time) is flagged a clear-sky imaging window.",
+    },
+    "weather.drone_wind_limit_ms": {
+        "label": "Max flying wind", "unit": "m/s", "nullable": True,
+        "description": "A day is a 'golden' match (highlighted) when daytime wind is at or below this AND a clear-sky pass falls that day. Blank disables golden highlighting.",
+    },
+    "weather.timeout_s": {
+        "label": "Weather API timeout", "unit": "s",
+        "description": "Request timeout when fetching the forecast.",
+    },
 }
 
 # Ordered sections — (section_id, label)
@@ -225,6 +279,8 @@ _SECTIONS_DEF: list[tuple[str, str]] = [
     ("output",      "Output"),
     ("parcels",     "Parcels"),
     ("properties",  "Properties"),
+    ("satellites",  "Satellites"),
+    ("weather",     "Weather"),
 ]
 
 # Fields to hide per section (internal / dangerous to edit via UI)
@@ -235,6 +291,9 @@ _SKIP_FIELDS: dict[str, set[str]] = {
     "output":      {"color_palette"},
     # Advanced mode params are per-job, configured via the Template Settings modal
     "flight":      {"advanced_mode", "adv_min_height_m", "adv_powerline_clearance_m", "adv_slope_f"},
+    # URLs and the tracked-satellite list are managed in config.toml directly.
+    "satellites":  {"omm_url", "tracked"},
+    "weather":     {"open_meteo_url", "fmi_wfs_url"},
 }
 
 
@@ -285,7 +344,8 @@ def _extract_type_info(fschema: dict) -> dict:
 def _build_sections(config: Any) -> list[dict]:
     from flightmanager.config import (
         CacheConfig, FlightConfig, HomeSafetyConfig, OutputConfig,
-        ParcelsConfig, PolygonConfig, PowerLinesConfig, PropertiesConfig, ZonesConfig,
+        ParcelsConfig, PolygonConfig, PowerLinesConfig, PropertiesConfig,
+        SatellitesConfig, WeatherConfig, ZonesConfig,
     )
     model_map: dict[str, type] = {
         "flight":      FlightConfig,
@@ -297,6 +357,8 @@ def _build_sections(config: Any) -> list[dict]:
         "output":      OutputConfig,
         "parcels":     ParcelsConfig,
         "properties":  PropertiesConfig,
+        "satellites":  SatellitesConfig,
+        "weather":     WeatherConfig,
     }
 
     # ── Drone section (top-level field + enum from loaded drone list) ──────────

@@ -332,8 +332,10 @@ class WeatherConfig(BaseModel):
     # FMI keyless WFS download endpoint (used when provider = "fmi").
     fmi_wfs_url: str = "https://opendata.fmi.fi/wfs"
     timeout_s: int = Field(default=30, gt=0)
-    # Optional drone max wind limit (m/s) for the deferred "golden window" highlight.
-    drone_wind_limit_ms: float | None = None
+    # Max wind (m/s) you'll fly a mapping mission in. A day counts as a "golden"
+    # match (highlighted) when its daytime wind is at or below this AND a clear-sky
+    # satellite pass falls on the same day. Set null to disable golden highlighting.
+    drone_wind_limit_ms: float | None = 10.0
     # Daytime window (local time) used for the forecast bar: temperature, wind, and
     # weather are aggregated over these hours only (night is irrelevant for mapping),
     # and satellite passes outside this window are hidden behind a count marker.
@@ -397,11 +399,13 @@ _SAVE_SKIP: dict[str, set[str]] = {
     "home_safety": {"residential_kohdeluokka", "a3_additional_kohdeluokka"},
     "zones":       {"api_url"},
     "cache":       {"tile_size_m", "cache_dir"},
+    "satellites":  {"omm_url"},
+    "weather":     {"open_meteo_url", "fmi_wfs_url"},
 }
 
 _SAVE_SECTIONS = [
     "flight", "home_safety", "polygon", "zones", "cache", "output", "parcels", "properties",
-    "powerlines",
+    "powerlines", "satellites", "weather",
 ]
 
 

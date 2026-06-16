@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -50,6 +50,13 @@ class _GridIndex:
     geoms: list                       # parallel to tree input order
     names: list[str]                  # MGRS tile id per geom
     centers: dict[str, tuple[float, float]]  # tile_id -> (lat, lon) of centroid
+    geom_by_name: dict[str, object]   # tile_id -> shapely geometry
+
+    def geojson(self, tile_id: str) -> dict | None:
+        """GeoJSON geometry (EPSG:4326) for *tile_id*, or None."""
+        from shapely.geometry import mapping
+        g = self.geom_by_name.get(tile_id)
+        return mapping(g) if g is not None else None
 
 
 @dataclass
@@ -67,6 +74,8 @@ class OverpassResult:
     overpasses: list[Overpass]
     grid_ok: bool
     grid_msg: str = ""
+    tile_centers: dict[str, tuple[float, float]] = field(default_factory=dict)
+    tile_geojson: dict[str, dict] = field(default_factory=dict)  # tile_id -> GeoJSON geometry
     attribution: str = (
         "Orbital data from CelesTrak. Sentinel-2 tiling grid: "
         "https://zenodo.org/records/10998972"
@@ -99,6 +108,7 @@ def load_grid(grid_path: str | Path) -> _GridIndex | None:
     data = json.loads(p.read_text(encoding="utf-8"))
     geoms, names = [], []
     centers: dict[str, tuple[float, float]] = {}
+    geom_by_name: dict[str, object] = {}
     for feat in data.get("features", []):
         name = (feat.get("properties") or {}).get("Name")
         if not name:
@@ -108,8 +118,10 @@ def load_grid(grid_path: str | Path) -> _GridIndex | None:
         names.append(name)
         c = geom.centroid
         centers[name] = (c.y, c.x)  # (lat, lon)
+        geom_by_name[name] = geom
 
-    idx = _GridIndex(tree=STRtree(geoms), geoms=geoms, names=names, centers=centers)
+    idx = _GridIndex(tree=STRtree(geoms), geoms=geoms, names=names,
+                     centers=centers, geom_by_name=geom_by_name)
     _GRID_CACHE[key] = idx
     log.info("Indexed %d MGRS tiles", len(names))
     return idx
@@ -155,6 +167,59 @@ def tiles_for_points(
         if tid and tid not in out:
             out[tid] = grid.centers[tid]
     return out
+
+
+def neighbor_tiles(grid: _GridIndex, tile_ids: set[str]) -> list[str]:
+    """Return MGRS tiles adjacent to (intersecting) any of *tile_ids*, excluding
+    the inputs themselves. Sentinel-2 tiles overlap, so the surrounding tiles
+    geometrically intersect the job tile."""
+    found: set[str] = set()
+    for tid in tile_ids:
+        g = grid.geom_by_name.get(tid)
+        if g is None:
+            continue
+        for i in grid.tree.query(g):
+            i = int(i)
+            name = grid.names[i]
+            if name in tile_ids or name in found:
+                continue
+            if grid.geoms[i].intersects(g):
+                found.add(name)
+    return sorted(found)
+
+
+def tiles_with_neighbors(
+    points_latlon: list[tuple[float, float]], cfg: SatellitesConfig
+) -> dict:
+    """Job tiles + their neighbours for the map-view 'MGRS tiles' overlay.
+
+    Returns ``{grid_ok, grid_msg, tiles: [{id, geometry, center, is_job, job_count}]}``.
+    Degrades gracefully (``grid_ok: False``) when the grid file is missing.
+    """
+    grid = load_grid(cfg.grid_file)
+    if grid is None:
+        return {"grid_ok": False,
+                "grid_msg": f"Sentinel-2 grid file not found: {cfg.grid_file}",
+                "tiles": []}
+
+    counts: dict[str, int] = {}
+    for lat, lon in points_latlon:
+        tid = tile_for_point(lat, lon, grid)
+        if tid:
+            counts[tid] = counts.get(tid, 0) + 1
+
+    job_ids = set(counts)
+    tiles = [
+        {"id": tid, "geometry": grid.geojson(tid),
+         "center": list(grid.centers[tid]), "is_job": True, "job_count": counts[tid]}
+        for tid in sorted(job_ids)
+    ]
+    for tid in neighbor_tiles(grid, job_ids):
+        tiles.append({"id": tid, "geometry": grid.geojson(tid),
+                      "center": list(grid.centers[tid]), "is_job": False, "job_count": 0})
+
+    msg = "" if job_ids else "No MGRS tile matched the job location(s)."
+    return {"grid_ok": True, "grid_msg": msg, "tiles": tiles}
 
 
 # ---------------------------------------------------------------------------
@@ -330,10 +395,12 @@ def overpasses_for_points(
             tile_ids=[], overpasses=[], grid_ok=True,
             grid_msg="No MGRS tile matched the job location(s).",
         )
+    tile_geojson = {tid: grid.geojson(tid) for tid in tile_centers}
     if not enabled:
         return OverpassResult(
             tile_ids=sorted(tile_centers), overpasses=[], grid_ok=True,
             grid_msg="No tracked satellites enabled.",
+            tile_centers=tile_centers, tile_geojson=tile_geojson,
         )
 
     names_by_id = {s.norad_id: s.name for s in enabled}
@@ -344,4 +411,5 @@ def overpasses_for_points(
     )
     return OverpassResult(
         tile_ids=sorted(tile_centers), overpasses=overpasses, grid_ok=True,
+        tile_centers=tile_centers, tile_geojson=tile_geojson,
     )

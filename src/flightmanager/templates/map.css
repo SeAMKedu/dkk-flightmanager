@@ -19,6 +19,13 @@
 .fc-cell.fc-col-today{background:rgba(245,158,11,.16)}
 .fc-cell.fc-r-date.fc-col-today{border-radius:4px 4px 0 0}
 .fc-cell.fc-r-sats.fc-col-today{border-radius:0 0 4px 4px}
+/* Golden day: flyable weather + a clear-sky satellite pass coincide. */
+.fc-cell.fc-col-golden{background:rgba(34,197,94,.16)}
+.fc-cell.fc-col-golden.fc-col-today{background:rgba(245,158,11,.16)}
+.fc-cell.fc-r-date.fc-col-golden{border-radius:4px 4px 0 0;box-shadow:inset 0 2px 0 #22c55e}
+.fc-cell.fc-r-sats.fc-col-golden{border-radius:0 0 4px 4px}
+.fc-golden-star{color:#22c55e;margin-left:2px;font-size:9px;vertical-align:top}
+.fc-warn{color:#fde047;background:rgba(180,83,9,.25);font:600 10px/1.3 sans-serif;padding:4px 8px;border-radius:5px;margin-bottom:5px;text-align:center}
 /* Per-row value sizing: wind + cloud are the primary pilot metrics. */
 .fc-cell.fc-r-date{color:#e2e8f0;font:600 11px/1.1 sans-serif}
 .fc-r-date .fc-wd{font-weight:800}
@@ -69,6 +76,9 @@
 #mv-route-btn{background:none;border:1px solid #334155;border-radius:3px;color:#64748b;font-size:9px;padding:2px 7px;cursor:pointer;font-weight:600;transition:color .12s,border-color .12s;margin-top:6px;display:block;width:100%;text-align:center}
 #mv-route-btn:hover{color:#94a3b8;border-color:#475569}
 #mv-route-btn.active{color:#3b82f6;border-color:#3b82f6}
+.mgrs-tile-label{color:#475569;font:600 11px/1 sans-serif;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;white-space:nowrap;pointer-events:none}
+.mgrs-tile-label.mgrs-job{color:#0f172a;font-weight:800;font-size:12px}
+.mv-st-sw-nb{opacity:.5;border:1px dashed rgba(255,255,255,.6)}
 .mv-tooltip{background:#1e293b;border:1px solid #334155;color:#f1f5f9;font-size:12px;line-height:1.5;padding:6px 10px;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:auto}
 .mv-tooltip::before{border-top-color:#334155}
 .mv-tt-inner{min-width:140px}

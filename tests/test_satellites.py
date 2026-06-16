@@ -101,6 +101,48 @@ def test_load_grid_missing_file_returns_none(tmp_path):
     assert sat.load_grid(tmp_path / "nope.geojson") is None
 
 
+def _adjacent_grid(tmp_path: Path) -> str:
+    """A 2×2 block of overlapping tiles (like the real overlapping MGRS grid)."""
+    def sq(name, x0, y0):
+        return {"type": "Feature", "properties": {"Name": name},
+                "geometry": {"type": "Polygon", "coordinates": [[
+                    [x0, y0], [x0 + 1.1, y0], [x0 + 1.1, y0 + 1.1],
+                    [x0, y0 + 1.1], [x0, y0]]]}}  # +0.1 overlap with the next cell
+    fc = {"type": "FeatureCollection", "features": [
+        sq("CENTER", 22.0, 62.0), sq("EAST", 23.0, 62.0),
+        sq("NORTH", 22.0, 63.0), sq("FAR", 30.0, 62.0)]}
+    p = tmp_path / "adj.geojson"
+    p.write_text(json.dumps(fc), encoding="utf-8")
+    sat._GRID_CACHE.clear()
+    return str(p)
+
+
+def test_neighbor_tiles(tmp_path):
+    grid = sat.load_grid(_adjacent_grid(tmp_path))
+    nb = sat.neighbor_tiles(grid, {"CENTER"})
+    assert "EAST" in nb and "NORTH" in nb   # overlapping neighbours
+    assert "FAR" not in nb                  # disjoint
+    assert "CENTER" not in nb               # self excluded
+
+
+def test_tiles_with_neighbors(tmp_path):
+    cfg = SatellitesConfig(grid_file=_adjacent_grid(tmp_path))
+    res = sat.tiles_with_neighbors([(62.3, 22.3)], cfg)  # inside CENTER
+    assert res["grid_ok"] is True
+    by_id = {t["id"]: t for t in res["tiles"]}
+    assert by_id["CENTER"]["is_job"] is True and by_id["CENTER"]["job_count"] == 1
+    assert by_id["EAST"]["is_job"] is False
+    assert all(t["geometry"] for t in res["tiles"])
+
+
+def test_tiles_with_neighbors_missing_grid(tmp_path):
+    sat._GRID_CACHE.clear()
+    cfg = SatellitesConfig(grid_file=str(tmp_path / "absent.geojson"))
+    res = sat.tiles_with_neighbors([(62.3, 22.3)], cfg)
+    assert res["grid_ok"] is False
+    assert res["tiles"] == []
+
+
 # ---------------------------------------------------------------------------
 # OMM cache (no network)
 # ---------------------------------------------------------------------------
@@ -201,3 +243,34 @@ def test_default_tracked_satellites():
     # Sentinel-2 trio + Landsat 8/9, verified ids.
     assert {40697, 42063, 60989, 39084, 49260} <= ids
     assert cfg.min_elevation_deg == 60.0
+
+
+# ---------------------------------------------------------------------------
+# Integration (live network — run with: pytest -m integration)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_fetch_omm_live(tmp_path):
+    """CelesTrak returns a usable OMM element set for Sentinel-2A."""
+    cfg = SatellitesConfig()
+    out = sat.fetch_omm([40697], cfg, tmp_path)
+    assert 40697 in out
+    assert out[40697]["NORAD_CAT_ID"] == 40697
+    assert "MEAN_MOTION" in out[40697]
+
+
+@pytest.mark.integration
+def test_overpasses_for_points_live(tmp_path):
+    """End-to-end overpass computation against live CelesTrak + the real grid file.
+
+    Skips if the (un-bundled) Sentinel-2 grid file is not present locally.
+    """
+    cfg = SatellitesConfig()
+    if not Path(cfg.grid_file).exists():
+        pytest.skip(f"grid file not present: {cfg.grid_file}")
+    res = sat.overpasses_for_points([SEINAJOKI], cfg, tmp_path)
+    assert res.grid_ok is True
+    assert res.tile_ids                      # a Finnish field maps to a tile
+    assert res.overpasses                    # at least one pass in the window
+    assert all(o.max_elev_deg >= cfg.min_elevation_deg for o in res.overpasses)

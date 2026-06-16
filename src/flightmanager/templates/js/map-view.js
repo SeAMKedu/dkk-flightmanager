@@ -7,7 +7,7 @@ import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 import { openDeleteModal, openMoveModal } from './modal-utils.js';
 import { clearTakeoffForMapView, _hideVlos } from './takeoff.js';
-import { getMvStatColor, getMvStatMode, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
+import { getMvStatColor, getMvStatMode, statModeColorsJobs, clearMgrsLayer, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
 import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
 import { showForecastBar, destroyForecastBar, setForecastBarShifted } from './forecast-bar.js';
 import { hideCesiumView } from './cesium-view.js';
@@ -94,6 +94,7 @@ export function closeMapView() {
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
   destroyBatteryTimeline();
   destroyForecastBar();
+  clearMgrsLayer();
   _mvClearLayers();
   _mvHideDim();
   if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
@@ -217,7 +218,7 @@ function _mvApplyFilter(folderFilter, skipFit) {
   showBatteryTimeline(_mvAllFeatures, _mvSelected, _mvCurrentFolder, _mvLayers);
   showForecastBar(_mvCurrentFolder);
   renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
-  if (getMvStatMode() !== 'normal') {
+  if (statModeColorsJobs()) {
     _mvLayers.forEach(function(item) {
       if (_mvSelected.has(item.path)) return;
       var c = getMvStatColor(item.feature.properties);
@@ -378,7 +379,7 @@ export function mvDeleteJob(path, name) {
 }
 
 function _mvUpdateDim() {
-  if (getMvStatMode() !== 'normal' && _mvMode) { _mvShowDim(); } else { _mvHideDim(); }
+  if (statModeColorsJobs() && _mvMode) { _mvShowDim(); } else { _mvHideDim(); }
 }
 
 function _mvShowDim() {

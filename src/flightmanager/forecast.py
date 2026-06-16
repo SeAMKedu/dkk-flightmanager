@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 _CACHE_FILENAME = ".forecast_cache.json"
 # Bump when the payload shape changes so stale per-folder caches are invalidated.
-_CACHE_VERSION = 3
+_CACHE_VERSION = 4
 
 
 def _fingerprint(centroids: list[tuple[float, float]], day: str) -> str:
@@ -121,33 +121,74 @@ def build_forecast(
     # Overpasses (OMM disk-cached; grid loaded once per process).
     op_result = sat.overpasses_for_points(centroids, sat_cfg, cache_dir, start=now, session=session)
 
-    # Weather at a representative point (works even when the grid is missing).
-    first_center = op_result.tile_ids and sat.load_grid(sat_cfg.grid_file)
-    rep = None
-    if op_result.tile_ids and first_center:
-        rep = first_center.centers.get(op_result.tile_ids[0])
-    rep_lat, rep_lon = _representative_point(rep, centroids)
-    weather = wx.fetch_forecast(rep_lat, rep_lon, wx_cfg, cache_dir, session)
+    # Weather per MGRS tile; the representative tile (most jobs) drives the day rows,
+    # while each pass's clear-window is qualified by its own tile's cloud forecast.
+    rep_weather, weather_by_tile, rep_tile = _resolve_weather(
+        op_result, centroids, sat_cfg, wx_cfg, cache_dir, session)
 
     payload = {
         "generated_at": now.isoformat(),
         "tile_ids": op_result.tile_ids,
         "grid_ok": op_result.grid_ok,
         "grid_msg": op_result.grid_msg,
-        "utc_offset_s": weather.utc_offset_s,
+        "utc_offset_s": rep_weather.utc_offset_s,
         "daytime_window": [wx_cfg.daytime_start_h, wx_cfg.daytime_end_h],
+        "weather_tile_id": rep_tile,
+        "tiles": [
+            {"id": tid, "center": list(op_result.tile_centers[tid]),
+             "geometry": op_result.tile_geojson.get(tid)}
+            for tid in sorted(op_result.tile_centers)
+        ],
         "days": wx.build_day_slots(
-            weather, op_result.overpasses,
+            rep_weather, op_result.overpasses,
             daytime_start_h=wx_cfg.daytime_start_h,
             daytime_end_h=wx_cfg.daytime_end_h,
             clear_sky_max_cloud_pct=wx_cfg.clear_sky_max_cloud_pct,
+            weather_by_tile=weather_by_tile,
+            drone_wind_limit_ms=wx_cfg.drone_wind_limit_ms,
         ),
         "attribution": {
             "weather": wx.attribution(wx_cfg),
             "satellites": op_result.attribution,
         },
     }
+    if wx_cfg.provider == "fmi":
+        payload["weather_warning"] = (
+            "FMI weather provider is not implemented yet — no weather shown. "
+            "Switch to Open-Meteo in Settings."
+        )
 
     if cache_path is not None:
         _write_cache(cache_path, fp, payload)
     return payload
+
+
+def _resolve_weather(op_result, centroids, sat_cfg, wx_cfg, cache_dir, session):
+    """Fetch weather for every MGRS tile and pick the representative one (most jobs).
+
+    Returns ``(rep_weather, weather_by_tile, rep_tile_id)``. When the grid is missing
+    (no tiles) weather is fetched once at the centroid mean.
+    """
+    from flightmanager import satellites as sat
+    from flightmanager import weather as wx
+
+    tile_centers = op_result.tile_centers
+    if not tile_centers:
+        rep_lat, rep_lon = _representative_point(None, centroids)
+        return wx.fetch_forecast(rep_lat, rep_lon, wx_cfg, cache_dir, session), {}, None
+
+    weather_by_tile = {
+        tid: wx.fetch_forecast(clat, clon, wx_cfg, cache_dir, session)
+        for tid, (clat, clon) in tile_centers.items()
+    }
+    # Representative tile = the one holding the most job centroids.
+    grid = sat.load_grid(sat_cfg.grid_file)
+    counts: dict[str, int] = {}
+    if grid is not None:
+        for lat, lon in centroids:
+            tid = sat.tile_for_point(lat, lon, grid)
+            if tid:
+                counts[tid] = counts.get(tid, 0) + 1
+    rep_tile = max(tile_centers, key=lambda t: counts.get(t, 0)) if counts \
+        else sorted(tile_centers)[0]
+    return weather_by_tile[rep_tile], weather_by_tile, rep_tile

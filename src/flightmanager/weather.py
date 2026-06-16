@@ -29,6 +29,9 @@ from flightmanager.config import WeatherConfig
 
 log = logging.getLogger(__name__)
 
+# Bump when the cached WeatherResult shape changes so stale files are re-fetched.
+_CACHE_VERSION = 2
+
 # WMO weather code → (icon key, human label). Icon keys map to ic-wx-* SVG symbols.
 _WMO: dict[int, tuple[str, str]] = {
     0:  ("clear",  "Clear"),
@@ -89,6 +92,13 @@ class DayWeather:
 class WeatherResult:
     days: list[DayWeather] = field(default_factory=list)
     utc_offset_s: int = 0      # local time = UTC + this many seconds
+    # Cloud cover (%) keyed by local hour "YYYY-MM-DDTHH" — lets a satellite pass be
+    # qualified by the cloud forecast at its actual overpass time, not the day average.
+    hourly_cloud: dict[str, float] = field(default_factory=dict)
+
+    def cloud_at(self, local_dt) -> float | None:
+        """Cloud cover (%) at the local hour of *local_dt*, or None if unknown."""
+        return self.hourly_cloud.get(local_dt.strftime("%Y-%m-%dT%H"))
 
 
 def attribution(cfg: WeatherConfig) -> str:
@@ -137,23 +147,27 @@ def fetch_forecast(
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(
-        json.dumps({"days": [asdict(d) for d in result.days],
-                    "utc_offset_s": result.utc_offset_s}, ensure_ascii=False),
+        json.dumps({"v": _CACHE_VERSION, "days": [asdict(d) for d in result.days],
+                    "utc_offset_s": result.utc_offset_s,
+                    "hourly_cloud": result.hourly_cloud}, ensure_ascii=False),
         encoding="utf-8",
     )
     return result
 
 
 def _load_cache(path: Path) -> WeatherResult | None:
-    """Tolerantly load a cached WeatherResult; None on any schema/parse mismatch."""
+    """Tolerantly load a cached WeatherResult; None on any schema/version mismatch."""
     if not path.exists():
         return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
+        if raw.get("v") != _CACHE_VERSION:
+            return None  # old schema → treat as miss, re-fetch
         days = [DayWeather(**d) for d in raw.get("days", [])]
-        return WeatherResult(days=days, utc_offset_s=int(raw.get("utc_offset_s", 0)))
+        return WeatherResult(days=days, utc_offset_s=int(raw.get("utc_offset_s", 0)),
+                             hourly_cloud=raw.get("hourly_cloud", {}))
     except Exception:
-        return None  # stale schema → treat as miss, re-fetch
+        return None
 
 
 def _cache_fresh(path: Path, max_age_hours: int) -> bool:
@@ -196,7 +210,8 @@ def _fetch_open_meteo(
 
 def _parse_open_meteo(data: dict, start_h: int, end_h: int) -> WeatherResult:
     offset = int(data.get("utc_offset_seconds", 0))
-    buckets, order = _bucket_daytime_hours(data.get("hourly") or {}, start_h, end_h)
+    hourly = data.get("hourly") or {}
+    buckets, order = _bucket_daytime_hours(hourly, start_h, end_h)
     midday = (start_h + end_h) / 2  # weight the icon toward solar-noon hours
 
     days: list[DayWeather] = []
@@ -214,7 +229,19 @@ def _parse_open_meteo(data: dict, start_h: int, end_h: int) -> WeatherResult:
             precip_mm=round(sum(b["p"]), 1) if b["p"] else None,
             cloud_pct=_avg(b["cl"]),
         ))
-    return WeatherResult(days=days, utc_offset_s=offset)
+    return WeatherResult(days=days, utc_offset_s=offset,
+                         hourly_cloud=_hourly_cloud(hourly))
+
+
+def _hourly_cloud(hourly: dict) -> dict[str, float]:
+    """Map every local hour ``YYYY-MM-DDTHH`` to its cloud cover %, for pass-time lookup."""
+    times = hourly.get("time") or []
+    cloud = hourly.get("cloud_cover") or []
+    out: dict[str, float] = {}
+    for i, t in enumerate(times):
+        if i < len(cloud) and cloud[i] is not None:
+            out[t[:13]] = cloud[i]  # "YYYY-MM-DDTHH"
+    return out
 
 
 def _bucket_daytime_hours(hourly: dict, start_h: int, end_h: int):
@@ -283,29 +310,49 @@ def _fetch_fmi(
 # ---------------------------------------------------------------------------
 
 
+# Sky conditions safe to fly a mapping mission in (besides the wind limit).
+_FLYABLE_ICONS = {"clear", "partly", "cloudy"}
+
+
+def _drone_flyable(weather: dict | None, wind_limit_ms: float | None) -> bool:
+    """True when *weather* (a day slot's weather dict) is good for a mapping flight:
+    wind at or below the drone limit and a sky that isn't rain/snow/storm/fog."""
+    if not weather or wind_limit_ms is None:
+        return False
+    wind = weather.get("wind_avg_ms")
+    if wind is None or wind > wind_limit_ms:
+        return False
+    return weather.get("icon") in _FLYABLE_ICONS
+
+
 def build_day_slots(
-    result: WeatherResult,
+    rep: WeatherResult,
     overpasses: list,
     *,
     daytime_start_h: int,
     daytime_end_h: int,
     clear_sky_max_cloud_pct: int = 30,
+    weather_by_tile: dict[str, WeatherResult] | None = None,
+    drone_wind_limit_ms: float | None = None,
 ) -> list[dict]:
     """Merge weather days with satellite overpasses into per-day slots.
 
-    Overpasses are bucketed by **local** calendar day (using ``result.utc_offset_s``)
-    so they align with the local weather days. Each pass is flagged ``daytime``
-    (within the daytime window) — night passes are hidden behind a count marker in
-    the UI — and daytime passes on a low-cloud day are flagged ``clear_window`` (a
-    likely usable optical-imagery opportunity). Weather days drive the slots;
-    overpass days beyond the forecast horizon are appended as weather-less slots so
-    passes are not lost.
+    The day rows (weather) come from *rep* — the representative tile's forecast.
+    Overpasses are bucketed by **local** day (using ``rep.utc_offset_s``). Each pass
+    is flagged ``daytime`` (night passes collapse to a marker in the UI) and, for
+    daytime passes, ``clear_window`` when the cloud forecast **at the pass's own
+    overpass hour and tile** (via *weather_by_tile*) is ≤ *clear_sky_max_cloud_pct*.
+    A day is ``golden`` when its weather is drone-flyable (wind ≤
+    *drone_wind_limit_ms*, fair sky) **and** it has at least one clear-window pass —
+    i.e. a good imaging opportunity that you can also fly. Weather days drive the
+    slots; overpass days beyond the forecast horizon append as weather-less slots.
     """
-    tz = timezone(timedelta(seconds=result.utc_offset_s))
+    weather_by_tile = weather_by_tile or {}
+    tz = timezone(timedelta(seconds=rep.utc_offset_s))
     slots: dict[str, dict] = {}
     order: list[str] = []
 
-    for d in result.days:
+    for d in rep.days:
         slots[d.date] = {
             "date": d.date,
             "weather": {
@@ -318,6 +365,7 @@ def build_day_slots(
                 "cloud_pct": d.cloud_pct,
             },
             "satellites": [],
+            "golden": False,
         }
         order.append(d.date)
 
@@ -325,11 +373,12 @@ def build_day_slots(
         local = op.peak_utc.astimezone(tz)
         day = local.strftime("%Y-%m-%d")
         if day not in slots:
-            slots[day] = {"date": day, "weather": None, "satellites": []}
+            slots[day] = {"date": day, "weather": None, "satellites": [], "golden": False}
             order.append(day)
         daytime = daytime_start_h <= local.hour < daytime_end_h
-        wx_day = slots[day]["weather"]
-        cloud = wx_day["cloud_pct"] if wx_day else None
+        # Cloud at this pass's own tile and overpass hour (fall back to rep tile).
+        tile_wx = weather_by_tile.get(op.tile_id, rep)
+        cloud = tile_wx.cloud_at(local)
         clear_window = bool(daytime and cloud is not None and cloud <= clear_sky_max_cloud_pct)
         slots[day]["satellites"].append({
             "name": op.name,
@@ -339,11 +388,13 @@ def build_day_slots(
             "peak_local": local.isoformat(),
             "daytime": daytime,
             "clear_window": clear_window,
+            "cloud_at_pass": round(cloud) if cloud is not None else None,
             "max_elev_deg": op.max_elev_deg,
         })
 
-    # Keep each day's passes time-ordered (already global-sorted, but be explicit).
     for s in slots.values():
         s["satellites"].sort(key=lambda x: x["peak_local"])
+        has_clear = any(p["clear_window"] for p in s["satellites"])
+        s["golden"] = bool(has_clear and _drone_flyable(s["weather"], drone_wind_limit_ms))
 
     return [slots[d] for d in sorted(order)]

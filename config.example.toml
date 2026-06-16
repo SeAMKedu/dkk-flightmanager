@@ -228,9 +228,13 @@ timeout_s = 30
 # marker in the bar.
 daytime_start_h = 6
 daytime_end_h = 18
-# A daytime pass on a day whose daytime cloud cover is at or below this percentage
-# is flagged as a "clear window" (likely usable optical image) and highlighted.
+# A daytime satellite pass is flagged a "clear window" when the cloud forecast at
+# its actual overpass time (and tile) is at or below this percentage.
 clear_sky_max_cloud_pct = 30
+# Max wind (m/s) you'll fly a mapping mission in. A day is highlighted as a "golden"
+# match when its daytime wind is at or below this AND a clear-sky pass falls that
+# day (good to both fly and image). Comment out to disable golden highlighting.
+drone_wind_limit_ms = 10.0
 # Optional: drone max wind limit (m/s) for the future "golden window" highlight.
 # drone_wind_limit_ms = 12.0
 

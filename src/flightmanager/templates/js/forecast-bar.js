@@ -125,9 +125,13 @@ function _fcRender(data) {
   var today = new Date().toLocaleDateString('en-CA');  // local YYYY-MM-DD
   var n = days.length;
 
+  out.push('<div class="fc-body">');
+  if (data.weather_warning) {
+    out.push('<div class="fc-warn">⚠ ' + escHtml(data.weather_warning) + '</div>');
+  }
   // Row-labelled grid: a left header column names each row; units live in the
   // labels so cell values stay bare. Cells flow row-major into the column track.
-  out.push('<div class="fc-body"><div class="fc-grid" style="grid-template-columns:'
+  out.push('<div class="fc-grid" style="grid-template-columns:'
     + 'auto repeat(' + n + ',minmax(38px,1fr))">');
   out.push(_fcRow('Date', 'fc-r-date', days, today, _cellDate));
   out.push(_fcRow('Weather', 'fc-r-wx', days, today, _cellWx));
@@ -139,7 +143,7 @@ function _fcRender(data) {
 
   var attr = (data.attribution && data.attribution.weather) || '';
   var dw = data.daytime_window || [6, 18];
-  var note = 'Daytime ' + dw[0] + '–' + dw[1] + ' only · ☀ = clear-sky window'
+  var note = 'Daytime ' + dw[0] + '–' + dw[1] + ' only · ☀ clear-sky · ★ golden (flyable + clear)'
     + (attr ? ' · ' + attr : '');
   out.push('<div class="fc-attr" title="' + escHtml(
     note + ' ' + ((data.attribution && data.attribution.satellites) || '')
@@ -154,8 +158,10 @@ function _fcRender(data) {
 function _fcRow(label, rowCls, days, today, cellFn) {
   var out = ['<div class="fc-rlabel ' + rowCls + '">' + escHtml(label) + '</div>'];
   days.forEach(function (slot) {
-    var todayCls = slot.date === today ? ' fc-col-today' : '';
-    out.push('<div class="fc-cell ' + rowCls + todayCls + '" title="'
+    var cls = rowCls;
+    if (slot.date === today) cls += ' fc-col-today';
+    if (slot.golden) cls += ' fc-col-golden';
+    out.push('<div class="fc-cell ' + cls + '" title="'
       + escHtml(_fcTooltip(slot)) + '">' + cellFn(slot) + '</div>');
   });
   return out.join('');
@@ -165,7 +171,8 @@ function _cellDate(slot) {
   var dt = new Date(slot.date + 'T00:00:00Z');
   var wd = dt.toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
   var dom = dt.toLocaleDateString(undefined, { day: 'numeric', timeZone: 'UTC' });
-  return '<span class="fc-wd">' + escHtml(wd) + '</span> ' + escHtml(dom);
+  var star = slot.golden ? '<span class="fc-golden-star">★</span>' : '';
+  return '<span class="fc-wd">' + escHtml(wd) + '</span> ' + escHtml(dom) + star;
 }
 
 function _cellWx(slot) {
@@ -210,11 +217,13 @@ function _cellSats(slot) {
 
 function _satLine(s) {
   var t = new Date(s.peak_local || s.peak_utc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return s.name + '  ' + t + '  ' + Math.round(s.max_elev_deg) + '°';
+  var cloud = s.cloud_at_pass != null ? '  ' + s.cloud_at_pass + '% cloud' : '';
+  return s.name + '  ' + t + '  ' + Math.round(s.max_elev_deg) + '°' + cloud;
 }
 
 function _fcTooltip(slot) {
   var lines = [slot.date + '  (daytime avg)'];
+  if (slot.golden) lines.push('★ Golden: flyable weather + clear-sky satellite pass');
   var w = slot.weather;
   if (w) {
     lines.push(w.label || '');
