@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()  # reads .env (or .env.local) from cwd upward; no-op if not found
 import sqlite3
 import webbrowser
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -468,7 +469,7 @@ def cache_status(
         typer.echo("Cache is empty (no index.sqlite found).")
         return
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         rows = conn.execute("""
             SELECT dataset,
                    COUNT(*) as tiles,
@@ -531,7 +532,7 @@ def cache_refresh(
 
     cutoff_days = older_than  # None means use per-dataset TTL (handled by get_tiles refresh flag)
 
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         if cutoff_days is not None:
             cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).isoformat()
             rows = conn.execute(

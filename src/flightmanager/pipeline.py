@@ -21,10 +21,13 @@ import dataclasses
 import json
 import logging
 import os
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+import requests
 
 from flightmanager.buildings import Building, dedup_buildings, load_tile, tile_fetcher as buildings_fetcher
 from flightmanager.powerlines import (
@@ -140,14 +143,15 @@ def export_job(  # noqa: C901
     # ------------------------------------------------------------------
     _cb(progress_cb, "elevation", "Fetching elevation tiles…", 60)
     log.info("Fetching DEM tiles …")
-    d_fetcher = dem_fetcher(api_key)
     _dem_margin = config.flight.dsm_margin_m
     _bx0, _by0, _bx1, _by1 = survey_geom.bbox_3067
     _dem_bbox = (_bx0 - _dem_margin, _by0 - _dem_margin,
                  _bx1 + _dem_margin, _by1 + _dem_margin)
-    d_records = get_tiles(
-        "dem", _dem_bbox, d_fetcher, config.cache, refresh=refresh
-    )
+    with closing(requests.Session()) as sess:
+        d_fetcher = dem_fetcher(api_key, session=sess)
+        d_records = get_tiles(
+            "dem", _dem_bbox, d_fetcher, config.cache, refresh=refresh
+        )
     tile_paths = [r.path for r in d_records]
 
     dsm_stats: dict = {}
@@ -411,12 +415,13 @@ def analyse_survey(  # noqa: C901
     try:
         _cb(progress_cb, "elevation", "Fetching elevation tiles…", 60)
         log.info("Preview: fetching DEM tiles for thumbnail …")
-        d_fetcher = dem_fetcher(api_key)
         _dem_margin = 150
         _bx0, _by0, _bx1, _by1 = survey_geom.bbox_3067
         _dem_bbox = (_bx0 - _dem_margin, _by0 - _dem_margin,
                      _bx1 + _dem_margin, _by1 + _dem_margin)
-        d_records = get_tiles("dem", _dem_bbox, d_fetcher, config.cache, refresh=refresh)
+        with closing(requests.Session()) as sess:
+            d_fetcher = dem_fetcher(api_key, session=sess)
+            d_records = get_tiles("dem", _dem_bbox, d_fetcher, config.cache, refresh=refresh)
         dsm_b64, dsm_bounds = build_preview_dsm_thumbnail(
             [r.path for r in d_records], survey_geom.survey_4326
         )
@@ -669,8 +674,9 @@ def _load_buildings(
     refresh: bool,
 ) -> tuple[list[Building], list[TileRecord]]:
     """Fetch building tiles from cache and return ``(buildings, tile_records)``."""
-    b_fetcher = buildings_fetcher(api_key)
-    b_records = get_tiles("buildings", buildings_bbox, b_fetcher, cache_config, refresh=refresh)
+    with closing(requests.Session()) as sess:
+        b_fetcher = buildings_fetcher(api_key, session=sess)
+        b_records = get_tiles("buildings", buildings_bbox, b_fetcher, cache_config, refresh=refresh)
     raw: list[Building] = []
     for rec in b_records:
         raw.extend(load_tile(rec.path))
@@ -686,8 +692,9 @@ def _load_powerlines(
     refresh: bool,
 ) -> tuple[list[PowerLine], list[TileRecord]]:
     """Fetch power line tiles from cache and return ``(lines, tile_records)``."""
-    pl_fetcher = powerlines_fetcher(api_key)
-    pl_records = get_tiles("powerlines", bbox, pl_fetcher, cache_config, refresh=refresh)
+    with closing(requests.Session()) as sess:
+        pl_fetcher = powerlines_fetcher(api_key, session=sess)
+        pl_records = get_tiles("powerlines", bbox, pl_fetcher, cache_config, refresh=refresh)
     raw: list[PowerLine] = []
     for rec in pl_records:
         raw.extend(load_pl_tile(rec.path))
@@ -703,8 +710,9 @@ def _load_pylons(
     refresh: bool,
 ) -> list[Pylon]:
     """Fetch HV pylon tower tiles from cache and return pylon list."""
-    py_fetcher = pylon_tile_fetcher(api_key)
-    py_records = get_tiles("pylons", bbox, py_fetcher, cache_config, refresh=refresh)
+    with closing(requests.Session()) as sess:
+        py_fetcher = pylon_tile_fetcher(api_key, session=sess)
+        py_records = get_tiles("pylons", bbox, py_fetcher, cache_config, refresh=refresh)
     raw: list[Pylon] = []
     for rec in py_records:
         raw.extend(load_pylon_tile(rec.path))

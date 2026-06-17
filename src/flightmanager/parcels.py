@@ -74,14 +74,19 @@ def fetch_parcels(
     cfg = config or ParcelsConfig()
     layer = _LAYER_TEMPLATE.format(year=cfg.lpis_year)
     sess = session or requests.Session()
+    owns_session = session is None
 
-    if parcel_ids is not None:
-        parcels = _fetch_by_ids_cached(parcel_ids, layer, cfg, sess, cache_config)
-        _check_missing(parcel_ids, parcels)
-    else:
-        log.info("Fetching parcels from %s layer=%s mode=bbox", _WFS_URL, layer)
-        features = _fetch_by_bbox(bbox, layer, cfg, sess)  # type: ignore[arg-type]
-        parcels = [_to_parcel(f) for f in features]
+    try:
+        if parcel_ids is not None:
+            parcels = _fetch_by_ids_cached(parcel_ids, layer, cfg, sess, cache_config)
+            _check_missing(parcel_ids, parcels)
+        else:
+            log.info("Fetching parcels from %s layer=%s mode=bbox", _WFS_URL, layer)
+            features = _fetch_by_bbox(bbox, layer, cfg, sess)  # type: ignore[arg-type]
+            parcels = [_to_parcel(f) for f in features]
+    finally:
+        if owns_session:
+            sess.close()
 
     log.info("Retrieved %d parcel(s)", len(parcels))
     return parcels

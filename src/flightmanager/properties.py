@@ -78,6 +78,7 @@ def fetch_properties(
     from flightmanager.geo_cache import get_property_cache, put_property_cache
 
     sess = session or requests.Session()
+    owns_session = session is None
     normalised = {_normalise(pid): pid for pid in property_ids}
 
     results: dict[str, Property] = {}
@@ -107,23 +108,27 @@ def fetch_properties(
     else:
         log.info("All %d kiinteistö(t) served from cache", len(normalised))
 
-    for numeric_id, original in missing.items():
-        features = _fetch_one(numeric_id, api_key, timeout_s, page_size, sess)
-        if not features:
-            msg = f"Kiinteistötunnus not found: {original!r} (normalised: {numeric_id!r})"
-            log.error(msg)
-            raise PropertyNotFoundError(msg)
-        prop = _to_property(numeric_id, features)
-        results[numeric_id] = prop
-        log.debug(
-            "  %s → %s  %.2f ha",
-            prop.display_id, prop.property_id, prop.area_ha,
-        )
-        if cache_config is not None:
-            put_property_cache(
-                cache_config, prop.property_id, prop.display_id,
-                prop.area_ha, wkt_dumps(prop.geometry),
+    try:
+        for numeric_id, original in missing.items():
+            features = _fetch_one(numeric_id, api_key, timeout_s, page_size, sess)
+            if not features:
+                msg = f"Kiinteistötunnus not found: {original!r} (normalised: {numeric_id!r})"
+                log.error(msg)
+                raise PropertyNotFoundError(msg)
+            prop = _to_property(numeric_id, features)
+            results[numeric_id] = prop
+            log.debug(
+                "  %s → %s  %.2f ha",
+                prop.display_id, prop.property_id, prop.area_ha,
             )
+            if cache_config is not None:
+                put_property_cache(
+                    cache_config, prop.property_id, prop.display_id,
+                    prop.area_ha, wkt_dumps(prop.geometry),
+                )
+    finally:
+        if owns_session:
+            sess.close()
 
     log.info("Retrieved %d kiinteistö(t)", len(results))
     return list(results.values())

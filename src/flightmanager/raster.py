@@ -79,6 +79,23 @@ def _ensure_geoid_grid() -> None:
         ) from exc
 
 
+# The geoid transformer is a fixed pipeline; build it once and reuse it across
+# jobs. Re-creating it per export held the PROJ context (and its grid access)
+# until GC — wasteful in the long-lived server process.
+_geoid_transformer: Transformer | None = None
+
+
+def _get_geoid_transformer() -> Transformer:
+    """Return the cached N2000→WGS-84 ellipsoidal transformer, building it once.
+
+    Caller must have run :func:`_ensure_geoid_grid` first so the grid is present.
+    """
+    global _geoid_transformer
+    if _geoid_transformer is None:
+        _geoid_transformer = Transformer.from_pipeline(_GEOID_PIPELINE)
+    return _geoid_transformer
+
+
 def _apply_geoid_correction(dst_data: np.ndarray, dst_transform) -> float:
     """Convert N2000 heights to WGS-84 ellipsoidal in-place; return mean undulation."""
     _, H, W = dst_data.shape
@@ -91,7 +108,7 @@ def _apply_geoid_correction(dst_data: np.ndarray, dst_transform) -> float:
     valid_mask = band != _NODATA
     h_in = band.ravel().astype("float64")
 
-    transformer = Transformer.from_pipeline(_GEOID_PIPELINE)
+    transformer = _get_geoid_transformer()
     _, _, h_out = transformer.transform(lons, lats, h_in)
     h_out = h_out.reshape(H, W).astype("float32")
 

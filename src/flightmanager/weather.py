@@ -188,6 +188,7 @@ def _fetch_open_meteo(
     lat: float, lon: float, cfg: WeatherConfig, session: requests.Session | None
 ) -> WeatherResult:
     sess = session or requests.Session()
+    owns_session = session is None
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -205,6 +206,9 @@ def _fetch_open_meteo(
     except Exception as exc:
         log.error("Open-Meteo fetch failed: %s", exc)
         return WeatherResult()
+    finally:
+        if owns_session:
+            sess.close()
     return _parse_open_meteo(data, cfg.daytime_start_h, cfg.daytime_end_h)
 
 

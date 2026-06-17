@@ -239,25 +239,30 @@ def fetch_omm(
     """
     out: dict[int, dict] = {}
     sess = session or requests.Session()
+    owns_session = session is None
     cache_root = Path(cache_dir) / "satellites"
     import json
 
-    for nid in norad_ids:
-        cache_path = cache_root / f"omm_{nid}.json"
-        if _cache_fresh(cache_path, cfg.omm_max_age_days):
-            _ns.record_hit("satellites")
-            out[nid] = json.loads(cache_path.read_text(encoding="utf-8"))
-            continue
-        omm = _fetch_one_omm(nid, cfg, sess)
-        if omm is None:
-            # Fall back to stale cache if present.
-            if cache_path.exists():
-                log.warning("Using stale OMM cache for %d", nid)
+    try:
+        for nid in norad_ids:
+            cache_path = cache_root / f"omm_{nid}.json"
+            if _cache_fresh(cache_path, cfg.omm_max_age_days):
+                _ns.record_hit("satellites")
                 out[nid] = json.loads(cache_path.read_text(encoding="utf-8"))
-            continue
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(omm, ensure_ascii=False), encoding="utf-8")
-        out[nid] = omm
+                continue
+            omm = _fetch_one_omm(nid, cfg, sess)
+            if omm is None:
+                # Fall back to stale cache if present.
+                if cache_path.exists():
+                    log.warning("Using stale OMM cache for %d", nid)
+                    out[nid] = json.loads(cache_path.read_text(encoding="utf-8"))
+                continue
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(omm, ensure_ascii=False), encoding="utf-8")
+            out[nid] = omm
+    finally:
+        if owns_session:
+            sess.close()
     return out
 
 

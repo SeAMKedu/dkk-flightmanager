@@ -301,6 +301,7 @@ def _fetch_and_cache(
     """Fetch zones from the Traficom API and save to cache_path."""
     today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
     sess = session or requests.Session()
+    owns_session = session is None
     try:
         log.info("Fetching UAS zones from Traficom API")
         resp = sess.get(_API_URL, timeout=30)
@@ -314,6 +315,9 @@ def _fetch_and_cache(
             log.warning("Using stale zone cache as fallback")
             return _parse_features(json.loads(cache_path.read_text(encoding="utf-8"))), _file_date(cache_path)
         return None, ""
+    finally:
+        if owns_session:
+            sess.close()
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")

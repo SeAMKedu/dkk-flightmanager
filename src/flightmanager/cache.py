@@ -19,6 +19,7 @@ import logging
 import os
 import sqlite3
 import threading
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import floor
@@ -116,7 +117,7 @@ def _db_path(cache_dir: str | Path) -> Path:
 
 def _init_db(db: Path) -> None:
     db.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tiles (
                 dataset          TEXT NOT NULL,
@@ -165,7 +166,7 @@ def _init_db(db: Path) -> None:
 
 def _lookup(db: Path, dataset: str, tile_id: str, *, touch: bool = False) -> TileRecord | None:
     now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         row = conn.execute(
             "SELECT tile_id, dataset, xmin, ymin, xmax, ymax, source_url, "
             "fetch_timestamp, dataset_version, file_path, checksum, byte_size "
@@ -190,7 +191,7 @@ def _lookup(db: Path, dataset: str, tile_id: str, *, touch: bool = False) -> Til
 
 def _register(db: Path, record: TileRecord) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute(
             """INSERT OR REPLACE INTO tiles
                (dataset, tile_id, xmin, ymin, xmax, ymax, source_url,
@@ -206,7 +207,7 @@ def _register(db: Path, record: TileRecord) -> None:
 
 def _evict_lru(db: Path, max_bytes: int) -> None:
     """Delete least-recently-used tiles until total cache size is under max_bytes."""
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         total = conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()[0] or 0
         if total <= max_bytes:
             return
@@ -224,7 +225,7 @@ def _evict_lru(db: Path, max_bytes: int) -> None:
             Path(file_path).unlink(missing_ok=True)
         except OSError as e:
             log.warning("Could not delete evicted tile %s: %s", file_path, e)
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             conn.execute(
                 "DELETE FROM tiles WHERE dataset=? AND tile_id=?", (dataset, tile_id)
             )
@@ -420,7 +421,7 @@ def query_disk_size(cache_dir: str | Path) -> int:
     db = _db_path(Path(cache_dir))
     if not db.exists():
         return 0
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         row = conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()
     return int(row[0] or 0)
 
