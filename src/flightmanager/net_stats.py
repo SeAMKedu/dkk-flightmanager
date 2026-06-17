@@ -1,8 +1,11 @@
-"""Session-level network download and cache statistics.
+"""Network download and cache statistics for the current process.
 
-Counters are accumulated in-memory per process. Call ``print_summary()`` on
-exit to display a human-readable table; call ``get()`` to retrieve raw numbers
-(e.g. for a JSON API response).
+Counters accumulate in-memory for the **whole process lifetime**, by design —
+not per job. For the CLI that is a single run; for ``flightmanager serve`` it
+spans every job handled since the server started (``/api/stats`` reports these
+server-session totals). Call ``print_summary()`` on exit to display a
+human-readable table, ``get()`` to retrieve raw numbers, or ``reset()`` to
+zero them (used in tests).
 """
 
 from __future__ import annotations
@@ -12,9 +15,9 @@ from pathlib import Path
 
 _lock = threading.Lock()
 
-_downloads: dict[str, int] = {}   # source → network fetches this session
-_bytes: dict[str, int] = {}       # source → bytes downloaded this session
-_hits: dict[str, int] = {}        # source → cache hits this session
+_downloads: dict[str, int] = {}   # source → network fetches this process
+_bytes: dict[str, int] = {}       # source → bytes downloaded this process
+_hits: dict[str, int] = {}        # source → cache hits this process
 
 _SOURCES = ("dem", "buildings", "powerlines", "pylons", "parcels", "properties", "zones", "satellites", "weather")
 
