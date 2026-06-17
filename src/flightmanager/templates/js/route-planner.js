@@ -365,6 +365,7 @@ async function _fetchAccurateEstimate() {
     adv_powerline_clearance_m: tpl ? tpl.adv_powerline_clearance_m  : null,
     adv_slope_f:               tpl ? tpl.adv_slope_f                : null,
     adv_min_dip_m:             tpl ? tpl.adv_min_dip_m              : null,
+    session_id:                st.sessionId,
   };
   try {
     var data = await apiPost('/api/route_estimate', body);

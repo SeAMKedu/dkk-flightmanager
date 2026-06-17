@@ -55,6 +55,7 @@ async function runJob(endpoint, params, label, onDone) {
   showToast(label + '…', 0, 'Starting…');
   showPg(true, 0, 'Starting…');
 
+  params.session_id = st.sessionId;
   var data;
   try {
     data = await apiPost(endpoint, params);

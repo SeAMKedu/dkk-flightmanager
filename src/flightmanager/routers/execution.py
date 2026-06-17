@@ -41,6 +41,7 @@ class PreviewRequest(BaseModel):
     speed_ms: float | None = None
     takeoff_point_4326: list | None = None  # [lon, lat] — user's pinned takeoff, if any
     template_settings: dict | None = None  # per-job template/waylines overrides
+    session_id: str | None = None  # client session — keys the per-session preview store
 
 
 class RouteEstimateRequest(BaseModel):
@@ -58,6 +59,7 @@ class RouteEstimateRequest(BaseModel):
     adv_powerline_clearance_m: float | None = None
     adv_slope_f: float | None = None
     adv_min_dip_m: float | None = None
+    session_id: str | None = None  # client session — reads its own preview obstacles
 
 
 class ExportRequest(PreviewRequest):
@@ -82,16 +84,8 @@ class BatchRequest(BaseModel):
 @router.post("/api/preview")
 async def start_preview(req: PreviewRequest):
     import asyncio
-    import uuid
 
-    with _st.job_lock:
-        if _st.active_job_id is not None:
-            raise HTTPException(409, detail="A job is already running — please wait.")
-        job_id = str(uuid.uuid4())
-        _st.active_job_id = job_id
-
-    queue: asyncio.Queue = asyncio.Queue()
-    _st.job_queues[job_id] = queue
+    job_id, queue = _begin_job()
     loop = asyncio.get_running_loop()
     cfg = _prepare_config(req)
 
@@ -123,7 +117,7 @@ async def start_preview(req: PreviewRequest):
                 custom_polygon_4326=custom_poly_geom,
                 takeoff_point_4326=req.takeoff_point_4326 or None,
             )
-            _st.last_preview_result = result
+            _st.store_preview(req.session_id, result)
             print(f"[preview] job {job_id[:8]} done")
             loop.call_soon_threadsafe(
                 queue.put_nowait,
@@ -139,8 +133,7 @@ async def start_preview(req: PreviewRequest):
             )
         finally:
             lock.release()
-            with _st.job_lock:
-                _st.active_job_id = None
+            _end_job()
 
     loop.run_in_executor(_st.executor, run)
     return {"job_id": job_id}
@@ -149,16 +142,8 @@ async def start_preview(req: PreviewRequest):
 @router.post("/api/export")
 async def start_export(req: ExportRequest):
     import asyncio
-    import uuid
 
-    with _st.job_lock:
-        if _st.active_job_id is not None:
-            raise HTTPException(409, detail="A job is already running — please wait.")
-        job_id = str(uuid.uuid4())
-        _st.active_job_id = job_id
-
-    queue: asyncio.Queue = asyncio.Queue()
-    _st.job_queues[job_id] = queue
+    job_id, queue = _begin_job()
     loop = asyncio.get_running_loop()
     cfg = _prepare_config(req)
 
@@ -184,9 +169,8 @@ async def start_export(req: ExportRequest):
         lock = _acquire_pipeline_lock(job_id, loop, queue, "export")
         if lock is None:
             return
-        # Snapshot the preview result before export_job so a concurrent preview
-        # can't overwrite the global between job completion and the file write.
-        preview_snapshot = _st.last_preview_result
+        # The caller's own last preview (session-keyed), captured before export_job.
+        preview_snapshot = _st.get_preview(req.session_id)
         try:
             from flightmanager.pipeline import export_job
 
@@ -260,8 +244,7 @@ async def start_export(req: ExportRequest):
             )
         finally:
             lock.release()
-            with _st.job_lock:
-                _st.active_job_id = None
+            _end_job()
 
     loop.run_in_executor(_st.executor, run)
     return {"job_id": job_id}
@@ -349,13 +332,13 @@ async def start_batch(req: BatchRequest):
     return {"job_id": job_id}
 
 
-def _load_preview_obstacles(reproject_to_3067):
-    """Return (buildings, power_lines) from the last stored preview result."""
+def _load_preview_obstacles(preview: dict | None, reproject_to_3067):
+    """Return (buildings, power_lines) from a stored preview result dict."""
     from flightmanager.buildings import Building
     from flightmanager.powerlines import PowerLine
     from shapely.geometry import shape as _shape_geom
 
-    preview = _st.last_preview_result or {}
+    preview = preview or {}
     buildings: list[Building] = []
     for bd in preview.get("buildings", []):
         try:
@@ -414,7 +397,8 @@ async def route_estimate(req: RouteEstimateRequest):
 
     fl = cfg.flight
     buildings, power_lines = (
-        _load_preview_obstacles(reproject_to_3067) if req.advanced_mode else (None, None)
+        _load_preview_obstacles(_st.get_preview(req.session_id), reproject_to_3067)
+        if req.advanced_mode else (None, None)
     )
     pr = _route.plan_route(
         poly_3067, drone=drone, height_m=H,
@@ -465,6 +449,31 @@ async def route_estimate(req: RouteEstimateRequest):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _begin_job() -> tuple[str, "object"]:
+    """Reserve the single active-job slot. Returns (job_id, sse_queue) or raises 409.
+
+    The one-job-at-a-time gate (single ThreadPoolExecutor worker + cross-process file
+    lock) is the seam a real job queue replaces during the hosting epic.
+    """
+    import asyncio
+    import uuid
+
+    with _st.job_lock:
+        if _st.active_job_id is not None:
+            raise HTTPException(409, detail="A job is already running — please wait.")
+        job_id = str(uuid.uuid4())
+        _st.active_job_id = job_id
+    queue: asyncio.Queue = asyncio.Queue()
+    _st.job_queues[job_id] = queue
+    return job_id, queue
+
+
+def _end_job() -> None:
+    """Release the active-job slot so the next preview/export can start."""
+    with _st.job_lock:
+        _st.active_job_id = None
 
 
 def _acquire_pipeline_lock(job_id: str, loop, queue, label: str):
