@@ -109,17 +109,15 @@ async def list_jobs():
 async def jobs_geojson(folder: str | None = None):
     """Return all jobs as a GeoJSON FeatureCollection for the map view."""
     output_dir = Path(_st.config.output.output_dir).resolve()
-    groups = scan_jobs(output_dir)
+    groups = scan_jobs(output_dir, with_polygon=True)
     features = []
     for group in groups:
         if folder is not None and group["name"] != folder:
             continue
         for card in group["jobs"]:
-            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
-            geom = best_polygon(job_dir)
             features.append({
                 "type": "Feature",
-                "geometry": geom,
+                "geometry": card.get("_geometry"),
                 "properties": {
                     "path":              card["path"],
                     "name":              card["name"],

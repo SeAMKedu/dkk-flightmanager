@@ -115,8 +115,52 @@ def best_polygon(job_dir: Path) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
-    """Build a summary card dict for one job directory."""
+# Per-job card cache, keyed by (job_dir, with_polygon).  Invalidated by an
+# mtime/size signature of the source files so a saved job is re-parsed but
+# untouched siblings are served from memory.  This is what makes returning to
+# the map view fast when the output dir holds many large job_params.json files.
+_CARD_CACHE: dict[tuple[str, bool], tuple[tuple, dict]] = {}
+
+
+def _card_signature(job_dir: Path) -> tuple:
+    """Cheap (mtime, size) signature of a job's source files for cache keying."""
+    sig = []
+    for fn in ("job_params.json", "manifest.json", "thumbnail.svg"):
+        try:
+            stt = (job_dir / fn).stat()
+            sig.append((stt.st_mtime_ns, stt.st_size))
+        except OSError:
+            sig.append(None)
+    sig.append(any(job_dir.glob("*.kmz")))
+    return tuple(sig)
+
+
+def read_job_card(
+    job_dir: Path, folder: str | None = None, with_polygon: bool = False
+) -> dict:
+    """Build a summary card dict for one job directory.
+
+    Results are cached per job and invalidated when any source file's
+    (mtime, size) changes.  Set *with_polygon* to also embed the job's best
+    GeoJSON polygon under ``_geometry`` (used by the map-view endpoint so it
+    need not parse ``job_params.json`` a second time via ``best_polygon``).
+    """
+    key = (str(job_dir), with_polygon)
+    sig = _card_signature(job_dir)
+    cached = _CARD_CACHE.get(key)
+    if cached is not None and cached[0] == sig:
+        # Return a shallow copy: callers (e.g. _adjust_sibling_area_lost)
+        # mutate the card in place, which must not poison the cache.
+        return dict(cached[1])
+    card = _build_job_card(job_dir, folder, with_polygon)
+    _CARD_CACHE[key] = (sig, card)
+    return dict(card)
+
+
+def _build_job_card(
+    job_dir: Path, folder: str | None, with_polygon: bool
+) -> dict:
+    """Parse a job directory into a summary card dict (uncached)."""
     name = job_dir.name
     path = f"{folder}/{name}" if folder else name
     manifest_path = job_dir / "manifest.json"
@@ -124,7 +168,7 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
     thumb_path = job_dir / "thumbnail.svg"
 
     if not manifest_path.exists() and not params_path.exists():
-        return {
+        card = {
             "name": name,
             "folder": folder,
             "path": path,
@@ -136,6 +180,9 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
             "untouched": False,
             "color": None,
         }
+        if with_polygon:
+            card["_geometry"] = None
+        return card
 
     manifest: dict = {}
     if manifest_path.exists():
@@ -182,7 +229,7 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         battery_count = None
 
     inputs = params.get("inputs", {})
-    return {
+    card = {
         "name": name,
         "folder": folder,
         "path": path,
@@ -216,6 +263,12 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "takeoff_point_4326": params.get("takeoff_point_4326"),
         "skipped": params.get("skipped", False),
     }
+    if with_polygon:
+        geom = params.get("custom_polygon_4326")
+        if not geom:
+            geom = (params.get("last_preview_geojson") or {}).get("survey")
+        card["_geometry"] = geom or None
+    return card
 
 
 def _tier_sort_key(j: dict) -> tuple:
@@ -281,8 +334,12 @@ def _adjust_sibling_area_lost(groups: list[dict]) -> None:
             card["area_lost_pct"] = combined_lost_pct
 
 
-def scan_jobs(output_dir: Path) -> list[dict]:
-    """Scan *output_dir*; return groups ``[{name, jobs}]`` with one-level folder support."""
+def scan_jobs(output_dir: Path, with_polygon: bool = False) -> list[dict]:
+    """Scan *output_dir*; return groups ``[{name, jobs}]`` with one-level folder support.
+
+    *with_polygon* is forwarded to :func:`read_job_card` so each card embeds its
+    best GeoJSON polygon under ``_geometry`` (used by the map-view endpoint).
+    """
     if not output_dir.is_dir():
         return []
 
@@ -297,13 +354,15 @@ def scan_jobs(output_dir: Path) -> list[dict]:
             try:
                 for sub in sorted(entry.iterdir()):
                     if sub.is_dir():
-                        folder_jobs.append(read_job_card(sub, folder=entry.name))
+                        folder_jobs.append(
+                            read_job_card(sub, folder=entry.name, with_polygon=with_polygon)
+                        )
             except PermissionError:
                 pass
             folder_jobs.sort(key=_tier_sort_key)
             folder_groups.append({"name": entry.name, "jobs": folder_jobs})
         else:
-            root_jobs.append(read_job_card(entry, folder=None))
+            root_jobs.append(read_job_card(entry, folder=None, with_polygon=with_polygon))
 
     root_jobs.sort(key=_tier_sort_key)
 
