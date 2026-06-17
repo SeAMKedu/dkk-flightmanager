@@ -19,6 +19,7 @@ import logging
 import os
 import sqlite3
 import threading
+import weakref
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,8 +49,31 @@ TileBbox = tuple[float, float, float, float]  # xmin, ymin, xmax, ymax
 # to dest_path and return (source_url, dataset_version_or_None).
 FetcherFn = Callable[[str, TileBbox, Path], tuple[str, str | None]]
 
-# Per-tile threading locks — prevents two threads fetching the same tile simultaneously.
-_tile_locks: dict[tuple[str, str], threading.Lock] = {}
+# Per-tile threading locks — prevents two threads fetching the same tile
+# simultaneously. Held in a WeakValueDictionary so a tile's lock lives only
+# while a thread is actually using it (via the `with` in get_tiles) and is
+# garbage-collected afterwards; otherwise this dict grew one entry per distinct
+# tile ever touched for the lifetime of the long-lived serve process.
+# A raw threading.Lock is not weak-referenceable, so wrap it.
+class _TileLock:
+    """A weak-referenceable, context-manager lock for a single tile."""
+
+    __slots__ = ("_lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> "_TileLock":
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._lock.release()
+
+
+_tile_locks: "weakref.WeakValueDictionary[tuple[str, str], _TileLock]" = (
+    weakref.WeakValueDictionary()
+)
 _tile_locks_mu = threading.Lock()
 
 
@@ -263,12 +287,17 @@ def _is_expired(record: TileRecord, ttl_days: int) -> bool:
     return _is_ts_expired(record.fetch_timestamp, ttl_days)
 
 
-def _tile_lock(dataset: str, tile_id: str) -> threading.Lock:
+def _tile_lock(dataset: str, tile_id: str) -> _TileLock:
     key = (dataset, tile_id)
     with _tile_locks_mu:
-        if key not in _tile_locks:
-            _tile_locks[key] = threading.Lock()
-        return _tile_locks[key]
+        lock = _tile_locks.get(key)
+        if lock is None:
+            lock = _TileLock()
+            _tile_locks[key] = lock
+        # Return the strong reference; the caller's `with` keeps it alive for the
+        # duration of the critical section, so concurrent callers for the same
+        # tile observe the same lock object.
+        return lock
 
 
 def _fetch_and_register(
