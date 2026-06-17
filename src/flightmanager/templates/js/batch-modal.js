@@ -2,6 +2,7 @@
 
 import { st } from './state.js';
 import { escHtml } from './utils.js';
+import { apiPost } from './api.js';
 import { loadJobsList } from './jobs-panel.js';
 import { closeFolderDialog, submitFolder } from './card-menu.js';
 
@@ -109,21 +110,12 @@ export async function submitBatch() {
   document.getElementById('batch-results').innerHTML = '';
   document.getElementById('batch-prog-close').disabled = true;
 
-  var res;
+  var jobId;
   try {
-    res = await fetch('/api/batch', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ids: ids, id_type: _batchType, folder: folder, params: params})
-    });
+    jobId = (await apiPost('/api/batch', {ids: ids, id_type: _batchType, folder: folder, params: params})).job_id;
   } catch(e) {
-    _batchError('Network error: ' + e.message); return;
+    _batchError(e.detail || ('Network error: ' + e.message)); return;
   }
-  if (!res.ok) {
-    var e2 = await res.json().catch(function(){return{detail:'HTTP '+res.status};});
-    _batchError(e2.detail || 'Batch failed'); return;
-  }
-
-  var jobId = (await res.json()).job_id;
   var sse = new EventSource('/api/progress/' + jobId);
 
   sse.onmessage = function(ev) {

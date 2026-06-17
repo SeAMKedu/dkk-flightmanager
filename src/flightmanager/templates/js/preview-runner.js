@@ -1,6 +1,7 @@
 // ── Preview & Export runners ──────────────────────────────────────────────────
 
 import { st } from './state.js';
+import { apiPost } from './api.js';
 import { xbUpdate } from './dirty-tracking.js';
 import { map } from './map-init.js';
 import { getParams, showError, clearError, updateFolderHint, getFitBoundsFlag } from './form-controls.js';
@@ -54,20 +55,15 @@ async function runJob(endpoint, params, label, onDone) {
   showToast(label + '…', 0, 'Starting…');
   showPg(true, 0, 'Starting…');
 
-  var res;
+  var data;
   try {
-    res = await fetch(endpoint, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(params)
-    });
-  } catch(e) { onErr('Network error: ' + e.message); return; }
-
-  if (!res.ok) {
-    var e2 = await res.json().catch(function(){return {detail:'HTTP ' + res.status};});
-    onErr((e2.detail || 'Server error') + ' (HTTP ' + res.status + ')'); return;
+    data = await apiPost(endpoint, params);
+  } catch(e) {
+    if (e.status) onErr((e.detail || 'Server error') + ' (HTTP ' + e.status + ')');
+    else onErr('Network error: ' + e.message);
+    return;
   }
 
-  var data = await res.json();
   var jid = data.job_id;
   console.log('[' + label + '] job_id=' + jid);
 

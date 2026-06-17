@@ -11,6 +11,7 @@
 
 import { st } from './state.js';
 import { escHtml } from './utils.js';
+import { apiGet } from './api.js';
 
 var _fcContainer = null;
 var _fcLoadedKey = null;   // folder key currently rendered (undefined = not loaded)
@@ -88,9 +89,7 @@ async function _fcFetchAndRender(folder) {
   _fcContainer.innerHTML = '<div class="fc-loading">Loading overpass forecast…</div>';
   try {
     var url = '/api/forecast' + (folder ? '?folder=' + encodeURIComponent(folder) : '');
-    var r = await fetch(url);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    var data = await r.json();
+    var data = await apiGet(url);
     if (seq !== _fcReqSeq || !st._mvMode) return;  // superseded or left map view
     _fcRender(data);
   } catch (e) {

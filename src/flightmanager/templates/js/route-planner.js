@@ -2,6 +2,7 @@
 
 import { st } from './state.js';
 import { map, lrs } from './map-init.js';
+import { apiPost } from './api.js';
 import { markDirty } from './dirty-tracking.js';
 import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
 import { notifyCesiumRouteReady } from './cesium-view.js';
@@ -366,12 +367,7 @@ async function _fetchAccurateEstimate() {
     adv_min_dip_m:             tpl ? tpl.adv_min_dip_m              : null,
   };
   try {
-    var res = await fetch('/api/route_estimate', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) return;
-    var data = await res.json();
+    var data = await apiPost('/api/route_estimate', body);
     updateRouteStats(data);
     if (data.strips_geojson) _drawRouteGeoJSON(data.strips_geojson, data.transits_geojson);
     if (st._routeAngleDeg === null && data.angle_deg_used != null) {

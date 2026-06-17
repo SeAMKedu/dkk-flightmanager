@@ -37,6 +37,7 @@ import { setVlosRange } from './takeoff.js';
 import { clearMeasurements } from './measurement.js';
 import { initCesiumView, toggle3dView } from './cesium-view.js';
 import { openTplModal, closeTplModal, tplTab, initTplModal, initTplDefaults } from './tpl-modal.js';
+import { apiGet } from './api.js';
 
 // ── Assign all functions needed in HTML onclick= attributes to window ─────────
 Object.assign(window, {
@@ -126,9 +127,7 @@ async function init() {
   document.getElementById('jname').value = defaultJobName();
 
   try {
-    var r = await fetch('/api/drones');
-    if (!r.ok) throw new Error('drones ' + r.status);
-    st.drones = await r.json();
+    st.drones = await apiGet('/api/drones');
     var sel = document.getElementById('dsel');
     st.drones.forEach(function(d) {
       var o = document.createElement('option');
@@ -136,9 +135,7 @@ async function init() {
       sel.appendChild(o);
     });
 
-    var cr = await fetch('/api/config');
-    if (!cr.ok) throw new Error('config ' + cr.status);
-    var cfg = await cr.json();
+    var cfg = await apiGet('/api/config');
 
     st.outputDir = cfg.output_dir || '';
     updateFolderHint();

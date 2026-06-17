@@ -1,6 +1,7 @@
 // ── Map view: stat panel ────────────────────────────────────────────────────
 
 import { escHtml } from './utils.js';
+import { apiGet } from './api.js';
 
 var _mvStatMode = localStorage.getItem('mv-stat-mode') || 'normal';
 var _statBinMap = {};
@@ -143,7 +144,7 @@ async function _stMgrs(body) {
   body.innerHTML = '<div class="mv-st-nodata">Loading tiles…</div>';
   try {
     var url = '/api/mgrs_tiles' + (folder ? '?folder=' + encodeURIComponent(folder) : '');
-    var data = await (await fetch(url)).json();
+    var data = await apiGet(url);
     if (_mvStatMode !== 'mgrs') return;  // mode changed while loading
     _mgrsCache = { folder: folder, data: data };
     body.innerHTML = _mgrsLegend(data);

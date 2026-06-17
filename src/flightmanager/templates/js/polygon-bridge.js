@@ -7,6 +7,7 @@ import { _setEditedPoly } from './form-controls.js';
 // Circular — only called at runtime:
 import { _detachEditListeners } from './polygon-edit.js';
 import { jobApiUrl } from './utils.js';
+import { apiPost } from './api.js';
 
 var _bridgePts = [];
 var _bridgeVerts = [];
@@ -220,22 +221,11 @@ async function _commitBridge() {
   _updateBridgePreview();
 
   try {
-    var res = await fetch('/api/polygon_op', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        operation: op,
-        polygon: geom,
-        points: _bridgePts.map(function(p){ return p.coord; })
-      })
+    var data = await apiPost('/api/polygon_op', {
+      operation: op,
+      polygon: geom,
+      points: _bridgePts.map(function(p){ return p.coord; })
     });
-    if (!res.ok) {
-      var err = await res.json().catch(function(){ return {detail:'Server error'}; });
-      exitBridgeMode();
-      _showBridgeError(err.detail || 'Operation failed');
-      return;
-    }
-    var data = await res.json();
     exitBridgeMode();
     if (st.editMode) {
       st.editMode = false;
@@ -249,7 +239,7 @@ async function _commitBridge() {
     import('./polygon-edit.js').then(function(m){ m._updateSurveyDisplay(data.geometry); });
   } catch(e) {
     exitBridgeMode();
-    _showBridgeError('Network error: ' + e.message);
+    _showBridgeError(e.detail || ('Operation failed: ' + e.message));
   }
 }
 
@@ -320,23 +310,14 @@ export async function commitSplit() {
   }
   try {
     st._ownSavedJob = st._activeJob;
-    var r = await fetch(jobApiUrl(st._activeJob, '/split'), {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({polygon_a: halves[0], polygon_b: halves[1]})
-    });
-    if (!r.ok) {
-      var err = await r.json().catch(function(){ return {detail:'Server error'}; });
-      _showBridgeError(err.detail || 'Split failed');
-      return;
-    }
+    await apiPost(jobApiUrl(st._activeJob, '/split'), {polygon_a: halves[0], polygon_b: halves[1]});
     st._dirty = false;
     var { loadJobsList } = await import('./jobs-panel.js');
     var { openJob } = await import('./job-ops.js');
     await loadJobsList();
     openJob(st._activeJob);
   } catch(e) {
-    _showBridgeError('Network error: ' + e.message);
+    _showBridgeError(e.detail || ('Split failed: ' + e.message));
   }
 }
 

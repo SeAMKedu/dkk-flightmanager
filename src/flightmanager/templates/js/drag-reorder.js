@@ -1,6 +1,7 @@
 // ── Drag-and-drop reordering ──────────────────────────────────────────────────
 
 import { jobApiUrl } from './utils.js';
+import { apiPost, apiPatch } from './api.js';
 import { loadJobsList } from './jobs-panel.js';
 // Circular — only called at runtime:
 import { _mvRefreshRouteData, getMvMode, getMvCurrentFolder } from './map-view.js';
@@ -22,11 +23,7 @@ export async function _finishDrop(group, folderKey, targetPath, pos) {
   }
 
   try {
-    await fetch('/api/jobs/reorder', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({paths: paths})
-    });
+    await apiPost('/api/jobs/reorder', {paths: paths});
     await loadJobsList();
     if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[reorder]', e); }
@@ -146,11 +143,7 @@ async function _doReRouteAll(readyJobs, folderKey) {
   var sorted = _greedyTSP(pts);
   var paths = sorted.map(function(p){ return p.path; });
   try {
-    await fetch('/api/jobs/reorder', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({paths: paths})
-    });
+    await apiPost('/api/jobs/reorder', {paths: paths});
     await loadJobsList();
     if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[autosort]', e); }
@@ -171,11 +164,7 @@ async function _doRouteRemaining(routed, unrouted, folderKey) {
 
   try {
     for (var i = 0; i < sorted.length; i++) {
-      await fetch(jobApiUrl(sorted[i].path), {
-        method: 'PATCH',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({sort_order: maxSo + 1 + i})
-      });
+      await apiPatch(jobApiUrl(sorted[i].path), {sort_order: maxSo + 1 + i});
     }
     await loadJobsList();
     if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
@@ -185,11 +174,7 @@ async function _doRouteRemaining(routed, unrouted, folderKey) {
 async function _doClearRoute(routed, folderKey) {
   try {
     for (var i = 0; i < routed.length; i++) {
-      await fetch(jobApiUrl(routed[i].path), {
-        method: 'PATCH',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({sort_order: null})
-      });
+      await apiPatch(jobApiUrl(routed[i].path), {sort_order: null});
     }
     await loadJobsList();
     if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();

@@ -3,6 +3,7 @@
 import { st } from './state.js';
 import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from './map-init.js';
 import { escHtml, jobApiUrl } from './utils.js';
+import { apiGet, apiPost, apiPatch, apiDelete } from './api.js';
 import { markDirty, confirmIfDirty, xbUpdate } from './dirty-tracking.js';
 import { showError, clearError, updateFolderHint, updateGsd, setRadiusLinked,
          setSub, setSimpAuto, setSimpManual, setAutoTimer,
@@ -32,9 +33,9 @@ export function openJob(path) {
 
 export async function _doOpenJob(path) {
   try {
-    var r = await fetch(jobApiUrl(path));
-    if (!r.ok) { showError('Could not load job: HTTP ' + r.status); return; }
-    var data = await r.json();
+    var data;
+    try { data = await apiGet(jobApiUrl(path)); }
+    catch (e) { showError('Could not load job: ' + (e.detail || e.message)); return; }
     var p = data.params;
     var name = path.includes('/') ? path.split('/').pop() : path;
     var autoTimer = getAutoTimer();
@@ -145,27 +146,17 @@ export function goBackToMap() {
 }
 
 export async function revealJob(path) {
-  try {
-    var r = await fetch(jobApiUrl(path, '/reveal'), {method:'POST'});
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Could not open folder');
-    }
-  } catch(e) { showError('Could not open folder: ' + e.message); }
+  try { await apiPost(jobApiUrl(path, '/reveal')); }
+  catch(e) { showError(e.detail || ('Could not open folder: ' + e.message)); }
 }
 
 export async function cloneJob(path) {
   if (st.isRunning) return;
   try {
-    var r = await fetch(jobApiUrl(path, '/clone'), {method:'POST'});
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Clone failed'); return;
-    }
-    var data = await r.json();
+    var data = await apiPost(jobApiUrl(path, '/clone'));
     await loadJobsList();
     openJob(data.path);
-  } catch(e) { showError('Clone failed: ' + e.message); }
+  } catch(e) { showError(e.detail || ('Clone failed: ' + e.message)); }
 }
 
 export function confirmDeleteJob(j) {
@@ -182,17 +173,13 @@ export function confirmDeleteJob(j) {
 
 export async function deleteJob(j) {
   try {
-    var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Delete failed'); return;
-    }
+    await apiDelete(jobApiUrl(j.path));
     if (st._activeJob === j.path) {
       st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
       import('./form-controls.js').then(function(m){ m._doNewJob(); });
     }
     await loadJobsList();
-  } catch(e) { showError('Delete failed: ' + e.message); }
+  } catch(e) { showError(e.detail || ('Delete failed: ' + e.message)); }
 }
 
 export function startRename(j) {
@@ -221,22 +208,14 @@ export function startRename(j) {
 
 export async function doRename(j, newName) {
   try {
-    var r = await fetch(jobApiUrl(j.path), {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({new_name: newName})
-    });
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Rename failed'); await loadJobsList(); return;
-    }
-    var data = await r.json();
+    var data = await apiPatch(jobApiUrl(j.path), {new_name: newName});
     if (st._activeJob === j.path) {
       st._activeJob = data.path;
       document.getElementById('jname').value = newName;
       updateFolderHint();
     }
     await loadJobsList();
-  } catch(e) { showError('Rename failed: ' + e.message); await loadJobsList(); }
+  } catch(e) { showError(e.detail || ('Rename failed: ' + e.message)); await loadJobsList(); }
 }
 
 export function showStaleNotice(stale) {
@@ -302,9 +281,6 @@ document.getElementById('job-color').addEventListener('change', async function()
   if (!st._activeJob) return;
   try {
     st._ownSavedJob = st._activeJob;
-    await fetch(jobApiUrl(st._activeJob), {
-      method: 'PATCH', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({color: this.value})
-    });
+    await apiPatch(jobApiUrl(st._activeJob), {color: this.value});
   } catch(e) { console.warn('[color patch]', e); }
 });

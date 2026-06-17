@@ -12,7 +12,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from flightmanager._server_state import SSEResponse
 from pydantic import BaseModel
 
@@ -88,6 +88,10 @@ class PolygonOpRequest(BaseModel):
 class SplitRequest(BaseModel):
     polygon_a: dict  # GeoJSON for the modified existing job
     polygon_b: dict  # GeoJSON for the new sibling job
+
+
+class ExportKmlRequest(BaseModel):
+    paths: list[str]
 
 
 class MergeRequest(BaseModel):
@@ -216,6 +220,44 @@ async def mgrs_tiles(folder: str | None = None, paths: str | None = None):
     return await asyncio.to_thread(
         sat.tiles_with_neighbors, centroids, _st.config.satellites,
     )
+
+
+@router.post("/api/export/kml")
+async def export_kml(req: ExportKmlRequest):
+    """Build a Google-Earth KML for the selected jobs (survey polygons + takeoffs).
+
+    Replaces the old in-browser KML builder. Jobs are ordered by flight order
+    (sort_order first, then name); the survey polygon comes from card_polygon so
+    ID-derived jobs (survey_outline only) are included.
+    """
+    from flightmanager.kml_export import build_jobs_kml
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    jobs: list[dict] = []
+    for path in req.paths:
+        _, _, job_dir = resolve_job_dir(output_dir, path)
+        params = load_params(job_dir)
+        if params is None:
+            manifest_path = job_dir / "manifest.json"
+            if manifest_path.exists():
+                try:
+                    params = params_from_manifest(
+                        job_dir.name, json.loads(manifest_path.read_text(encoding="utf-8"))
+                    )
+                except Exception:
+                    continue
+            else:
+                continue
+        params.setdefault("job_name", job_dir.name)
+        jobs.append(params)
+
+    jobs.sort(key=lambda p: (
+        0 if p.get("sort_order") is not None else 1,
+        p.get("sort_order") or 0,
+        p.get("job_name") or "",
+    ))
+    kml = build_jobs_kml(jobs)
+    return Response(content=kml, media_type="application/vnd.google-earth.kml+xml")
 
 
 # ---------------------------------------------------------------------------

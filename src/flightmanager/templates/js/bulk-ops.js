@@ -1,7 +1,8 @@
 // ── Bulk move / KML export / Google Maps / route rename / export route / bulk delete ──
 
 import { st } from './state.js';
-import { escHtml, jobApiUrl, _escapeXml, _hexToKmlColor } from './utils.js';
+import { jobApiUrl } from './utils.js';
+import { apiGet, apiPost, apiPatch, apiDelete } from './api.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal } from './multi-select.js';
@@ -24,18 +25,9 @@ async function _bulkMoveToFolder(toFolder, metas) {
   for (var i = 0; i < metas.length; i++) {
     var j = metas[i];
     try {
-      var r = await fetch(jobApiUrl(j.path, '/move'), {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({folder: toFolder})
-      });
-      if (!r.ok) {
-        var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-        showError('Move failed for ' + j.name + ': ' + (e.detail||''));
-      } else {
-        var data = await r.json();
-        if (st._activeJob === j.path) { st._activeJob = data.path; st._activeJobFolder = data.folder || null; }
-      }
-    } catch(err) { showError('Move failed: ' + err.message); }
+      var data = await apiPost(jobApiUrl(j.path, '/move'), {folder: toFolder});
+      if (st._activeJob === j.path) { st._activeJob = data.path; st._activeJobFolder = data.folder || null; }
+    } catch(err) { showError('Move failed for ' + j.name + ': ' + (err.detail || err.message)); }
   }
   clearSelection();
   await loadJobsList();
@@ -47,9 +39,7 @@ async function _loadSelectedJobs() {
   var jobs = [];
   for (var i = 0; i < paths.length; i++) {
     try {
-      var r = await fetch(jobApiUrl(paths[i]));
-      if (!r.ok) continue;
-      var data = await r.json();
+      var data = await apiGet(jobApiUrl(paths[i]));
       jobs.push({path: paths[i], params: data.params});
     } catch (e) { /* skip */ }
   }
@@ -70,56 +60,21 @@ async function _loadSelectedJobs() {
 export async function exportKml() {
   var result = await _loadSelectedJobs();
   if (!result) return;
-  var jobs = result.jobs, paths = result.paths;
+  var paths = result.paths;
 
-  var kml = ['<?xml version="1.0" encoding="UTF-8"?>',
-    '<kml xmlns="http://www.opengis.net/kml/2.2">',
-    '<Document><name>DKK Jobs</name>'];
-
-  jobs.forEach(function(job) {
-    var p = job.params;
-    var name = p.job_name || job.path;
-    var lineColor = _hexToKmlColor(p.color, 'ff');
-    var fillColor = _hexToKmlColor(p.color, '55');
-
-    kml.push('<Folder><name>' + _escapeXml(name) + '</name>');
-
-    var poly = p.custom_polygon_4326;
-    if (poly && poly.coordinates && poly.coordinates[0]) {
-      var ring = poly.coordinates[0];
-      var coords = ring.map(function(c){ return c[0]+','+c[1]+',0'; }).join(' ');
-      kml.push('<Placemark>');
-      kml.push('<name>' + _escapeXml(name) + '</name>');
-      kml.push('<Style>');
-      kml.push('<LineStyle><color>' + lineColor + '</color><width>2</width></LineStyle>');
-      kml.push('<PolyStyle><color>' + fillColor + '</color></PolyStyle>');
-      kml.push('</Style>');
-      kml.push('<Polygon><outerBoundaryIs><LinearRing>');
-      kml.push('<coordinates>' + coords + '</coordinates>');
-      kml.push('</LinearRing></outerBoundaryIs></Polygon>');
-      kml.push('</Placemark>');
-    }
-
-    var tp = p.takeoff_point_4326;
-    if (tp) {
-      kml.push('<Placemark>');
-      kml.push('<name>' + _escapeXml(name) + '</name>');
-      kml.push('<Style><IconStyle><color>' + lineColor + '</color></IconStyle></Style>');
-      kml.push('<Point><coordinates>' + tp[0] + ',' + tp[1] + ',0</coordinates></Point>');
-      kml.push('</Placemark>');
-    }
-
-    kml.push('</Folder>');
+  var r = await fetch('/api/export/kml', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({paths: paths})
   });
-
-  kml.push('</Document></kml>');
+  if (!r.ok) { showError('KML export failed (HTTP ' + r.status + ')'); return; }
+  var kmlText = await r.text();
 
   var folders = new Set(paths.map(function(p){ var s = p.indexOf('/'); return s >= 0 ? p.slice(0, s) : null; }));
   var fileName = (folders.size === 1 && Array.from(folders)[0] !== null)
     ? 'dkk-' + Array.from(folders)[0] + '.kml'
     : 'dkk-jobs.kml';
 
-  var blob = new Blob([kml.join('\n')], {type: 'application/vnd.google-earth.kml+xml'});
+  var blob = new Blob([kmlText], {type: 'application/vnd.google-earth.kml+xml'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url; a.download = fileName; a.click();
@@ -172,19 +127,10 @@ async function _doRouteRename(jobs) {
     var newName = dd + '-' + idx + '-' + baseName;
     if (newName === baseName) continue;
     try {
-      var r = await fetch(jobApiUrl(job.path), {
-        method: 'PATCH', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({new_name: newName})
-      });
-      if (!r.ok) {
-        var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-        showError('Rename failed for ' + baseName + ': ' + (e.detail || ''));
-      } else {
-        var data = await r.json();
-        if (st._activeJob === job.path) { st._activeJob = data.path; }
-        job.path = data.path;
-      }
-    } catch(err) { showError('Rename failed: ' + err.message); }
+      var data = await apiPatch(jobApiUrl(job.path), {new_name: newName});
+      if (st._activeJob === job.path) { st._activeJob = data.path; }
+      job.path = data.path;
+    } catch(err) { showError('Rename failed for ' + baseName + ': ' + (err.detail || err.message)); }
   }
   clearSelection();
   await loadJobsList();
@@ -217,21 +163,11 @@ export async function submitExportRoute() {
   btn.textContent = 'Exporting…';
 
   try {
-    var r = await fetch('/api/export-route', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({dest_dir: dest, folder: getMvCurrentFolder()})
-    });
-    var data = await r.json();
-    if (!r.ok) {
-      err.textContent = data.detail || 'Export failed (HTTP ' + r.status + ')';
-      err.style.display = 'block';
-      return;
-    }
+    var data = await apiPost('/api/export-route', {dest_dir: dest, folder: getMvCurrentFolder()});
     btn.textContent = '✓ ' + data.copied + ' file' + (data.copied !== 1 ? 's' : '') + ' copied';
     setTimeout(closeExportRouteModal, 1500);
   } catch(e) {
-    err.textContent = 'Export failed: ' + e.message;
+    err.textContent = e.detail || ('Export failed: ' + e.message);
     err.style.display = 'block';
   } finally {
     btn.disabled = false;
@@ -248,12 +184,12 @@ export function bulkDelete() {
     for (var i = 0; i < metas.length; i++) {
       var j = metas[i];
       try {
-        var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
-        if (r.ok && st._activeJob === j.path) {
+        await apiDelete(jobApiUrl(j.path));
+        if (st._activeJob === j.path) {
           st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
           import('./form-controls.js').then(function(m){ m._doNewJob(); });
         }
-      } catch(err) { showError('Delete failed: ' + err.message); }
+      } catch(err) { showError(err.detail || ('Delete failed: ' + err.message)); }
     }
     clearSelection();
     await loadJobsList();

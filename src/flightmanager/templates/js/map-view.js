@@ -3,6 +3,7 @@
 import { st } from './state.js';
 import { map, lrs, editLayers, resetLrs } from './map-init.js';
 import { escHtml, jobApiUrl } from './utils.js';
+import { apiGet, apiPost, apiPatch, apiDelete } from './api.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 import { openDeleteModal, openMoveModal } from './modal-utils.js';
@@ -116,9 +117,7 @@ export function closeMapView() {
 
 async function _mvLoad(folderFilter, skipFit) {
   try {
-    var r = await fetch('/api/jobs/geojson');
-    if (!r.ok) return;
-    var fc = await r.json();
+    var fc = await apiGet('/api/jobs/geojson');
     _mvAllFeatures = fc.features || [];
     _mvApplyFilter(folderFilter, skipFit);
     _mvDrawRoute();
@@ -174,9 +173,7 @@ export function toggleMvRoute() {
 
 export async function _mvRefreshRouteData() {
   try {
-    var r = await fetch('/api/jobs/geojson');
-    if (!r.ok) return;
-    var fc = await r.json();
+    var fc = await apiGet('/api/jobs/geojson');
     _mvAllFeatures = fc.features || [];
     _mvDrawRoute();
   } catch(e) { console.error('[mv-refresh-route]', e); }
@@ -345,19 +342,14 @@ export function mvOpenJob(path) {
 
 export async function mvToggleSkip(path, currentSkipped) {
   try {
-    var r = await fetch(jobApiUrl(path), {
-      method: 'PATCH', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({skipped: !currentSkipped})
-    });
-    if (!r.ok) { showError('Could not update job'); return; }
+    await apiPatch(jobApiUrl(path), {skipped: !currentSkipped});
     if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
-    var geoR = await fetch('/api/jobs/geojson');
-    if (geoR.ok) {
-      _mvAllFeatures = (await geoR.json()).features || [];
+    try {
+      _mvAllFeatures = (await apiGet('/api/jobs/geojson')).features || [];
       _mvApplyFilter(_mvCurrentFolder, true);
-    }
+    } catch(e) { /* geojson refresh best-effort */ }
     loadJobsList();
-  } catch(e) { showError('Failed: ' + e.message); }
+  } catch(e) { showError(e.detail || ('Failed: ' + e.message)); }
 }
 
 export function mvDeleteJob(path, name) {
@@ -365,8 +357,7 @@ export function mvDeleteJob(path, name) {
   if (_mvHoverPopup) { _mvHoverPopup = null; }
   openDeleteModal('Delete "' + name + '"? This cannot be undone.', async function() {
     try {
-      var r = await fetch(jobApiUrl(path), {method: 'DELETE'});
-      if (!r.ok) { showError('Delete failed'); return; }
+      await apiDelete(jobApiUrl(path));
       _mvLayers = _mvLayers.filter(function(item) {
         if (item.path === path) { _mvJobGroup.removeLayer(item.layer); return false; }
         return true;
@@ -374,7 +365,7 @@ export function mvDeleteJob(path, name) {
       _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== path; });
       if (st._activeJob === path) { st._activeJob = null; st._activeJobFolder = null; }
       loadJobsList();
-    } catch(e) { showError('Delete failed: ' + e.message); }
+    } catch(e) { showError(e.detail || ('Delete failed: ' + e.message)); }
   });
 }
 
@@ -475,11 +466,8 @@ export function mvBulkMove() {
   openMoveModal(title, metas, async function(dest) {
     for (var i = 0; i < metas.length; i++) {
       try {
-        await fetch(jobApiUrl(metas[i].path, '/move'), {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({folder: dest})
-        });
-      } catch(e) { showError('Move failed: ' + e.message); }
+        await apiPost(jobApiUrl(metas[i].path, '/move'), {folder: dest});
+      } catch(e) { showError(e.detail || ('Move failed: ' + e.message)); }
     }
     mvClearSel();
     await loadJobsList();
@@ -495,7 +483,7 @@ export function mvBulkDelete() {
     var paths = Array.from(_mvSelected);
     for (var i = 0; i < paths.length; i++) {
       try {
-        await fetch(jobApiUrl(paths[i]), {method: 'DELETE'});
+        await apiDelete(jobApiUrl(paths[i]));
         _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== paths[i]; });
         _mvLayers = _mvLayers.filter(function(item) {
           if (item.path === paths[i]) { if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); return false; }
