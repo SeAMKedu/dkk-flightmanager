@@ -365,6 +365,76 @@ class TestCheckCacheStaleness:
 
 
 # ---------------------------------------------------------------------------
+# refresh_status (staleness detection)
+# ---------------------------------------------------------------------------
+
+
+def _register_tile(cache_dir, dataset, tile_id, fetch_ts):
+    """Insert a bare tile record into the cache index (file need not exist)."""
+    from pathlib import Path
+
+    from flightmanager.cache import TileRecord, _db_path, _init_db, _register
+
+    db = _db_path(Path(cache_dir))
+    _init_db(db)
+    _register(db, TileRecord(
+        tile_id=tile_id, dataset=dataset, bbox=(0, 0, 1000, 1000),
+        path=Path(cache_dir) / f"{tile_id}.tif", source_url=None,
+        fetch_timestamp=fetch_ts, dataset_version=None, checksum="x", byte_size=1,
+    ))
+
+
+class TestRefreshStatus:
+    def _cfg(self, tmp_path):
+        from flightmanager.config import CacheConfig
+        return CacheConfig(cache_dir=str(tmp_path / "cache"))
+
+    def test_older_pipeline_version_flagged(self, tmp_path):
+        from flightmanager.job_store import refresh_status
+        out = refresh_status({"pipeline_version": 1}, self._cfg(tmp_path), 2)
+        assert out["needs_refresh"] is True
+        assert any("pipeline" in r for r in out["reasons"])
+
+    def test_current_version_not_flagged(self, tmp_path):
+        from flightmanager.job_store import refresh_status
+        out = refresh_status({"pipeline_version": 2}, self._cfg(tmp_path), 2)
+        assert out["needs_refresh"] is False
+        assert out["reasons"] == []
+
+    def test_missing_pipeline_version_treated_as_zero(self, tmp_path):
+        from flightmanager.job_store import refresh_status
+        out = refresh_status({}, self._cfg(tmp_path), 1)
+        assert out["needs_refresh"] is True
+
+    def test_newer_source_data_flagged(self, tmp_path):
+        from flightmanager.job_store import refresh_status
+        cfg = self._cfg(tmp_path)
+        # Job used data fetched in January; cache now holds a March copy.
+        _register_tile(cfg.cache_dir, "dem", "E1_N1", "2026-03-01T00:00:00+00:00")
+        manifest = {
+            "pipeline_version": 1,
+            "cache_provenance": {"dem": {
+                "tile_ids": ["E1_N1"], "fetch_date_max": "2026-01-01T00:00:00+00:00",
+            }},
+        }
+        out = refresh_status(manifest, cfg, 1)
+        assert out["needs_refresh"] is True
+        assert any("dem" in r for r in out["reasons"])
+
+    def test_same_source_data_not_flagged(self, tmp_path):
+        from flightmanager.job_store import refresh_status
+        cfg = self._cfg(tmp_path)
+        _register_tile(cfg.cache_dir, "dem", "E1_N1", "2026-01-01T00:00:00+00:00")
+        manifest = {
+            "pipeline_version": 1,
+            "cache_provenance": {"dem": {
+                "tile_ids": ["E1_N1"], "fetch_date_max": "2026-01-01T00:00:00+00:00",
+            }},
+        }
+        assert refresh_status(manifest, cfg, 1)["needs_refresh"] is False
+
+
+# ---------------------------------------------------------------------------
 # Params storage: save_params / load_params / migration
 # ---------------------------------------------------------------------------
 

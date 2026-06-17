@@ -38,6 +38,7 @@ import { clearMeasurements } from './measurement.js';
 import { initCesiumView, toggle3dView } from './cesium-view.js';
 import { openTplModal, closeTplModal, tplTab, initTplModal, initTplDefaults } from './tpl-modal.js';
 import { apiGet } from './api.js';
+import { checkStaleJobs } from './refresh-banner.js';
 
 // ── Assign all functions needed in HTML onclick= attributes to window ─────────
 Object.assign(window, {
@@ -174,6 +175,7 @@ async function init() {
   setJpOpen(localStorage.getItem('jp-open') !== 'false');
   loadJobsList();
   _initEventStream();
+  checkStaleJobs();
 }
 
 init();

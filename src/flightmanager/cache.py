@@ -469,3 +469,22 @@ def check_tile_exists(cache_config: "CacheConfig", dataset: str, tile_id: str) -
         return False
     record = _lookup(db, dataset, tile_id)
     return record is not None and record.path.exists()
+
+
+def newest_tile_fetch(
+    cache_config: "CacheConfig", dataset: str, tile_ids: list[str]
+) -> str | None:
+    """Return the newest ISO fetch_timestamp among the given cached tiles, or None.
+
+    Used to detect "source data updated" — when the cache holds a newer copy of a
+    tile than the one a job recorded using.
+    """
+    db = _db_path(Path(cache_config.cache_dir))
+    if not db.exists():
+        return None
+    newest: str | None = None
+    for tile_id in tile_ids:
+        record = _lookup(db, dataset, tile_id)
+        if record and (newest is None or record.fetch_timestamp > newest):
+            newest = record.fetch_timestamp
+    return newest

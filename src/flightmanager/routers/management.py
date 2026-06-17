@@ -25,6 +25,7 @@ from flightmanager.job_store import (
     load_params,
     params_from_manifest,
     read_job_card,
+    refresh_status,
     resolve_job_dir,
     save_params,
     scan_jobs,
@@ -205,6 +206,40 @@ async def forecast(folder: str | None = None, paths: str | None = None):
         _st.config.cache.cache_dir,
         folder_dir=folder_dir,
     )
+
+
+@router.get("/api/refresh/scan")
+async def refresh_scan(folder: str | None = None):
+    """List exported jobs that should be recomputed (stale pipeline / newer source data).
+
+    Cheap detection only — no recompute. Skips untouched batch skeletons (nothing built
+    yet). Registered before ``/api/jobs/{path:path}``.
+    """
+    from flightmanager.manifest import PIPELINE_VERSION
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    stale: list[dict] = []
+    for group in scan_jobs(output_dir):
+        if folder is not None and group["name"] != folder:
+            continue
+        for card in group["jobs"]:
+            if card.get("untouched"):
+                continue
+            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
+            manifest_path = job_dir / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            status = refresh_status(manifest, _st.config.cache, PIPELINE_VERSION)
+            if status["needs_refresh"]:
+                stale.append({
+                    "path": card["path"], "name": card["name"], "folder": card["folder"],
+                    "reasons": status["reasons"], "missing_tiles": status["missing_tiles"],
+                })
+    return {"pipeline_version": PIPELINE_VERSION, "stale": stale}
 
 
 @router.get("/api/mgrs_tiles")

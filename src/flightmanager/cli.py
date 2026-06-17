@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 
 load_dotenv()  # reads .env (or .env.local) from cwd upward; no-op if not found
 import sqlite3
-import webbrowser
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -778,6 +777,98 @@ def _collect_job_centroids(out_dir: Path, folder: str | None) -> list[tuple[floa
         c = shape(geom).centroid
         points.append((c.y, c.x))
     return points
+
+
+def _collect_stale_paths(output_dir: Path, cache_config, folder: Optional[str]) -> list[str]:
+    """Return job paths flagged stale (skipping untouched skeletons), optionally one folder."""
+    import json
+
+    from flightmanager.job_store import refresh_status, resolve_job_dir, scan_jobs
+    from flightmanager.manifest import PIPELINE_VERSION
+
+    targets: list[str] = []
+    for group in scan_jobs(output_dir):
+        if folder and group["name"] != folder:
+            continue
+        for card in group["jobs"]:
+            if card.get("untouched"):
+                continue
+            _, _, jd = resolve_job_dir(output_dir, card["path"])
+            manifest_path = jd / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if refresh_status(manifest, cache_config, PIPELINE_VERSION)["needs_refresh"]:
+                targets.append(card["path"])
+    return targets
+
+
+@app.command("refresh")
+def refresh_cmd(
+    paths: list[str] = typer.Argument(
+        default=None, help="Job paths (folder/name or name) to refresh."
+    ),
+    all_stale: bool = typer.Option(
+        False, "--all-stale", help="Refresh every job flagged stale (pipeline / source data)."
+    ),
+    folder: Optional[str] = typer.Option(
+        None, "--folder", help="Limit --all-stale to one group folder."
+    ),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """Recompute exported jobs in place with the current pipeline (recompute-only).
+
+    Pass explicit job paths, or --all-stale to refresh every job whose pipeline_version
+    is behind or whose source tiles the cache now holds a newer copy of (--folder narrows
+    that to one group). The edited / ID-derived geometry is preserved — only the route,
+    DSM, stats, KMZ and manifest are recomputed from cached tiles.
+    """
+    from filelock import Timeout
+
+    import flightmanager._server_state as _st
+    from flightmanager._pipeline_lock import pipeline_lock
+    from flightmanager.routers.execution import _refresh_one_job
+
+    cfg = _load_cfg(config_path)
+    _st.config = cfg  # _refresh_one_job builds per-job config from the shared state
+    output_dir = Path(cfg.output.output_dir).resolve()
+
+    targets = (
+        _collect_stale_paths(output_dir, cfg.cache, folder)
+        if (all_stale or folder) else list(paths or [])
+    )
+
+    if not targets:
+        typer.echo("No jobs to refresh.")
+        raise typer.Exit(0)
+
+    typer.echo(f"Refreshing {len(targets)} job(s) …")
+    ok = flips = failed = skipped = 0
+    try:
+        with pipeline_lock(cfg.cache.cache_dir):
+            for i, p in enumerate(targets, 1):
+                typer.echo(f"[{i}/{len(targets)}] {p}")
+                try:
+                    r = _refresh_one_job(p, output_dir)
+                    if r["status"] == "ok":
+                        ok += 1
+                        if r["flips"]:
+                            flips += 1
+                            typer.echo("    ⚠ " + "; ".join(r["flips"]))
+                    else:
+                        skipped += 1
+                        typer.echo(f"    skipped: {r.get('reason', '')}")
+                except Exception as e:
+                    failed += 1
+                    typer.echo(f"    ERROR: {e}", err=True)
+    except Timeout:
+        typer.echo("Pipeline busy — another process holds the lock. Try again shortly.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Done — {ok} recomputed, {flips} with flag changes, {skipped} skipped, {failed} failed.")
 
 
 @app.command("satellites")

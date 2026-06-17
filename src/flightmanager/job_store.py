@@ -525,3 +525,36 @@ def check_cache_staleness(manifest: dict, cache_config) -> list[str]:
             if not check_tile_exists(cache_config, dataset, tile_id):
                 stale.append(f"{dataset}/{tile_id}")
     return stale
+
+
+def refresh_status(manifest: dict, cache_config, current_pipeline_version: int) -> dict:
+    """Decide whether a completed job should be re-computed (recompute-only refresh).
+
+    Signals (per the 2026-06-17 plan): the job's recorded ``pipeline_version`` is
+    older than the running code, or the local cache holds a newer copy of a source
+    tile than the job used. Returns
+    ``{"needs_refresh": bool, "reasons": [str], "missing_tiles": [str]}``.
+    ``missing_tiles`` is informational — refresh re-fetches those from the network.
+    """
+    from flightmanager.cache import newest_tile_fetch
+
+    reasons: list[str] = []
+    pv = manifest.get("pipeline_version", 0)
+    if pv < current_pipeline_version:
+        reasons.append(f"pipeline updated (v{pv} → v{current_pipeline_version})")
+
+    provenance = manifest.get("cache_provenance", {})
+    for dataset in ("dem", "buildings"):
+        d = provenance.get(dataset, {})
+        used_max = d.get("fetch_date_max")
+        tile_ids = d.get("tile_ids", [])
+        if used_max and tile_ids:
+            newest = newest_tile_fetch(cache_config, dataset, tile_ids)
+            if newest and newest > used_max:
+                reasons.append(f"{dataset} source data updated")
+
+    return {
+        "needs_refresh": bool(reasons),
+        "reasons": reasons,
+        "missing_tiles": check_cache_staleness(manifest, cache_config),
+    }

@@ -76,6 +76,10 @@ class BatchRequest(BaseModel):
     params: dict = {}
 
 
+class RefreshRequest(BaseModel):
+    paths: list[str]  # job paths to recompute in place
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -329,6 +333,163 @@ async def start_batch(req: BatchRequest):
             )
 
     loop.run_in_executor(None, run)
+    return {"job_id": job_id}
+
+
+# ---------------------------------------------------------------------------
+# Refresh — recompute stale jobs in place (recompute-only)
+# ---------------------------------------------------------------------------
+
+
+def _export_request_from_params(name: str, folder: str | None, params: dict) -> ExportRequest:
+    """Reconstruct an ExportRequest from a job's stored job_params."""
+    inputs = params.get("inputs", {})
+    flight = params.get("flight", {})
+    poly = params.get("polygon", {})
+    safety = params.get("safety", {})
+    return ExportRequest(
+        job_name=name, folder=folder,
+        parcel_ids=inputs.get("parcel_ids") or [],
+        property_ids=inputs.get("property_ids") or [],
+        drone=flight.get("drone"),
+        height_m=flight.get("height_m"),
+        subcategory=flight.get("subcategory", "A3"),
+        route_angle_deg=flight.get("route_angle_deg"),
+        speed_ms=flight.get("speed_ms"),
+        offset_m=(poly.get("offset_m") or 0.0),
+        simplify=poly.get("simplify", "auto"),
+        keepout=poly.get("keepout", True),
+        preview_radius_m=safety.get("preview_radius_m"),
+        custom_polygon=params.get("custom_polygon_4326"),
+        takeoff_point_4326=params.get("takeoff_point_4326"),
+        color=params.get("color"),
+        template_settings=params.get("template_settings") or {},
+    )
+
+
+def _job_flags(manifest: dict) -> dict:
+    """Pull the safety/stat fields that a refresh may change, for the diff summary."""
+    bat = manifest.get("battery") or {}
+    if "estimated_flight_time_min" in bat:
+        ft = bat["estimated_flight_time_min"]
+    elif "pieces" in bat:
+        ft = sum(p.get("estimated_flight_time_min", 0) for p in bat["pieces"])
+    else:
+        ft = None
+    g = manifest.get("geometry", {})
+    return {
+        "flight_ready": manifest.get("flight_ready"),
+        "needs_review": manifest.get("needs_review"),
+        "flight_time_min": round(ft, 1) if ft is not None else None,
+        "final_area_ha": g.get("final_area_ha"),
+    }
+
+
+def _refresh_one_job(path: str, output_dir) -> dict:
+    """Recompute one job in place from its stored params. Returns a result dict."""
+    import json as _json
+
+    from shapely.geometry import shape
+
+    from flightmanager.job_store import load_params, resolve_job_dir
+    from flightmanager.pipeline import export_job
+
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    params = load_params(job_dir)
+    if params is None or params.get("batch_created"):
+        return {"path": path, "status": "skipped", "reason": "no exported job to recompute"}
+
+    before: dict = {}
+    manifest_path = job_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            before = _job_flags(_json.loads(manifest_path.read_text(encoding="utf-8")))
+        except Exception:
+            before = {}
+
+    ereq = _export_request_from_params(name, folder, params)
+    cfg = _prepare_config(ereq)
+    custom_poly = shape(ereq.custom_polygon) if ereq.custom_polygon else None
+    manifest, route_geojson = export_job(
+        name, cfg,
+        parcel_ids=ereq.parcel_ids or None,
+        property_ids=ereq.property_ids or None,
+        custom_polygon_4326=custom_poly,
+        folder=folder or None,
+    )
+    _write_job_params(job_dir, ereq, manifest, None, route_geojson)
+    after = _job_flags(manifest)
+    flips = [
+        f"{k}: {before.get(k)} → {after.get(k)}"
+        for k in ("flight_ready", "needs_review")
+        if before.get(k) != after.get(k)
+    ]
+    return {"path": path, "status": "ok", "before": before, "after": after, "flips": flips}
+
+
+@router.post("/api/refresh")
+async def start_refresh(req: RefreshRequest):
+    """Recompute the given jobs in place with the current pipeline (recompute-only).
+
+    Auto-applies: each job's KMZ/DSM/manifest/job_params are rewritten. Progress and a
+    per-job summary (including flight_ready / needs_review flips) stream over SSE.
+    """
+    import asyncio
+    from pathlib import Path as _Path
+
+    if not req.paths:
+        raise HTTPException(400, detail="paths list is empty")
+
+    job_id, queue = _begin_job()
+    loop = asyncio.get_running_loop()
+    output_dir = _Path(_st.config.output.output_dir).resolve()
+
+    def cb(stage: str, msg: str, pct: int) -> None:
+        try:
+            loop.call_soon_threadsafe(
+                queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct}
+            )
+        except Exception:
+            pass
+
+    def run() -> None:
+        lock = _acquire_pipeline_lock(job_id, loop, queue, "refresh")
+        if lock is None:
+            return
+        try:
+            results: list[dict] = []
+            total = len(req.paths)
+            for i, path in enumerate(req.paths):
+                cb("refresh", f"[{i + 1}/{total}] {path}…", int(i / total * 100))
+                try:
+                    results.append(_refresh_one_job(path, output_dir))
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    results.append({"path": path, "status": "error", "reason": str(exc)})
+
+            ok = sum(1 for r in results if r["status"] == "ok")
+            flipped = sum(1 for r in results if r.get("flips"))
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"stage": "done", "pct": 100, "payload": {
+                    "results": results, "recomputed": ok,
+                    "skipped": sum(1 for r in results if r["status"] == "skipped"),
+                    "failed": sum(1 for r in results if r["status"] == "error"),
+                    "flipped": flipped,
+                }},
+            )
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            loop.call_soon_threadsafe(
+                queue.put_nowait, {"stage": "error", "pct": 0, "msg": str(exc)},
+            )
+        finally:
+            lock.release()
+            _end_job()
+
+    loop.run_in_executor(_st.executor, run)
     return {"job_id": job_id}
 
 
