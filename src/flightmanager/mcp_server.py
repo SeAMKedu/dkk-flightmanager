@@ -862,7 +862,6 @@ def run_export(
             "kmz": next(job_dir.glob("*.kmz"), None),
             "homes_kml": next(job_dir.glob("*_homes.kml"), None),
             "manifest": job_dir / "manifest.json",
-            "preview_html": next(job_dir.glob("*_map.html"), None),
         }.items()
         if p is not None and Path(p).exists()
     }

@@ -17,7 +17,6 @@ Output files written per job:
 | `<name>.kmz` | WPML mapping route with embedded terrain-follow DSM — import into DJI Pilot 2 |
 | `<name>_dsm.tif` | Terrain-follow DSM (also embedded in the KMZ, kept separately as a backup) |
 | `<name>_homes.kml` | Building pins — import as a Pilot 2 custom map layer |
-| `<name>_map.html` | Browser map preview — survey polygon, buildings, keep-out circles, warning radius circles, UAS zones, DSM elevation overlay; all layers toggleable |
 | `manifest.json` | Full provenance record with flight stats and safety flags |
 | `job_params.json` | Browser UI save state (inputs, flight params, polygon params, simplified survey outline) — used to re-open the job for editing. Written atomically; `schema_version` tracks the on-disk format |
 | `thumbnail.svg` | Small polygon thumbnail shown in the jobs panel |
@@ -80,7 +79,7 @@ Every job runs through the same ordered stages in `pipeline.py:run_job()`:
 ```
 Parcel / property fetch  →  Buildings fetch  →  Geometry processing
   →  DEM tiles  →  DSM mosaic  →  Zone check  →  KMZ  →  Homes KML
-  →  HTML preview  →  Manifest
+  →  Manifest
 ```
 
 `run_preview()` runs only the first five stages (no file output) and returns a GeoJSON payload with a base64 DSM thumbnail. The browser calls preview on every parameter change; export (Save) runs the full pipeline.
@@ -355,7 +354,7 @@ In edit mode:
 
 ### Save and settings
 
-- **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs, pressing **Esc**, or clicking the **←** back arrow.
+- **Save** — writes KMZ, DSM, homes KML, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs, pressing **Esc**, or clicking the **←** back arrow.
 - **⚙ Settings** — opens the in-browser config editor (all sections: Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties). Changed fields highlight in amber; a search box filters across all sections. Saving hot-reloads the server and writes directly to `config.toml`. Drone profiles must be edited in `config.toml` directly; `config.example.toml` is the reference for all options.
 - **ⓘ About** — the `⋯` button in the header opens the About dialog, which shows the software version and a **session statistics** table: how many tiles, parcel geometries, and zone records were fetched from the network vs. served from the local cache, and the total bytes downloaded.
 
@@ -515,11 +514,11 @@ flightmanager run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 | `--subcategory` | from config | Operating subcategory: `A2` or `A3` |
 | `--buffer` | from config | Home keep-out buffer in metres (overrides the subcategory default) |
 | `--homes-distance` | 2× buffer | Max distance (m) from survey polygon to include a building in the homes KML — see below |
-| `--preview-radius` | 3× height | Radius (m) of the yellow informational circle in the HTML preview — see below |
+| `--preview-radius` | 3× height | Radius (m) of the yellow informational circle on the preview map — see below |
 | `--simplify` | from config | Polygon vertex reduction — see below |
 | `--offset` | `0` | Expand (+) or contract (−) the survey polygon by this many metres relative to the parcel boundary — see below |
 | `--no-keepout` | off | Disable automatic keep-out subtraction around buildings — see below |
-| `--open` | off | Open the HTML map preview in the default browser after the job completes |
+| `--open` | off | Reveal the job output folder in the system file manager after the job completes |
 | `--config`, `-c` | `config.toml` | Path to config file |
 | `--dry-run` | off | Fetch and validate only — no output files written |
 | `--offline` | off | Cache-only mode; fail cleanly on any cache miss |
@@ -584,7 +583,7 @@ flightmanager run --name pelto-2024 --parcels 5241087453 --no-keepout
 
 When `--no-keepout` is used:
 - The survey polygon is not cut back around buildings — it covers the full parcel area.
-- Buildings and their distance circles are still shown on the HTML preview map.
+- Buildings and their distance circles are still shown on the preview map.
 - A prominent red warning is added to the preview panel reminding the operator to verify distances to all buildings manually.
 
 Use this only when you have the landowner's permission to fly close to buildings and have verified the required separation under your operating subcategory. Set `offset_enabled = false` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to make it the default.
@@ -752,7 +751,6 @@ The same table appears on `flightmanager serve` shutdown and in the **ⓘ About*
 5. Edit the polygon if needed (double-click to enter, double-click background to save). Buildings and zones refresh automatically on exit.
 6. Check the white ✕ takeoff/landing marker — the tool suggests a boundary point that minimises your worst-case VLOS distance to the drone. Drag it to a more accessible location if needed (e.g. closer to a road or gate). Use **↺ Reset takeoff position** to go back to the auto suggestion.
 7. Click **Save** when satisfied.
-8. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
 
 ### On the RC
 
@@ -807,7 +805,7 @@ Set `home_include_buffer_m` under `[home_safety]` in `config.toml` (or via **⚙
 
 ### Map preview yellow circle (`--preview-radius`)
 
-The HTML preview draws a yellow dashed circle around each keep-out building. This is a visual reference only — it does not affect the KMZ or homes KML.
+The preview map draws a yellow dashed circle around each keep-out building. This is a visual reference only — it does not affect the KMZ or homes KML.
 
 The default radius is **3× derived flight height** (the "3:1 horizontal rule" sometimes used for risk assessment). At 100 m AGL the default is 300 m.
 
@@ -865,7 +863,7 @@ See `fixtures/FIXTURE_NOTES.md` for annotated analysis of all M3E-specific value
 
 ## Attribution (CC-BY 4.0)
 
-All data sources require attribution. The manifest records the exact strings with retrieval dates. Both the browser UI map and the static HTML preview display the applicable credits in the Leaflet attribution control.
+All data sources require attribution. The manifest records the exact strings with retrieval dates. The browser UI map displays the applicable credits in the Leaflet attribution control.
 
 | Data | Attribution string |
 |---|---|

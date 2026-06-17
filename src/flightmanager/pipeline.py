@@ -47,8 +47,7 @@ from flightmanager.logging_setup import setup_logging
 from flightmanager.manifest import build_manifest
 from flightmanager.parcels import fetch_parcels
 from flightmanager.properties import fetch_properties
-from flightmanager.raster import build_site_dsm
-from flightmanager.preview import build_map_preview, build_preview_dsm_thumbnail
+from flightmanager.raster import build_site_dsm, build_preview_dsm_thumbnail
 from flightmanager.homes_kml import build_homes_kml
 from flightmanager.wpml import build_kmz, resolve_strip_speed
 from flightmanager.zones import ZoneHit, check_zones
@@ -285,22 +284,6 @@ def export_job(  # noqa: C901
     )
 
     if not dry_run:
-        parcels_4326 = [reproject_to_4326(p.geometry) for p in inp.input_geoms]
-        build_map_preview(
-            survey_geom.survey_4326,
-            buildings_4326,
-            job_dir / f"{job_name}_map.html",
-            job_name=job_name,
-            home_safety=config.home_safety,
-            manifest=manifest,
-            parcels_4326=parcels_4326,
-            zone_hits=zone_result.intersecting_zones,
-            zone_result=zone_result,
-            dsm_path=dsm_path,
-            preview_radius_m=preview_radius_m,
-            keepout_ignored=not config.home_safety.offset_enabled,
-        )
-
         manifest_path = job_dir / "manifest.json"
         manifest_path.write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False),

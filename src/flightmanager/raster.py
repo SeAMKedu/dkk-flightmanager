@@ -19,6 +19,7 @@ DJI for the RTH path and any takeoff/landing area outside the polygon.
 
 from __future__ import annotations
 
+import base64
 import logging
 import math
 from pathlib import Path
@@ -31,6 +32,7 @@ from pyproj import Transformer
 from pyproj.datadir import get_data_dir
 from pyproj.sync import _download_resource_file, get_proj_endpoint
 from rasterio.crs import CRS
+from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.warp import Resampling, reproject
 from shapely.geometry.base import BaseGeometry
@@ -38,6 +40,108 @@ from shapely.geometry.base import BaseGeometry
 from flightmanager.crs import require_4326
 
 log = logging.getLogger(__name__)
+
+_DSM_MAX_PX = 512   # longest side of the in-memory thumbnail for the web-UI live preview
+
+# Viridis colormap — 11 control points (0.0 … 1.0) from matplotlib's viridis LUT.
+_VIRIDIS_STOPS = np.array([
+    [ 68,   1,  84], [ 72,  36, 117], [ 65,  68, 135], [ 53,  95, 141],
+    [ 42, 120, 142], [ 33, 144, 141], [ 39, 168, 128], [ 82, 191, 104],
+    [140, 209,  72], [195, 223,  35], [253, 231,  37],
+], dtype=np.float32)
+
+
+def _colorize_viridis(norm: np.ndarray) -> np.ndarray:
+    """Map normalized float32 [0,1] array to viridis RGB. Returns (H, W, 3) uint8."""
+    n = len(_VIRIDIS_STOPS)           # 11 stops → 10 intervals
+    scaled = np.clip(norm, 0.0, 1.0) * (n - 1)
+    idx_lo = np.floor(scaled).astype(np.int32)
+    idx_hi = np.minimum(idx_lo + 1, n - 1)
+    frac = (scaled - idx_lo)[..., np.newaxis]
+    colors = (1.0 - frac) * _VIRIDIS_STOPS[idx_lo] + frac * _VIRIDIS_STOPS[idx_hi]
+    return colors.astype(np.uint8)
+
+
+def build_preview_dsm_thumbnail(
+    tile_paths: list[Path],
+    survey_4326,
+    margin_m: int = 150,
+) -> tuple[str, tuple[float, float, float, float]] | tuple[None, None]:
+    """Build a display-only viridis DSM thumbnail from cached DEM tiles, in memory.
+
+    Used by the web-UI live preview (``pipeline.analyse_survey``). Unlike
+    :func:`build_site_dsm` this skips geoid correction (irrelevant for display),
+    writes no files, and downsamples directly to thumbnail resolution.
+
+    Returns ``(base64-PNG, (west, south, east, north))`` in EPSG:4326, or
+    ``(None, None)`` if tiles are unavailable or empty.
+    """
+    if not tile_paths:
+        return None, None
+
+    _NODATA = -9999.0
+    src_crs = CRS.from_epsg(3067)
+    dst_crs = CRS.from_epsg(4326)
+
+    datasets = [rasterio.open(p) for p in tile_paths]
+    try:
+        mosaic, mosaic_transform = rasterio.merge.merge(datasets)
+    finally:
+        for ds in datasets:
+            ds.close()
+
+    bounds = survey_4326.bounds  # (minx, miny, maxx, maxy) in 4326
+    mid_lat = (bounds[1] + bounds[3]) / 2
+    deg_per_m_lat = 1.0 / 111_132.0
+    deg_per_m_lon = 1.0 / (111_132.0 * math.cos(math.radians(mid_lat)))
+    margin_lat = margin_m * deg_per_m_lat
+    margin_lon = margin_m * deg_per_m_lon
+
+    dst_left   = bounds[0] - margin_lon
+    dst_bottom = bounds[1] - margin_lat
+    dst_right  = bounds[2] + margin_lon
+    dst_top    = bounds[3] + margin_lat
+
+    aspect = (dst_right - dst_left) / max(dst_top - dst_bottom, 1e-9)
+    if aspect >= 1:
+        tw, th = _DSM_MAX_PX, max(1, int(round(_DSM_MAX_PX / aspect)))
+    else:
+        tw, th = max(1, int(round(_DSM_MAX_PX * aspect))), _DSM_MAX_PX
+
+    dst_transform = transform_from_bounds(dst_left, dst_bottom, dst_right, dst_top, tw, th)
+    dst_data = np.full((1, th, tw), _NODATA, dtype="float32")
+    reproject(
+        source=mosaic, destination=dst_data,
+        src_transform=mosaic_transform, src_crs=src_crs,
+        src_nodata=_NODATA, dst_transform=dst_transform, dst_crs=dst_crs,
+        dst_nodata=_NODATA, resampling=Resampling.average,
+    )
+
+    valid_mask = dst_data[0] != _NODATA
+    valid = dst_data[0][valid_mask]
+    if len(valid) == 0:
+        return None, None
+
+    lo, hi = float(valid.min()), float(valid.max())
+    norm = np.zeros((th, tw), dtype=np.float32)
+    if hi > lo:
+        norm[valid_mask] = (dst_data[0][valid_mask] - lo) / (hi - lo)
+    else:
+        norm[valid_mask] = 0.5
+
+    rgb = _colorize_viridis(norm)     # (H, W, 3) uint8
+    rgba = np.zeros((4, th, tw), dtype=np.uint8)
+    rgba[0] = rgb[:, :, 0]
+    rgba[1] = rgb[:, :, 1]
+    rgba[2] = rgb[:, :, 2]
+    rgba[3] = np.where(valid_mask, 255, 0).astype(np.uint8)
+
+    with MemoryFile() as mem:
+        with mem.open(driver="PNG", dtype="uint8", count=4, width=tw, height=th) as dst:
+            dst.write(rgba)
+        png_bytes = mem.read()
+
+    return base64.b64encode(png_bytes).decode(), (dst_left, dst_bottom, dst_right, dst_top)
 
 _NODATA = -9999.0
 _DST_CRS = CRS.from_epsg(4326)

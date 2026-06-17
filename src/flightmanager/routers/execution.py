@@ -211,7 +211,6 @@ async def start_export(req: ExportRequest):
                     "kmz":          job_dir / f"{req.job_name}.kmz",
                     "homes_kml":    job_dir / f"{req.job_name}_homes.kml",
                     "dsm_tif":      job_dir / f"{req.job_name}_dsm.tif",
-                    "preview_html": job_dir / f"{req.job_name}_map.html",
                     "manifest":     job_dir / "manifest.json",
                 }.items()
                 if p.exists()

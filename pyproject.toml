@@ -56,7 +56,6 @@ ignore = ["E501"]  # line length not enforced; focus on unused imports and compl
 # load_dotenv() must run before project imports in these entry points
 "src/flightmanager/_devserver.py" = ["E402"]
 "src/flightmanager/cli.py" = ["E402"]
-"src/flightmanager/preview.py" = ["E402"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

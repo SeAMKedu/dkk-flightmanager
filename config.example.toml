@@ -54,7 +54,7 @@ a3_additional_kohdeluokka = [42220, 42221, 42222, 42230, 42231, 42232, 42240, 42
 # When false: keep-out zones are NOT subtracted from the survey polygon.
 # The polygon stays simpler (no arc vertices from building buffers), but you must
 # verify distances to buildings manually.  Use only with landowner permission.
-# A prominent warning is added to the HTML preview when this is false.
+# A prominent warning is added to the preview panel when this is false.
 # CLI: --no-keepout
 offset_enabled = true         # subtract keep-out from survey polygon
 max_area_loss_pct = 30        # flag needs_review if more than this % lost to keep-out
@@ -68,8 +68,8 @@ vlos_range_m = 300
 # CLI: --homes-distance <metres>
 # home_include_buffer_m = 300
 
-# Radius (m) of the yellow informational circle drawn around each building in
-# the HTML map preview.  This is a visual reference only — it does not affect
+# Radius (m) of the yellow informational circle drawn around each building on
+# the preview map.  This is a visual reference only — it does not affect
 # the keep-out subtraction or the homes KML.
 # Default when unset: 3× derived flight height (the "3:1 horizontal rule").
 # At 100 m AGL the default is 300 m; at 80 m it is 240 m.

@@ -328,7 +328,7 @@ def run_job_cmd(
     ),
     open_map: bool = typer.Option(
         False, "--open",
-        help="Open the HTML map preview in the default browser after the job completes.",
+        help="Reveal the job output folder in the system file manager after the job completes.",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run",
@@ -396,11 +396,14 @@ def run_job_cmd(
     _print_job_summary(manifest, dry_run)
 
     if open_map and not dry_run:
-        map_path = Path(cfg.output.output_dir) / name / f"{name}_map.html"
-        if map_path.exists():
-            webbrowser.open(map_path.resolve().as_uri())
+        import subprocess
+        import sys
+        job_dir = Path(cfg.output.output_dir) / name
+        if job_dir.is_dir():
+            opener = {"darwin": "open", "win32": "explorer"}.get(sys.platform, "xdg-open")
+            subprocess.Popen([opener, str(job_dir)])
         else:
-            typer.echo(f"Warning: map file not found at {map_path}", err=True)
+            typer.echo(f"Warning: job folder not found at {job_dir}", err=True)
 
     from flightmanager.net_stats import print_summary as _print_net_stats
     _print_net_stats(cfg.cache.cache_dir)
