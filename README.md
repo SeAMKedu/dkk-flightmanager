@@ -824,7 +824,7 @@ Set `preview_radius_m` under `[home_safety]` in `config.toml` (or via **⚙ Sett
 ## Safety notes
 
 - **120 m AGL limit** — enforced by the tool; `max_height_agl_m` in config.
-- **UAS zones** — checked automatically against Traficom's published permanent zone data. The survey area is expanded by 500 m before the check so boundary-adjacent zones are also flagged. Finnish UAS vyöhykkeet (A–D) are concentric altitude bands; the browser UI treats the zone floor (`lower_limit`) as the binding altitude cap and auto-sets height to 75 % of that floor when a zone is hit. Zone data is re-fetched daily. When the survey intersects an airfield's outer zone, inner concentric zones are shown with a dashed border for context. **Temporary restrictions (NOTAMs) are NOT included** — check NOTAMs manually on the day.
+- **UAS zones** — checked automatically against Traficom's published permanent zone data. The survey area is expanded by 500 m before the check so boundary-adjacent zones are also flagged. Finnish UAS vyöhykkeet (A–D) are concentric altitude bands; the browser UI treats the zone floor (`lower_limit`) as the binding altitude cap and auto-sets height to 75 % of that floor when a zone is hit. Zone data is re-fetched daily. When the survey intersects an airfield's outer zone, inner concentric zones are shown with a dashed border for context. **Temporary restrictions are NOT included** — NOTAMs *and* temporary reserved/segregated airspace (TRA/TSA, published via AUP/UUP, e.g. military-exercise areas) must be checked manually on the day (ais.fi / Fintraffic Sky / Droneinfo).
 - The generated job is a planning aid. The remote pilot remains responsible for compliance, airspace checks, and uninvolved-person separation on the day.
 
 ## Disclaimer
