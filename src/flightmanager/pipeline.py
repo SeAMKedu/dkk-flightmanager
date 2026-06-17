@@ -115,24 +115,7 @@ def export_job(  # noqa: C901
     include_buf = config.home_safety.resolved_include_buffer_m
     _preview_radius_cfg = config.home_safety.preview_radius_m
 
-    _pl_geoms_job = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
-    _pl_buf_job = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
-    _baseline_3067 = (
-        make_valid(unary_union([g.geometry for g in inp.input_geoms]))
-        if inp.input_geoms else None
-    )
-    if custom_polygon_4326 is not None:
-        survey_geom = _synth_survey_geom(
-            custom_polygon_4326, config.polygon.survey_offset_m,
-            inp.buildings, config.home_safety, _pl_geoms_job, _pl_buf_job,
-            baseline_geom_3067=_baseline_3067,
-        )
-    else:
-        _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
-        survey_geom = process_survey(
-            inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
-            _pl_geoms_job, _pl_buf_job,
-        )
+    survey_geom = _build_survey_geometry(inp, config, custom_polygon_4326, progress_cb)
     pieces_count = len(survey_geom.pieces_3067)
 
     all_review_reasons: list[str] = list(survey_geom.review_reasons)
@@ -298,7 +281,8 @@ def export_job(  # noqa: C901
     # Build route GeoJSON from the first KMZ result (advanced mode only).
     route_geojson: dict | None = None
     if kmz_results and kmz_results[0].route is not None:
-        route_geojson = _route_result_to_geojson(
+        from flightmanager import route as _route
+        route_geojson = _route.route_result_to_geojson(
             kmz_results[0].route,
             kmz_results[0].altitude_profile,
             drone_cfg,
@@ -355,26 +339,7 @@ def analyse_survey(  # noqa: C901
     log.info("Preview: %d building(s)", len(inp.buildings))
 
     # 3. Survey polygon
-    _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
-    _pl_geoms_prev = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
-    _pl_buf_prev = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
-    _baseline_3067_prev = (
-        make_valid(unary_union([g.geometry for g in inp.input_geoms]))
-        if inp.input_geoms else None
-    )
-    if custom_polygon_4326 is not None:
-        log.info("Preview: using custom polygon (bridge/cut applied)")
-        survey_geom = _synth_survey_geom(
-            custom_polygon_4326, config.polygon.survey_offset_m,
-            inp.buildings, config.home_safety, _pl_geoms_prev, _pl_buf_prev,
-            baseline_geom_3067=_baseline_3067_prev,
-        )
-    else:
-        log.info("Preview: computing survey geometry …")
-        survey_geom = process_survey(
-            inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
-            _pl_geoms_prev, _pl_buf_prev,
-        )
+    survey_geom = _build_survey_geometry(inp, config, custom_polygon_4326, progress_cb)
 
     # 4. Keep-out zone geometry for visualisation (overhead lines only for buffer)
     _pl_buf = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
@@ -650,6 +615,39 @@ def _synth_survey_geom(
     )
 
 
+def _build_survey_geometry(
+    inp: "_InputResult",
+    config: AppConfig,
+    custom_polygon_4326: Any | None,
+    progress_cb: Callable | None = None,
+) -> SurveyGeometry:
+    """Build the SurveyGeometry from fetched inputs — shared by export_job and analyse_survey.
+
+    Uses the user's custom/edited polygon when supplied (keepout still re-applied via
+    ``_synth_survey_geom``), otherwise derives it from the fetched parcels/properties via
+    ``process_survey``.  Overhead power lines feed the keep-out buffer in both paths.
+    """
+    _cb(progress_cb, "geometry", "Computing survey polygon…", 45)
+    pl_geoms = [pl.geometry for pl in inp.power_lines if pl.is_overhead] or None
+    pl_buf = config.powerlines.overhead_buffer_m if config.powerlines.enabled else 0.0
+    baseline_3067 = (
+        make_valid(unary_union([g.geometry for g in inp.input_geoms]))
+        if inp.input_geoms else None
+    )
+    if custom_polygon_4326 is not None:
+        log.info("Using custom polygon (manual edit / bridge / cut)")
+        return _synth_survey_geom(
+            custom_polygon_4326, config.polygon.survey_offset_m,
+            inp.buildings, config.home_safety, pl_geoms, pl_buf,
+            baseline_geom_3067=baseline_3067,
+        )
+    log.info("Computing survey geometry from inputs …")
+    return process_survey(
+        inp.input_geoms, inp.buildings, config.home_safety, config.polygon,
+        pl_geoms, pl_buf,
+    )
+
+
 def _load_buildings(
     buildings_bbox: tuple,
     api_key: str,
@@ -820,148 +818,47 @@ def _compute_route_geojson(
         _hp = reproject_to_3067(_HPt(*takeoff_point_4326))
         home_3067 = (_hp.x, _hp.y)
 
-    H   = drone_cfg.height_from_gsd(config.flight.target_gsd_cm)
-    ovf = config.flight.overlap_front_pct
-    ovs = config.flight.overlap_side_pct
-    p_m = drone_cfg.pixel_pitch_um * 1e-6
-    f_m = drone_cfg.focal_length_mm * 1e-3
-    fp_w = H * drone_cfg.image_width_px  * p_m / f_m
-    fp_h = H * drone_cfg.image_height_px * p_m / f_m
-    sm   = fp_w * (1 - ovs / 100)
-    pm   = fp_h * (1 - ovf / 100)
+    H = drone_cfg.height_from_gsd(config.flight.target_gsd_cm)
+    fl = config.flight
 
     _empty = {"route_angle_deg_auto": None, "route_strip_count": None,
               "route_photo_count": None, "route_flight_time_min": None,
               "strips_geojson": None, "transits_geojson": None}
     try:
-        angle = _route.compute_auto_angle(survey_3067)
-        strip_wps: list | None = None
-
-        transit_wps: list | None = None
-        if config.flight.advanced_mode:
-            try:
-                from flightmanager.adaptive_route import compute_adaptive_route
-                H_max = config.flight.adv_max_height_m or H
-                rr, altitude_profile, strip_wps, transit_wps = compute_adaptive_route(
-                    survey_3067, angle, buildings, power_lines,
-                    drone=drone_cfg,
-                    H_max=H_max,
-                    H_min=config.flight.adv_min_height_m,
-                    overlap_front_pct=ovf,
-                    overlap_side_pct=ovs,
-                    powerline_clearance_m=config.flight.adv_powerline_clearance_m,
-                    slope_f=config.flight.adv_slope_f,
-                    min_dip_m=config.flight.adv_min_dip_m,
-                    home_3067=home_3067,
-                )
-            except Exception as exc:
-                log.warning("Preview: adaptive route failed — %s; falling back", exc)
-                rr = _route.compute_route(survey_3067, angle, sm, pm, home_3067=home_3067)
-                altitude_profile = [H] * len(rr.strips_3067)
-                strip_wps = None
-        else:
-            rr = _route.compute_route(survey_3067, angle, sm, pm, home_3067=home_3067)
-            altitude_profile = [H] * len(rr.strips_3067)
+        pr = _route.plan_route(
+            survey_3067, drone=drone_cfg, height_m=H,
+            overlap_front_pct=fl.overlap_front_pct, overlap_side_pct=fl.overlap_side_pct,
+            home_3067=home_3067,
+            advanced=fl.advanced_mode, buildings=buildings, power_lines=power_lines,
+            adv_min_height_m=fl.adv_min_height_m, adv_max_height_m=fl.adv_max_height_m,
+            adv_powerline_clearance_m=fl.adv_powerline_clearance_m,
+            adv_slope_f=fl.adv_slope_f, adv_min_dip_m=fl.adv_min_dip_m,
+        )
 
         ft = _route.estimate_flight_time(
-            rr,
-            flight_height_m=altitude_profile[0] if altitude_profile else H,
+            pr.route,
+            flight_height_m=pr.altitude_profile[0] if pr.altitude_profile else H,
             auto_speed_ms=resolve_strip_speed(config.flight, drone_cfg, H),
-            transit_speed_ms=config.flight.transitional_speed_ms,
-            takeoff_security_height_m=config.flight.takeoff_security_height_m,
+            transit_speed_ms=fl.transitional_speed_ms,
+            takeoff_security_height_m=fl.takeoff_security_height_m,
             home_3067=home_3067,
         )
 
-        gj = _route_result_to_geojson(rr, altitude_profile, drone_cfg, ovf,
-                                      strip_waypoints=strip_wps, transit_waypoints=transit_wps,
-                                      adv_min_height_m=config.flight.adv_min_height_m if config.flight.advanced_mode else None)
+        gj = _route.route_result_to_geojson(
+            pr.route, pr.altitude_profile, drone_cfg, fl.overlap_front_pct,
+            strip_waypoints=pr.strip_waypoints, transit_waypoints=pr.transit_waypoints,
+            adv_min_height_m=fl.adv_min_height_m if fl.advanced_mode else None,
+        )
         return {
-            "route_angle_deg_auto":  round(angle, 1),
-            "route_strip_count":     rr.strip_count,
-            "route_photo_count":     rr.photo_count,
+            "route_angle_deg_auto":  round(pr.angle_deg, 1),
+            "route_strip_count":     pr.route.strip_count,
+            "route_photo_count":     pr.route.photo_count,
             "route_flight_time_min": round(ft, 1),
             **gj,
         }
     except Exception as exc:
         log.warning("Preview: route estimate failed — %s", exc)
         return _empty
-
-
-def _route_result_to_geojson(
-    route,
-    altitude_profile: list[float],
-    drone_cfg,
-    overlap_front_pct: float,
-    strip_waypoints: list | None = None,
-    transit_waypoints: list | None = None,
-    adv_min_height_m: float | None = None,
-) -> dict:
-    """Convert a RouteResult + altitude profile to strips/transits GeoJSON dicts.
-
-    When *strip_waypoints* is provided (advanced mode), each strip feature carries
-    the full waypoint coordinates and ``wpt_alts``/``wpt_speeds`` properties.
-    When *transit_waypoints* is provided, each transit feature carries ``wpt_alts``
-    so the 3D view can render per-point 1:1-compliant altitudes along long transits.
-    """
-    from shapely.geometry import LineString, mapping as _mapping
-
-    def _seg_feat(i, x1, y1, x2, y2, alt, speed):
-        wps = strip_waypoints[i] if strip_waypoints and i < len(strip_waypoints) else None
-        if wps and len(wps) > 2:
-            line       = reproject_to_4326(LineString([(wp[0], wp[1]) for wp in wps]))
-            wpt_alts   = [round(wp[2], 1) for wp in wps]
-            wpt_speeds = [round(wp[3], 2) for wp in wps]
-            props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2),
-                     "wpt_alts": wpt_alts, "wpt_speeds": wpt_speeds}
-        else:
-            line  = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
-            props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2)}
-        return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": props}
-
-    # transit_waypoints covers only inter-strip transits (N-1 entries).
-    # When home_3067 was set, transit_segs_3067 has N+1 entries:
-    #   [home→strip0, inter-strip×(N-1), stripN-1→home]
-    # The inter-strip transits are at indices 1..N-1; their transit_waypoints
-    # indices are 0..N-2.  Without home, segs[0..N-2] maps directly to
-    # transit_waypoints[0..N-2].
-    n_strips = len(route.strips_3067)
-    has_home_transit = len(route.transit_segs_3067) == n_strips + 1
-
-    def _tw_idx(seg_idx: int) -> int | None:
-        """Map a transit_segs index to the corresponding transit_waypoints index."""
-        if has_home_transit:
-            # segs[0]=home_to (no wps), segs[1..N-1]=inter-strip, segs[N]=return (no wps)
-            if 1 <= seg_idx <= n_strips - 1:
-                return seg_idx - 1
-            return None
-        return seg_idx  # direct 1-to-1 when no home transits
-
-    def _path_feat(pts, seg_idx=None):
-        line = reproject_to_4326(LineString(pts))
-        props: dict = {}
-        tw_i = _tw_idx(seg_idx) if seg_idx is not None else None
-        if tw_i is not None and transit_waypoints and tw_i < len(transit_waypoints) and transit_waypoints[tw_i]:
-            tw_min = min(tw[2] for tw in transit_waypoints[tw_i])
-            if adv_min_height_m is not None and altitude_profile:
-                H_max_est = max(altitude_profile)
-                if tw_min < H_max_est * 0.99:
-                    props["altitude_m"] = round(adv_min_height_m, 1)
-                else:
-                    props["altitude_m"] = round(tw_min, 1)
-            else:
-                props["altitude_m"] = round(tw_min, 1)
-        return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": props}
-
-    strips = [
-        _seg_feat(i, *s, alt=altitude_profile[i],
-                  speed=drone_cfg.auto_speed(altitude_profile[i], overlap_front_pct))
-        for i, s in enumerate(route.strips_3067)
-    ]
-    transits = [_path_feat(seg, i) for i, seg in enumerate(route.transit_segs_3067)]
-    return {
-        "strips_geojson":   {"type": "FeatureCollection", "features": strips},
-        "transits_geojson": {"type": "FeatureCollection", "features": transits},
-    }
 
 
 def _require_api_key() -> str:

@@ -405,60 +405,33 @@ async def route_estimate(req: RouteEstimateRequest):
     ovs = req.overlap_side_pct  if req.overlap_side_pct  is not None else cfg.flight.overlap_side_pct
     speed_ms = req.speed_ms if req.speed_ms else resolve_strip_speed(cfg.flight, drone, H)
 
-    p_m = drone.pixel_pitch_um * 1e-6
-    f_m = drone.focal_length_mm * 1e-3
-    footprint_m = H * drone.image_width_px * p_m / f_m
-    strip_m = footprint_m * (1 - ovs / 100)
-    photo_m = H * drone.image_height_px * p_m / f_m * (1 - ovf / 100)
-
-    poly_4326 = _shape(req.polygon_4326)
-    poly_3067 = reproject_to_3067(poly_4326)
-
-    angle_deg = req.angle_deg
-    if angle_deg is None:
-        angle_deg = _route.compute_auto_angle(poly_3067)
+    poly_3067 = reproject_to_3067(_shape(req.polygon_4326))
 
     home_3067 = None
     if req.takeoff_point_4326:
         hp = reproject_to_3067(Point(req.takeoff_point_4326))
         home_3067 = (hp.x, hp.y)
 
-    if req.advanced_mode:
-        from flightmanager.adaptive_route import compute_adaptive_route
-        cfg_flight = cfg.flight
-        H_max     = req.adv_max_height_m          or cfg_flight.adv_max_height_m or H
-        H_min     = req.adv_min_height_m           or cfg_flight.adv_min_height_m
-        clearance = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
-        slope_f   = req.adv_slope_f                or cfg_flight.adv_slope_f
-        min_dip_m = req.adv_min_dip_m if req.adv_min_dip_m is not None else cfg_flight.adv_min_dip_m
-        try:
-            buildings, power_lines = _load_preview_obstacles(reproject_to_3067)
-            result, altitude_profile, _strip_wps, _transit_wps = compute_adaptive_route(
-                poly_3067, angle_deg, buildings, power_lines,
-                drone=drone,
-                H_max=H_max, H_min=H_min,
-                overlap_front_pct=ovf, overlap_side_pct=ovs,
-                powerline_clearance_m=clearance,
-                slope_f=slope_f,
-                min_dip_m=min_dip_m,
-                home_3067=home_3067,
-            )
-        except Exception as exc:
-            import traceback; traceback.print_exc()
-            print(f"[route_estimate] adaptive route failed: {exc}")
-            result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
-            altitude_profile = [H_max] * result.strip_count
-            _strip_wps = _transit_wps = None
-        adv_min_h = H_min
-    else:
-        result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
-        altitude_profile = [H] * result.strip_count
-        _strip_wps = _transit_wps = None
-        adv_min_h = None
+    fl = cfg.flight
+    buildings, power_lines = (
+        _load_preview_obstacles(reproject_to_3067) if req.advanced_mode else (None, None)
+    )
+    pr = _route.plan_route(
+        poly_3067, drone=drone, height_m=H,
+        overlap_front_pct=ovf, overlap_side_pct=ovs,
+        angle_deg=req.angle_deg, home_3067=home_3067,
+        advanced=req.advanced_mode, buildings=buildings, power_lines=power_lines,
+        adv_min_height_m=req.adv_min_height_m or fl.adv_min_height_m,
+        adv_max_height_m=req.adv_max_height_m or fl.adv_max_height_m,
+        adv_powerline_clearance_m=req.adv_powerline_clearance_m or fl.adv_powerline_clearance_m,
+        adv_slope_f=req.adv_slope_f or fl.adv_slope_f,
+        adv_min_dip_m=req.adv_min_dip_m if req.adv_min_dip_m is not None else fl.adv_min_dip_m,
+    )
+    adv_min_h = (req.adv_min_height_m or fl.adv_min_height_m) if req.advanced_mode else None
 
     flight_time = _route.estimate_flight_time(
-        result,
-        flight_height_m=altitude_profile[0] if altitude_profile else H,
+        pr.route,
+        flight_height_m=pr.altitude_profile[0] if pr.altitude_profile else H,
         auto_speed_ms=speed_ms,
         transit_speed_ms=cfg.flight.transitional_speed_ms,
         takeoff_security_height_m=cfg.flight.takeoff_security_height_m,
@@ -468,25 +441,24 @@ async def route_estimate(req: RouteEstimateRequest):
     # Build strips/transits GeoJSON via the same helper the preview/export paths use,
     # so transit features carry the 1:1-safe ``altitude_m`` (the 3D view falls back to
     # strip-end turn altitudes otherwise, dipping into building frustums).
-    from flightmanager.pipeline import _route_result_to_geojson
-    gj = _route_result_to_geojson(
-        result, altitude_profile, drone, ovf,
-        strip_waypoints=_strip_wps, transit_waypoints=_transit_wps,
+    gj = _route.route_result_to_geojson(
+        pr.route, pr.altitude_profile, drone, ovf,
+        strip_waypoints=pr.strip_waypoints, transit_waypoints=pr.transit_waypoints,
         adv_min_height_m=adv_min_h,
     )
 
     return {
-        "strip_count":       result.strip_count,
-        "photo_count":       result.photo_count,
-        "route_dist_m":      round(result.total_route_dist_m),
+        "strip_count":       pr.route.strip_count,
+        "photo_count":       pr.route.photo_count,
+        "route_dist_m":      round(pr.route.total_route_dist_m),
         "flight_time_min":   round(flight_time, 1),
-        "angle_deg_used":    round(angle_deg, 1),
+        "angle_deg_used":    round(pr.angle_deg, 1),
         "over_one_battery":  flight_time > drone.battery_minutes,
         "battery_minutes":   drone.battery_minutes,
         "strips_geojson":    gj["strips_geojson"],
         "transits_geojson":  gj["transits_geojson"],
         "advanced_mode":     req.advanced_mode,
-        "altitude_profile":  [round(a, 1) for a in altitude_profile],
+        "altitude_profile":  [round(a, 1) for a in pr.altitude_profile],
     }
 
 
