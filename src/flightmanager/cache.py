@@ -142,6 +142,13 @@ def _db_path(cache_dir: str | Path) -> Path:
 def _init_db(db: Path) -> None:
     db.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(db)) as conn, conn:
+        # Enable Write-Ahead Logging so reads (stats, staleness checks, the file
+        # watcher, etc.) can proceed concurrently with a tile-cache write instead
+        # of contending on the database-level lock. WAL is a persistent property
+        # of the file, so setting it once here applies to every later connection
+        # (geo_cache, cli, query_disk_size). The companion busy timeout is already
+        # provided by sqlite3.connect()'s default timeout=5.0 on every connection.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tiles (
                 dataset          TEXT NOT NULL,
