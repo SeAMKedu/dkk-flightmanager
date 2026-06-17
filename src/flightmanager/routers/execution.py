@@ -16,7 +16,7 @@ from flightmanager.wpml import resolve_strip_speed
 from pydantic import BaseModel
 
 import flightmanager._server_state as _st
-from flightmanager.job_store import make_thumbnail_svg
+from flightmanager.job_store import make_survey_outline, make_thumbnail_svg, save_params
 
 router = APIRouter()
 
@@ -599,16 +599,6 @@ def _prepare_config(req: PreviewRequest):
     return cfg
 
 
-def _merge_preview_and_route(preview_result: dict | None, route_geojson: dict | None) -> dict | None:
-    """Merge preview snapshot with KMZ-derived route GeoJSON, dropping the DSM thumbnail."""
-    if not preview_result:
-        return None
-    merged = {k: v for k, v in preview_result.items() if k != "dsm_b64"}
-    if route_geojson:
-        merged.update(route_geojson)
-    return merged
-
-
 def _write_job_params(
     job_dir: Path,
     req: ExportRequest,
@@ -616,7 +606,13 @@ def _write_job_params(
     preview_result: dict | None = None,
     route_geojson: dict | None = None,
 ) -> None:
-    """Write job_params.json and thumbnail.svg alongside the manifest."""
+    """Write job_params.json and thumbnail.svg alongside the manifest.
+
+    The full preview/route GeoJSON is no longer persisted — only a small
+    ``survey_outline`` (for the map view and an instant first-paint on open).
+    Strips/transits are recomputed by the live preview that runs on job open.
+    """
+    survey = req.custom_polygon or (preview_result or {}).get("survey")
     params = {
         "job_name": req.job_name,
         "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -641,30 +637,23 @@ def _write_job_params(
         },
         "template_settings": req.template_settings or {},
         "custom_polygon_4326": req.custom_polygon,
+        "survey_outline": make_survey_outline(survey),
         "takeoff_point_4326":  req.takeoff_point_4326,
         "color": req.color or None,
-        "last_preview_geojson": _merge_preview_and_route(preview_result, route_geojson),
     }
     # Preserve existing color, sort_order, and skipped from prior save
-    if (job_dir / "job_params.json").exists():
-        try:
-            existing = json.loads(
-                (job_dir / "job_params.json").read_text(encoding="utf-8")
-            )
-            if params["color"] is None:
-                params["color"] = existing.get("color")
-            if "sort_order" in existing:
-                params["sort_order"] = existing["sort_order"]
-            if "skipped" in existing:
-                params["skipped"] = existing["skipped"]
-        except Exception:
-            pass
+    from flightmanager.job_store import load_params
+    existing = load_params(job_dir)
+    if existing:
+        if params["color"] is None:
+            params["color"] = existing.get("color")
+        if "sort_order" in existing:
+            params["sort_order"] = existing["sort_order"]
+        if "skipped" in existing:
+            params["skipped"] = existing["skipped"]
 
-    (job_dir / "job_params.json").write_text(
-        json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_params(job_dir, params)
 
-    survey = req.custom_polygon or (preview_result or {}).get("survey")
     svg = make_thumbnail_svg(survey)
     if svg:
         (job_dir / "thumbnail.svg").write_text(svg, encoding="utf-8")

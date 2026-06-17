@@ -19,11 +19,14 @@ from pydantic import BaseModel
 import flightmanager._server_state as _st
 from flightmanager.job_store import (
     best_polygon,
+    card_polygon,
     check_cache_staleness,
     is_folder_dir,
+    load_params,
     params_from_manifest,
     read_job_card,
     resolve_job_dir,
+    save_params,
     scan_jobs,
 )
 
@@ -254,18 +257,15 @@ async def reorder_jobs(body: dict):
     ordered_set = {p: i for i, p in enumerate(paths)}
 
     for job_dir in siblings:
-        params_path = job_dir / "job_params.json"
-        if not params_path.exists():
+        data = load_params(job_dir)
+        if data is None:
             continue
         try:
-            data = json.loads(params_path.read_text(encoding="utf-8"))
             job_path = f"{folder0}/{job_dir.name}" if folder0 else job_dir.name
             new_so = ordered_set.get(job_path)  # None if not in list
             if data.get("sort_order") != new_so:
                 data["sort_order"] = new_so
-                params_path.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
+                save_params(job_dir, data)
         except Exception:
             pass
 
@@ -287,10 +287,9 @@ async def get_job(path: str):
         except Exception:
             pass
     if params_path.exists():
-        try:
-            params = json.loads(params_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+        params = load_params(job_dir)
+        if params is None:
+            raise HTTPException(500, detail="Could not read job_params.json")
     elif manifest:
         params = params_from_manifest(name, manifest)
     else:
@@ -332,17 +331,24 @@ def _rename_job(job_dir: Path, old_name: str, new_name: str, folder: str | None)
                 pass
         raise HTTPException(500, detail=f"Rename failed mid-way, rolled back: {exc}")
 
-    for json_file in (job_dir / "manifest.json", job_dir / "job_params.json"):
-        if json_file.exists():
-            try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-                if "job_name" in data:
-                    data["job_name"] = new_name
-                json_file.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
-            except Exception:
-                pass
+    manifest_file = job_dir / "manifest.json"
+    if manifest_file.exists():
+        try:
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            if "job_name" in data:
+                data["job_name"] = new_name
+            manifest_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+    params = load_params(job_dir)
+    if params is not None:
+        try:
+            params["job_name"] = new_name
+            save_params(job_dir, params)
+        except Exception:
+            pass
 
     try:
         job_dir.rename(new_dir)
@@ -367,10 +373,9 @@ async def update_job(path: str, body: dict):
 
     # Simple field update (color, sort_order, skipped — no rename)
     if "new_name" not in body and ("color" in body or "sort_order" in body or "skipped" in body):
-        params_path = job_dir / "job_params.json"
-        if params_path.exists():
+        data = load_params(job_dir)
+        if data is not None:
             try:
-                data = json.loads(params_path.read_text(encoding="utf-8"))
                 if "color" in body:
                     data["color"] = body["color"]
                 if "sort_order" in body:
@@ -378,9 +383,7 @@ async def update_job(path: str, body: dict):
                     data["sort_order"] = int(so) if so is not None else None
                 if "skipped" in body:
                     data["skipped"] = bool(body["skipped"])
-                params_path.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
+                save_params(job_dir, data)
             except Exception as exc:
                 raise HTTPException(500, detail=f"Could not update job: {exc}")
         return {"path": path, "color": body.get("color"), "sort_order": body.get("sort_order"), "skipped": body.get("skipped")}
@@ -417,10 +420,9 @@ async def clone_job(path: str):
     clone_dir.mkdir(parents=True, exist_ok=True)
 
     if params_path.exists():
-        try:
-            params = json.loads(params_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        params = load_params(src_dir)
+        if params is None:
+            raise HTTPException(500, detail="Could not read job_params.json")
     else:
         try:
             src_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -430,9 +432,7 @@ async def clone_job(path: str):
 
     params["job_name"] = clone_name
     params["saved_at"] = datetime.now(timezone.utc).isoformat()
-    (clone_dir / "job_params.json").write_text(
-        json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_params(clone_dir, params)
     thumb_src = src_dir / "thumbnail.svg"
     if thumb_src.exists():
         shutil.copy2(thumb_src, clone_dir / "thumbnail.svg")
@@ -457,10 +457,9 @@ async def split_job(path: str, req: SplitRequest):
     params_path = job_dir / "job_params.json"
     if not params_path.exists():
         raise HTTPException(404, detail=f"Job '{path}' has no job_params.json")
-    try:
-        params = json.loads(params_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+    params = load_params(job_dir)
+    if params is None:
+        raise HTTPException(500, detail="Could not read job_params.json")
 
     # Derive a unique name for the new job
     parent_dir = job_dir.parent
@@ -473,24 +472,24 @@ async def split_job(path: str, req: SplitRequest):
 
     now = datetime.now(timezone.utc).isoformat()
 
-    # Update existing job in place (polygon_a)
+    # Update existing job in place (polygon_a). Clear the stored outline so
+    # save_params re-derives it from the new polygon.
     params["custom_polygon_4326"] = req.polygon_a
-    params["last_preview_geojson"] = None
+    params["survey_outline"] = None
+    params.pop("last_preview_geojson", None)
     params["saved_at"] = now
-    params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_params(job_dir, params)
 
     # Create new sibling job (polygon_b, copy all other params)
     new_params = dict(params)
     new_params["job_name"] = new_name
     new_params["custom_polygon_4326"] = req.polygon_b
-    new_params["last_preview_geojson"] = None
+    new_params["survey_outline"] = None
     new_params["saved_at"] = now
 
     new_dir = parent_dir / new_name
     new_dir.mkdir(parents=True, exist_ok=True)
-    (new_dir / "job_params.json").write_text(
-        json.dumps(new_params, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_params(new_dir, new_params)
 
     new_path = f"{folder}/{new_name}" if folder else new_name
     return {"modified_path": path, "new_path": new_path, "new_name": new_name}
@@ -650,7 +649,6 @@ def _merge_by_ids(all_params: list[tuple[Path, dict]], new_name: str) -> dict:
         "custom_polygon_4326": None,
         "batch_created": False,
         "color": None,
-        "last_preview_geojson": None,
         "merge_strategy": "ids",
     }
 
@@ -663,9 +661,7 @@ def _merge_by_polygon(all_params: list[tuple[Path, dict]], new_name: str) -> dic
 
     polys = []
     for job_dir, p in all_params:
-        geojson = p.get("custom_polygon_4326") or (
-            (p.get("last_preview_geojson") or {}).get("survey")
-        )
+        geojson = card_polygon(p)
         if not geojson:
             raise HTTPException(
                 400,
@@ -698,7 +694,6 @@ def _merge_by_polygon(all_params: list[tuple[Path, dict]], new_name: str) -> dic
         "custom_polygon_4326": dict(mapping(merged)),
         "batch_created": False,
         "color": None,
-        "last_preview_geojson": None,
         "merge_strategy": "polygon_union",
     }
 
@@ -708,13 +703,11 @@ def _load_job_params(output_dir: Path, job_paths: list[str]) -> list[tuple[Path,
     all_params: list[tuple[Path, dict]] = []
     for path in job_paths:
         _, _, job_dir = resolve_job_dir(output_dir, path)
-        params_path = job_dir / "job_params.json"
-        if not params_path.exists():
+        if not (job_dir / "job_params.json").exists():
             raise HTTPException(404, detail=f"job_params.json not found for '{path}'")
-        try:
-            p = json.loads(params_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(500, detail=f"Could not read params for '{path}': {exc}")
+        p = load_params(job_dir)
+        if p is None:
+            raise HTTPException(500, detail=f"Could not read params for '{path}'")
         all_params.append((job_dir, p))
     return all_params
 
@@ -769,9 +762,7 @@ async def merge_jobs(req: MergeRequest):
             409, detail=f"A job named '{new_name}' already exists in that location"
         )
     dest_dir.mkdir(parents=True, exist_ok=True)
-    (dest_dir / "job_params.json").write_text(
-        json.dumps(merged_params, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_params(dest_dir, merged_params)
 
     if req.delete_sources:
         _delete_merged_sources(output_dir, req.job_paths)

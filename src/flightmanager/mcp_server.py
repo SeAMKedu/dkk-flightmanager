@@ -527,7 +527,7 @@ def export_existing_job(  # noqa: C901
 
     try:
         with _pipeline_guard():
-            manifest = export_job(
+            manifest, _route_geojson = export_job(
                 name, cfg,
                 parcel_ids=parcel_ids,
                 property_ids=property_ids,
@@ -540,8 +540,9 @@ def export_existing_job(  # noqa: C901
 
     if color:
         try:
+            from flightmanager.job_store import save_params
             stored["color"] = color
-            params_path.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_params(job_dir, stored)
         except Exception:
             pass
 
@@ -814,7 +815,7 @@ def run_export(
 
     try:
         with _pipeline_guard():
-            manifest = export_job(
+            manifest, _route_geojson = export_job(
                 name, cfg,
                 parcel_ids=parcel_ids or None,
                 property_ids=property_ids or None,
@@ -847,9 +848,8 @@ def run_export(
         "color": color or None,
     }
     try:
-        (job_dir / "job_params.json").write_text(
-            json.dumps(params_doc, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        from flightmanager.job_store import save_params
+        save_params(job_dir, params_doc)
     except Exception:
         pass
 

@@ -19,7 +19,7 @@ Output files written per job:
 | `<name>_homes.kml` | Building pins — import as a Pilot 2 custom map layer |
 | `<name>_map.html` | Browser map preview — survey polygon, buildings, keep-out circles, warning radius circles, UAS zones, DSM elevation overlay; all layers toggleable |
 | `manifest.json` | Full provenance record with flight stats and safety flags |
-| `job_params.json` | Browser UI save state (inputs, flight params, polygon params, last preview) — used to re-open the job for editing |
+| `job_params.json` | Browser UI save state (inputs, flight params, polygon params, simplified survey outline) — used to re-open the job for editing. Written atomically; `schema_version` tracks the on-disk format |
 | `thumbnail.svg` | Small polygon thumbnail shown in the jobs panel |
 | `run.log` | Structured log for this run |
 

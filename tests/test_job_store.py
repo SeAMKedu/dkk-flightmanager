@@ -362,3 +362,84 @@ class TestCheckCacheStaleness:
         cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))
         stale = check_cache_staleness({}, cfg)
         assert stale == []
+
+
+# ---------------------------------------------------------------------------
+# Params storage: save_params / load_params / migration
+# ---------------------------------------------------------------------------
+
+
+_SQUARE = {
+    "type": "Polygon",
+    "coordinates": [[[25.0, 62.0], [25.1, 62.0], [25.1, 62.1], [25.0, 62.1], [25.0, 62.0]]],
+}
+
+
+class TestParamsStorage:
+    def test_round_trip_stamps_schema_version(self, tmp_path):
+        from flightmanager.job_store import SCHEMA_VERSION, load_params, save_params
+
+        save_params(tmp_path, {"job_name": "j", "custom_polygon_4326": _SQUARE})
+        data = load_params(tmp_path)
+        assert data["job_name"] == "j"
+        assert data["schema_version"] == SCHEMA_VERSION
+
+    def test_save_drops_legacy_blob_and_derives_outline(self, tmp_path):
+        """Old jobs with an embedded last_preview_geojson migrate to survey_outline."""
+        from flightmanager.job_store import load_params, save_params
+
+        legacy = {
+            "job_name": "old",
+            "custom_polygon_4326": None,
+            "last_preview_geojson": {"survey": _SQUARE, "strips_geojson": {"big": "blob"}},
+        }
+        save_params(tmp_path, legacy)
+        data = load_params(tmp_path)
+        assert "last_preview_geojson" not in data
+        assert data["survey_outline"] is not None
+        assert data["survey_outline"]["type"] == "Polygon"
+
+    def test_explicit_outline_preserved(self, tmp_path):
+        from flightmanager.job_store import load_params, save_params
+
+        save_params(tmp_path, {"survey_outline": _SQUARE, "custom_polygon_4326": None})
+        assert load_params(tmp_path)["survey_outline"] == _SQUARE
+
+    def test_outline_from_custom_polygon_when_absent(self, tmp_path):
+        from flightmanager.job_store import load_params, save_params
+
+        save_params(tmp_path, {"custom_polygon_4326": _SQUARE})
+        assert load_params(tmp_path)["survey_outline"]["type"] == "Polygon"
+
+    def test_load_missing_returns_none(self, tmp_path):
+        from flightmanager.job_store import load_params
+
+        assert load_params(tmp_path) is None
+
+    def test_write_json_atomic_no_tmp_left(self, tmp_path):
+        from flightmanager.job_store import write_json_atomic
+
+        target = tmp_path / "x.json"
+        write_json_atomic(target, {"a": 1})
+        assert json.loads(target.read_text()) == {"a": 1}
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_unknown_keys_preserved(self, tmp_path):
+        """extra=allow keeps forward/unknown keys on round-trip."""
+        from flightmanager.job_store import load_params, save_params
+
+        save_params(tmp_path, {"job_name": "j", "future_field": 42})
+        assert load_params(tmp_path)["future_field"] == 42
+
+    def test_card_polygon_priority(self):
+        from flightmanager.job_store import card_polygon
+
+        other = {"type": "Polygon", "coordinates": [[[9, 9], [9, 8], [8, 8], [9, 9]]]}
+        # custom polygon wins over outline and legacy
+        assert card_polygon({"custom_polygon_4326": _SQUARE, "survey_outline": other}) == _SQUARE
+        # outline wins over legacy survey
+        assert card_polygon(
+            {"survey_outline": _SQUARE, "last_preview_geojson": {"survey": other}}
+        ) == _SQUARE
+        # legacy survey is the final fallback
+        assert card_polygon({"last_preview_geojson": {"survey": _SQUARE}}) == _SQUARE

@@ -8,12 +8,12 @@ import { showError, clearError, updateFolderHint, updateGsd, setRadiusLinked,
          setSub, setSimpAuto, setSimpManual, setAutoTimer,
          getAutoTimer, setFitBoundsFlag, setLastPreviewedIds, _setEditedPoly, _clearEditedPoly,
          _setSec } from './form-controls.js';
-import { _legendUserVis, redrawRings, resetLegend } from './legend.js';
+import { redrawRings } from './legend.js';
 import { loadJobsList } from './jobs-panel.js';
 import { renderStatus } from './status-panel.js';
 import { renderMap } from './map-layers.js';
-import { updateRouteOverlay, updateRouteStats, setRouteAngleSilent as _setRouteAngleSilentRP,
-         setSpeedSilent, _renderAngleControl } from './route-planner.js';
+import { setRouteAngleSilent as _setRouteAngleSilentRP,
+         setSpeedSilent } from './route-planner.js';
 import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
 import { restoreTplSettings } from './tpl-modal.js';
 import { hideExtModifiedNotice } from './event-stream.js';
@@ -61,8 +61,13 @@ export async function _doOpenJob(path) {
     hideExtModifiedNotice();
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
     setFitBoundsFlag(true);
-    if (p && p.last_preview_geojson) {
-      st.previewData = p.last_preview_geojson;
+    // Instant first-paint from the stored survey outline (map view + open). The
+    // strips/transits/status are filled by the live startPreview() below, which
+    // runs on every open to refresh buildings + UAS zones for the current area.
+    var _outline = p && (p.survey_outline || p.custom_polygon_4326
+      || (p.last_preview_geojson || {}).survey);
+    if (_outline) {
+      st.previewData = {survey: _outline};
       setLastPreviewedIds(
         ((p.inputs && p.inputs.parcel_ids)||[]).join(',')
         + '||' + ((p.inputs && p.inputs.property_ids)||[]).join(',')
@@ -70,21 +75,6 @@ export async function _doOpenJob(path) {
       try {
         renderMap(st.previewData);
         redrawRings();
-        if (st.previewData.stats && st.previewData.stats.route_angle_deg_auto != null) {
-          st._routeAngleAuto = st.previewData.stats.route_angle_deg_auto;
-          _renderAngleControl();
-        }
-        updateRouteOverlay(st.previewData.strips_geojson, st.previewData.transits_geojson);
-        resetLegend(_legendUserVis);
-        renderStatus(st.previewData.stats);
-        if (st.previewData.stats) {
-          updateRouteStats({
-            strip_count:     st.previewData.stats.route_strip_count,
-            photo_count:     st.previewData.stats.route_photo_count,
-            flight_time_min: st.previewData.stats.route_flight_time_min,
-            strips_geojson:  st.previewData.strips_geojson,
-          });
-        }
         document.getElementById('rstbtn').disabled = false;
       } catch(ex) { console.error('[openJob] render error', ex); }
     } else {

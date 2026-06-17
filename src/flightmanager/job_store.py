@@ -8,8 +8,126 @@ in isolation.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+# ---------------------------------------------------------------------------
+# Job params storage — single read/write surface
+# ---------------------------------------------------------------------------
+
+# Bump when the on-disk job_params.json shape changes in a way that needs
+# migration.  v1: dropped the embedded ``last_preview_geojson`` blob in favour
+# of a small ``survey_outline`` polygon (map view + instant first-paint).
+SCHEMA_VERSION = 1
+
+# Douglas-Peucker tolerance for the stored map-view outline, in degrees
+# (~5 m at Finnish latitudes).  The outline is display-only; the exact survey
+# geometry is always recomputed from inputs on preview/export.
+_OUTLINE_SIMPLIFY_DEG = 0.00005
+
+
+class JobParams(BaseModel):
+    """Schema for a job's ``job_params.json``.
+
+    ``extra="allow"`` keeps any forward/unknown keys on round-trip so older or
+    newer writers don't lose data.  All fields are optional with defaults so
+    partial dicts (merges, manifest reconstruction) validate cleanly.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: int = SCHEMA_VERSION
+    job_name: str | None = None
+    saved_at: str | None = None
+    inputs: dict = Field(default_factory=lambda: {"parcel_ids": [], "property_ids": []})
+    flight: dict = Field(default_factory=dict)
+    polygon: dict = Field(default_factory=dict)
+    safety: dict = Field(default_factory=dict)
+    template_settings: dict = Field(default_factory=dict)
+    custom_polygon_4326: dict | None = None
+    survey_outline: dict | None = None  # simplified survey polygon for map view / instant paint
+    takeoff_point_4326: list | None = None
+    color: str | None = None
+    sort_order: int | None = None
+    skipped: bool = False
+    batch_created: bool = False
+    merge_strategy: str | None = None
+
+
+def write_json_atomic(path: Path, obj: Any) -> None:
+    """Write *obj* as pretty JSON to *path* atomically (temp file → fsync → rename)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, ensure_ascii=False, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)  # atomic on POSIX/Windows
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def make_survey_outline(geom: dict | None) -> dict | None:
+    """Simplify a GeoJSON geometry to a small display-only outline polygon."""
+    if not geom:
+        return None
+    try:
+        from shapely.geometry import mapping, shape
+
+        g = shape(geom).simplify(_OUTLINE_SIMPLIFY_DEG, preserve_topology=True)
+        if g.is_empty:
+            return geom
+        return dict(mapping(g))
+    except Exception:
+        return geom
+
+
+def load_params(job_dir: Path) -> dict | None:
+    """Read ``job_params.json`` from *job_dir*; return the dict or None."""
+    p = job_dir / "job_params.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def save_params(job_dir: Path, params: dict) -> None:
+    """Write ``job_params.json`` atomically through the JobParams schema.
+
+    Stamps ``schema_version``, drops the legacy ``last_preview_geojson`` blob,
+    and derives ``survey_outline`` from the preview survey / custom polygon when
+    a caller hasn't supplied one.
+    """
+    data = JobParams.model_validate(params).model_dump()
+    legacy = data.pop("last_preview_geojson", None)
+    data["schema_version"] = SCHEMA_VERSION
+    if not data.get("survey_outline"):
+        src = legacy.get("survey") if isinstance(legacy, dict) else None
+        src = src or data.get("custom_polygon_4326")
+        data["survey_outline"] = make_survey_outline(src)
+    write_json_atomic(job_dir / "job_params.json", data)
+
+
+def card_polygon(params: dict) -> dict | None:
+    """Best display polygon for a job: custom polygon, else outline, else legacy survey."""
+    return (
+        params.get("custom_polygon_4326")
+        or params.get("survey_outline")
+        or (params.get("last_preview_geojson") or {}).get("survey")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,20 +212,8 @@ def resolve_job_dir(output_dir: Path, path: str) -> tuple[str | None, str, Path]
 
 def best_polygon(job_dir: Path) -> dict | None:
     """Return the best available GeoJSON polygon for a job directory."""
-    params_path = job_dir / "job_params.json"
-    if params_path.exists():
-        try:
-            params = json.loads(params_path.read_text(encoding="utf-8"))
-            geom = params.get("custom_polygon_4326")
-            if geom:
-                return geom
-            preview = params.get("last_preview_geojson") or {}
-            geom = preview.get("survey")
-            if geom:
-                return geom
-        except Exception:
-            pass
-    return None
+    params = load_params(job_dir)
+    return card_polygon(params) if params else None
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +263,7 @@ def read_job_card(
     return dict(card)
 
 
-def _build_job_card(
+def _build_job_card(  # noqa: C901
     job_dir: Path, folder: str | None, with_polygon: bool
 ) -> dict:
     """Parse a job directory into a summary card dict (uncached)."""
@@ -264,10 +370,7 @@ def _build_job_card(
         "skipped": params.get("skipped", False),
     }
     if with_polygon:
-        geom = params.get("custom_polygon_4326")
-        if not geom:
-            geom = (params.get("last_preview_geojson") or {}).get("survey")
-        card["_geometry"] = geom or None
+        card["_geometry"] = card_polygon(params)
     return card
 
 
@@ -407,7 +510,7 @@ def params_from_manifest(name: str, manifest: dict) -> dict:
             "preview_radius_m": safety.get("preview_radius_m"),
         },
         "custom_polygon_4326": None,
-        "last_preview_geojson": None,
+        "survey_outline": None,
     }
 
 
