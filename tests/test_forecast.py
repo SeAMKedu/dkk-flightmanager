@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 
-import pytest
 
 from flightmanager.config import SatellitesConfig, WeatherConfig
 from flightmanager import forecast as fc
@@ -56,7 +54,8 @@ def test_cache_roundtrip_and_mismatch(tmp_path):
     # Wrong fingerprint → miss.
     assert fc._read_cache(p, "fp2", 3) is None
     # Expired TTL → miss.
-    import os, time
+    import os
+    import time
     old = time.time() - 4 * 3600
     os.utime(p, (old, old))
     assert fc._read_cache(p, "fp1", 3) is None

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,7 +18,6 @@ from flightmanager.cache import (
     _is_expired,
     _lookup,
     _register,
-    _sha256,
     covering_tiles,
     get_tiles,
     snap_down,

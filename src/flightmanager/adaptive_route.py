@@ -52,9 +52,7 @@ from flightmanager.route import (
 )
 
 if TYPE_CHECKING:
-    from flightmanager.buildings import Building
     from flightmanager.config import DroneConfig
-    from flightmanager.powerlines import PowerLine
 
 _MAX_CLIMB_MS  = 10.0   # DJI waypoint-mode max climb (m/s) — kept above photogrammetric limit
 _PL_SCAN_M     = 200.0  # powerline influence radius (m)
@@ -337,7 +335,7 @@ def _apply_slope_filter(
 # ---------------------------------------------------------------------------
 
 
-def compute_adaptive_route(
+def compute_adaptive_route(  # noqa: C901
     polygon_3067,
     angle_deg: float,
     buildings: list,          # list[Building]

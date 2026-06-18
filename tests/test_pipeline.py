@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon
 
 from flightmanager.buildings import Building
 from flightmanager.cache import TileRecord

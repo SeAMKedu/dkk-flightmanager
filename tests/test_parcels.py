@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from flightmanager.config import ParcelsConfig
 from flightmanager.parcels import (
     ParcelNotFoundError,
-    _fetch_by_bbox,
-    _fetch_by_ids,
     _to_parcel,
     fetch_parcels,
 )

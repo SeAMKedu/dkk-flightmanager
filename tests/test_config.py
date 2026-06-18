@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from flightmanager.config import AppConfig, CacheConfig, DroneConfig, FlightConfig, HomeSafetyConfig
+from flightmanager.config import AppConfig, DroneConfig, FlightConfig, HomeSafetyConfig
 
 
 def _minimal_drone(**kwargs) -> DroneConfig:

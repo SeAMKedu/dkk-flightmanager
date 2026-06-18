@@ -662,7 +662,7 @@ def _acquire_pipeline_lock(job_id: str, loop, queue, label: str):
         return None
 
 
-def _apply_template_settings(cfg, ts: dict) -> None:
+def _apply_template_settings(cfg, ts: dict) -> None:  # noqa: C901
     """Apply template_settings dict fields (overlaps, safety, advanced mode) to cfg in-place."""
     if ts.get("overlap_front_pct") is not None:
         cfg.flight.overlap_front_pct = int(ts["overlap_front_pct"])

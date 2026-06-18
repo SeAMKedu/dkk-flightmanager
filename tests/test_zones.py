@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
 import time
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,7 +12,7 @@ from shapely.geometry import Polygon
 
 from flightmanager.config import ZonesConfig
 from flightmanager.crs import CRSError
-from flightmanager.zones import AltitudeLimits, ZoneCheckResult, _intersect, check_zones
+from flightmanager.zones import AltitudeLimits, check_zones
 
 # ---------------------------------------------------------------------------
 # Survey polygon in EPSG:4326 — Finnish field area
@@ -171,9 +171,8 @@ class TestIntersection:
         assert len(result.reasons) == 2
 
     def test_non_overlapping_zone_not_recorded(self, tmp_path):
-        zones = [_zone_feature(), _away_zone()]
-        # First overlaps, second doesn't — but away_zone has NO_RESTRICTION in our helper?
-        # Make away_zone also REQ_AUTHORISATION to test spatial filter only
+        # First overlaps, second doesn't. Give away_zone REQ_AUTHORISATION so the
+        # test exercises the spatial filter only (not the restriction filter).
         away = {**_away_zone(), "restriction": "REQ_AUTHORISATION"}
         sess = _mock_session([_zone_feature(), away])
         cfg = ZonesConfig()
@@ -210,7 +209,7 @@ class TestCaching:
         # Backdate cache file by 2 days
         cache_file = tmp_path / "zones" / "uas_zones.json"
         old = time.time() - 2 * 86_400
-        import os; os.utime(cache_file, (old, old))
+        os.utime(cache_file, (old, old))
         sess2 = _mock_session([])
         check_zones(SURVEY_4326, cfg, cache_dir=tmp_path, session=sess2)
         sess2.get.assert_called_once()
@@ -223,7 +222,7 @@ class TestCaching:
         # Backdate cache
         cache_file = tmp_path / "zones" / "uas_zones.json"
         old = time.time() - 2 * 86_400
-        import os; os.utime(cache_file, (old, old))
+        os.utime(cache_file, (old, old))
         # Failing session
         fail_sess = MagicMock()
         fail_sess.get.side_effect = Exception("network error")

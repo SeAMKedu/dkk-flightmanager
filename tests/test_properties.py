@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from shapely.geometry import Polygon, mapping
-from unittest.mock import MagicMock, patch
+from shapely.geometry import Polygon
+from unittest.mock import MagicMock
 
 from flightmanager.properties import (
-    Property,
     PropertyNotFoundError,
     _normalise,
     _to_property,
