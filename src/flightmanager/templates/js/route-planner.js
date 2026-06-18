@@ -10,11 +10,36 @@ import { getTplSettings } from './tpl-modal.js';
 
 var _routeDebounceTimer = null;
 var _routeLayer = null;
+var _arrowLayer = null;
 var _coverageLayer = null;
 var _routeAngleAdjusting = false;
 var _lastRouteStats = null;
 var _lastFpAcross = null;
 var _lastFpAlong = null;
+
+var _ARROW_MIN_ZOOM = 17;
+function _arrowsVisible() {
+  var btn = document.getElementById('leg-route');
+  var routeOn = !btn || !btn.classList.contains('off');
+  return routeOn && map.getZoom() >= _ARROW_MIN_ZOOM;
+}
+map.on('zoomend', function() {
+  if (!_arrowLayer) return;
+  if (_arrowsVisible()) { if (!map.hasLayer(_arrowLayer)) _arrowLayer.addTo(map); }
+  else                  { if (map.hasLayer(_arrowLayer))  map.removeLayer(_arrowLayer); }
+});
+// Keep arrows in sync when the route legend eye-toggle is clicked.
+document.addEventListener('DOMContentLoaded', function() {
+  var legBtn = document.getElementById('leg-route');
+  if (legBtn) legBtn.addEventListener('click', function() {
+    if (!_arrowLayer) return;
+    // After the legend handler runs, classList already reflects new state.
+    setTimeout(function() {
+      if (_arrowsVisible()) { if (!map.hasLayer(_arrowLayer)) _arrowLayer.addTo(map); }
+      else                  { if (map.hasLayer(_arrowLayer))  map.removeLayer(_arrowLayer); }
+    }, 0);
+  });
+});
 
 export function _getLastRouteStats() { return _lastRouteStats; }
 
@@ -95,6 +120,7 @@ function _computeRoughLines(polygon4326, angleDeg, stripM, fpAcross) {
 
 function _drawRoughPreview(polygon4326, angleDeg, stripM, fpAcross) {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_arrowLayer)    { map.removeLayer(_arrowLayer);    _arrowLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   lrs.route = null; lrs.coverage = null;
 
@@ -116,6 +142,7 @@ function _drawRoughPreview(polygon4326, angleDeg, stripM, fpAcross) {
 
 export function _clearRouteLayer() {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_arrowLayer)    { map.removeLayer(_arrowLayer);    _arrowLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   lrs.route = null; lrs.coverage = null;
   var row = document.getElementById('leg-route-row');
@@ -172,6 +199,7 @@ function _altColor(t) {
 
 function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_arrowLayer)    { map.removeLayer(_arrowLayer);    _arrowLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   if (!lines || !lines.length) { lrs.route = null; lrs.coverage = null; return; }
 
@@ -192,6 +220,7 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
   var altRange = (altMax - altMin) || 1;
 
   var g = L.layerGroup();
+  var ag = L.layerGroup();
   var defaultColor = '#f59e0b';
   lines.forEach(function(line, idx) {
     var wptAlts = hasWptAlts ? wptAltsList[idx] : null;
@@ -221,15 +250,19 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
     L.marker(mid, {
       icon: L.divIcon({html:arrowHtml, className:'', iconSize:[14,14], iconAnchor:[7,7]}),
       interactive:false, keyboard:false,
-    }).addTo(g);
+    }).addTo(ag);
   });
   (transits || []).forEach(function(seg) {
     L.polyline(seg, {color: defaultColor, weight: 2, opacity: 0.85, interactive: false}).addTo(g);
   });
 
   _routeLayer = g; lrs.route = g;
+  _arrowLayer = ag;
   var btn = document.getElementById('leg-route');
-  if (btn && !btn.classList.contains('off')) g.addTo(map);
+  if (btn && !btn.classList.contains('off')) {
+    g.addTo(map);
+    if (_arrowsVisible()) ag.addTo(map);
+  }
   var row = document.getElementById('leg-route-row');
   if (row) row.style.display = '';
 
