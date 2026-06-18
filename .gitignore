@@ -2,6 +2,7 @@
 CLAUDE.md
 mavic3e-job-generator-plan.md
 .claude/launch.json
+.claude/refactor-plan.md
 
 # Secrets and local config
 config.toml

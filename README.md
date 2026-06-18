@@ -46,6 +46,7 @@ Output files written per job:
   - [Drone profiles](#drone-profiles---drone)
   - [Strip speed (auto mode)](#strip-speed-auto-mode)
   - [Batch skeleton job creation](#batch-skeleton-job-creation-flightmanager-batch)
+  - [Refreshing stale jobs](#refreshing-stale-jobs-flightmanager-refresh)
   - [Cache management](#cache-management)
 - [Operator workflow](#operator-workflow)
 - [Subcategory and keep-out distances](#subcategory-and-keep-out-distances)
@@ -57,6 +58,8 @@ Output files written per job:
 
 ## Architecture
 
+> **Development note — AI-assisted ("vibe coded").** This application was built largely through iterative prompting of an LLM coding agent rather than line-by-line hand authoring; the architecture, tests, and this documentation were shaped that way. It is a working planning aid with a real test suite, but it has not had a line-by-line human security/safety audit. Review the safety-critical paths yourself (UAS-zone checks, building keep-out, altitude/terrain-follow) before relying on any output — and see the [Disclaimer](#disclaimer).
+
 ### Technology stack
 
 | Layer | Technology |
@@ -66,6 +69,7 @@ Output files written per job:
 | Raster / DSM | rasterio, numpy |
 | KMZ / WPML | lxml, zipfile |
 | Tile cache | SQLite (1 km grid, atomic writes) |
+| Job storage | Per-job JSON (`job_params.json` intent + `manifest.json` provenance), atomic writes, schema-versioned |
 | Frontend | Vanilla JS (ES modules), Leaflet 1.9, Leaflet.draw, CesiumJS (CDN, 3D view) |
 | Config | TOML (`config.toml`), Pydantic v2 models |
 | CLI | Typer |
@@ -121,9 +125,11 @@ The single-page UI (`templates/ui.html`) loads JavaScript as ES modules from `te
 | Module | Responsibility |
 |---|---|
 | `main.js` | Init, wires up all other modules |
+| `api.js` | Thin `fetch` wrapper (`apiGet/apiPost/apiPatch/apiDelete`); single seam for JSON calls + error handling |
 | `route-planner.js` | Calls `POST /api/route_estimate`, updates 2D overlay and notifies Cesium |
 | `preview-runner.js` | Calls `POST /api/preview`, manages SSE progress |
 | `job-ops.js` | Save / open / clone / delete job |
+| `refresh-banner.js` | Detects stale jobs (`GET /api/refresh/scan`) and runs in-place recompute (`POST /api/refresh`) |
 | `map-layers.js` | Leaflet layer management (route, coverage, buildings, zones, DSM) |
 | `cesium-view.js` | CesiumJS 3D view; lazy-loads from CDN on first use |
 | `tpl-modal.js` | Template Settings modal (overlap, safety, variable-altitude params) |
@@ -225,6 +231,8 @@ The single-page Leaflet map interface is organised around four areas: the **Jobs
 The panel lists all saved jobs grouped into folders. Use the header buttons to create a new job (**＋ New Job**), batch-import IDs (**↓ Batch**), or add a folder (**＋ Folder**). If a folder name already exists the dialog stays open and shows an inline error. A filter input sits below. Click any card to re-open a job — the form and map restore instantly and a fresh preview runs automatically. The three-dot card menu offers **Open**, **Clone**, **Rename**, **Move to Folder**, and **Delete**. Collapse the panel with the `◄` tab.
 
 The panel updates live — changes made by the CLI, MCP server, or another tab appear immediately. If the currently open job is modified externally, a blue notice offers **Reload** or **Dismiss**.
+
+If any saved jobs were built by an older pipeline version or now have newer source data available, a green banner appears at the top of the panel (**"N jobs can be refreshed · Refresh all"**). **Refresh all** recomputes them in place (route, DSM, stats, KMZ, manifest) from cached tiles, preserving each job's geometry, and reports how many changed flight-ready/review status. Equivalent CLI command: `flightmanager refresh --all-stale`.
 
 **Batch import:** click **↓ Batch**, paste parcel/property IDs (one per line, `#` comments ignored) or load a `.txt`/`.csv` file, pick a folder and optional param overrides, then click **Create N jobs**. Each ID becomes a skeleton job (polygon stored, no KMZ yet). Equivalent CLI command: `flightmanager batch`.
 
@@ -694,6 +702,23 @@ The `--parcels` / `--properties` flag determines ID type. If neither is given, t
 | `--drone TEXT` | Drone profile override |
 | `--height FLOAT` | Flight height override (m AGL) |
 | `--subcategory TEXT` | `A2` or `A3` |
+
+### Refreshing stale jobs (`flightmanager refresh`)
+
+Recomputes already-exported jobs **in place** with the current pipeline. A job is "stale" when it was built by an older pipeline version (the route/altitude/keep-out logic has since changed) or when the local cache now holds newer source tiles than the job used. Refresh is **recompute-only**: the edited / ID-derived geometry is preserved — only the route, DSM, stats, KMZ, and manifest are rebuilt from cached tiles.
+
+```bash
+# Refresh specific jobs
+flightmanager refresh 20260611-02-test2 my-group/5241087453
+
+# Refresh every stale job
+flightmanager refresh --all-stale
+
+# Limit --all-stale to one folder
+flightmanager refresh --all-stale --folder my-group
+```
+
+The browser UI surfaces the same thing as a banner ("N jobs can be refreshed · Refresh all") when stale jobs are detected on load. Refreshing flags any job whose `flight_ready` / `needs_review` status changes as a result.
 
 ### MCP server (standalone)
 
