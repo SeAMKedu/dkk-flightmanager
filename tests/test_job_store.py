@@ -384,6 +384,39 @@ def _register_tile(cache_dir, dataset, tile_id, fetch_ts):
     ))
 
 
+class TestBatterySummary:
+    def test_single_piece(self):
+        from flightmanager.job_store import _battery_summary
+        out = _battery_summary({
+            "estimated_flight_time_min": 12.3, "estimated_photo_count": 200,
+            "over_one_battery": False,
+        })
+        assert out == {"flight_time_min": 12.3, "photo_count": 200,
+                       "over_one_battery": False, "battery_count": 1}
+
+    def test_single_piece_over_battery(self):
+        from flightmanager.job_store import _battery_summary
+        out = _battery_summary({"estimated_flight_time_min": 40, "over_one_battery": True})
+        assert out["battery_count"] == 2 and out["over_one_battery"] is True
+
+    def test_pieces_summed(self):
+        from flightmanager.job_store import _battery_summary
+        out = _battery_summary({"pieces": [
+            {"estimated_flight_time_min": 10, "estimated_photo_count": 100, "over_one_battery": False},
+            {"estimated_flight_time_min": 25, "estimated_photo_count": 300, "over_one_battery": True},
+        ], "over_any_battery": True})
+        assert out["flight_time_min"] == 35
+        assert out["photo_count"] == 400
+        assert out["over_one_battery"] is True
+        assert out["battery_count"] == 3  # 1 + 2
+
+    def test_empty(self):
+        from flightmanager.job_store import _battery_summary
+        out = _battery_summary({})
+        assert out == {"flight_time_min": None, "photo_count": None,
+                       "over_one_battery": False, "battery_count": None}
+
+
 class TestRefreshStatus:
     def _cfg(self, tmp_path):
         from flightmanager.config import CacheConfig

@@ -3,6 +3,29 @@
 Read/write job_params.json, thumbnail.svg, and scan the output directory tree.
 No FastAPI or server-level globals — all functions are pure I/O, fully testable
 in isolation.
+
+Two files per job, deliberately separate:
+  * ``job_params.json`` — **editable intent** (the recipe): inputs, requested
+    drone/height/subcategory, polygon knobs, takeoff, colour, template settings.
+    Web-UI-only. ``GET /api/jobs`` returns this raw so the editor can restore the form.
+  * ``manifest.json`` — **immutable provenance** (the receipt): resolved stats, areas,
+    battery, attributions, source-tile lineage, review flags. Written by ``export_job``
+    itself, so CLI/Airflow jobs have only a manifest.
+
+They are merged in exactly one place — ``_build_job_card()`` — which produces the
+read-only summary used by job lists, the map view, and (via ``read_job_card``) the MCP
+job-details tool. Nothing else reconciles the two files: the ``GET /api/jobs/{path}``
+editor endpoint returns raw ``job_params`` (intent), and ``params_from_manifest`` only
+*synthesises* intent for CLI jobs that have no job_params. Field precedence in the merge:
+resolved provenance from the manifest wins for display (areas, drone, height, battery,
+flags); ``job_params`` fills intent-only gaps (e.g. subcategory before a job is exported).
+
+Field-ownership audit (2026-06): the split is clean — every ``job_params`` field is
+editable intent, every ``manifest`` field is computed provenance. Values that appear in
+both (``drone``, ``height``, ``subcategory``, parcel/property IDs) are deliberate
+intent-vs-resolved pairs that *can* legitimately differ, not accidental duplication, so
+none were moved. Safety flags (``flight_ready``/``needs_review``) live only in the manifest
+and reach callers through the card.
 """
 
 from __future__ import annotations
@@ -263,7 +286,34 @@ def read_job_card(
     return dict(card)
 
 
-def _build_job_card(  # noqa: C901
+def _battery_summary(bat: dict) -> dict:
+    """Flatten a manifest ``battery`` block to card fields, regardless of its shape.
+
+    Single-piece jobs store the stats at top level; multi-piece (split) jobs store a
+    ``pieces`` list. Returns ``{flight_time_min, photo_count, over_one_battery,
+    battery_count}`` with ``None``/falsey defaults when no battery data is present.
+    """
+    if "estimated_flight_time_min" in bat:
+        over = bat.get("over_one_battery", False)
+        return {
+            "flight_time_min": bat["estimated_flight_time_min"],
+            "photo_count": bat.get("estimated_photo_count"),
+            "over_one_battery": over,
+            "battery_count": 2 if over else 1,
+        }
+    if "pieces" in bat:
+        pieces = bat["pieces"]
+        return {
+            "flight_time_min": sum(p.get("estimated_flight_time_min", 0) for p in pieces),
+            "photo_count": sum(p.get("estimated_photo_count", 0) for p in pieces),
+            "over_one_battery": bat.get("over_any_battery", False),
+            "battery_count": sum(2 if p.get("over_one_battery", False) else 1 for p in pieces),
+        }
+    return {"flight_time_min": None, "photo_count": None,
+            "over_one_battery": False, "battery_count": None}
+
+
+def _build_job_card(
     job_dir: Path, folder: str | None, with_polygon: bool
 ) -> dict:
     """Parse a job directory into a summary card dict (uncached)."""
@@ -317,22 +367,8 @@ def _build_job_card(  # noqa: C901
 
     g = manifest.get("geometry", {})
     f = manifest.get("flight", {})
-    bat = manifest.get("battery") or {}
-    if "estimated_flight_time_min" in bat:
-        flight_time_min: float | None = bat["estimated_flight_time_min"]
-        photo_count: int | None = bat.get("estimated_photo_count")
-        over_one_battery: bool = bat.get("over_one_battery", False)
-        battery_count: int | None = 2 if over_one_battery else 1
-    elif "pieces" in bat:
-        flight_time_min = sum(p.get("estimated_flight_time_min", 0) for p in bat["pieces"])
-        photo_count = sum(p.get("estimated_photo_count", 0) for p in bat["pieces"])
-        over_one_battery = bat.get("over_any_battery", False)
-        battery_count = sum(2 if p.get("over_one_battery", False) else 1 for p in bat["pieces"])
-    else:
-        flight_time_min = None
-        photo_count = None
-        over_one_battery = False
-        battery_count = None
+    bat = _battery_summary(manifest.get("battery") or {})
+    safety = manifest.get("home_safety", {})
 
     inputs = params.get("inputs", {})
     card = {
@@ -347,7 +383,10 @@ def _build_job_card(  # noqa: C901
         "area_lost_pct": g.get("area_lost_pct"),
         "parcel_ids": inputs.get("parcel_ids") or [],
         "property_ids": inputs.get("property_ids") or [],
-        "subcategory": params.get("subcategory") or manifest.get("home_safety", {}).get("operating_subcategory"),
+        # Subcategory: prefer the manifest's resolved value (provenance), fall back to
+        # the job_params intent (flight.subcategory) for not-yet-exported jobs.
+        "subcategory": safety.get("operating_subcategory")
+                       or (params.get("flight") or {}).get("subcategory"),
         "vertex_count": g.get("survey_vertex_count"),
         "drone": f.get("drone"),
         "drone_label": f.get("drone_label"),
@@ -356,10 +395,10 @@ def _build_job_card(  # noqa: C901
         "adv_min_height_m": (params.get("template_settings") or {}).get("adv_min_height_m"),
         "adv_max_height_m": (params.get("template_settings") or {}).get("adv_max_height_m"),
         "strip_speed_ms": f.get("strip_speed_ms"),
-        "flight_time_min": flight_time_min,
-        "photo_count": photo_count,
-        "over_one_battery": over_one_battery,
-        "battery_count": battery_count,
+        "flight_time_min": bat["flight_time_min"],
+        "photo_count": bat["photo_count"],
+        "over_one_battery": bat["over_one_battery"],
+        "battery_count": bat["battery_count"],
         "flight_ready": manifest.get("flight_ready"),
         "needs_review": manifest.get("needs_review"),
         "untouched": untouched,

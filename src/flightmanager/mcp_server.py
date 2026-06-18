@@ -303,11 +303,12 @@ def get_job(path: str) -> str:
 
     return json.dumps({
         "card": card,
-        "inputs": params.get("inputs", {}),
-        "flight": params.get("flight", manifest.get("flight", {})),
-        "polygon": params.get("polygon", {}),
-        "flight_ready": manifest.get("flight_ready", params.get("flight_ready")),
-        "needs_review": manifest.get("needs_review", params.get("needs_review")),
+        "inputs": params.get("inputs", {}),       # editable intent
+        "flight": params.get("flight", {}),        # editable intent (requested params)
+        "polygon": params.get("polygon", {}),      # editable intent
+        # Provenance flags come from the card (the single manifest+params merge point).
+        "flight_ready": card.get("flight_ready"),
+        "needs_review": card.get("needs_review"),
         "review_reasons": manifest.get("review_reasons", []),
         "geometry": manifest.get("geometry", {}),
         "stats": {
