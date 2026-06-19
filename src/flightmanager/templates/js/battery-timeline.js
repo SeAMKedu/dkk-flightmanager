@@ -60,7 +60,10 @@ function _btPanToJob(path, mvLayers) {
   if (!item) return;
   try {
     import('./map-init.js').then(function(m){
-      m.map.fitBounds(item.layer.getBounds(), {padding: [80, 80], maxZoom: 17});
+      var b = item.layer.getBounds();
+      var tp = item.feature && item.feature.properties.takeoff_point_4326;
+      if (tp) b = b.extend([tp[1], tp[0]]);   // keep the takeoff marker in view too
+      m.map.fitBounds(b, {padding: [80, 80], maxZoom: 17});
     });
   } catch(e) {}
 }
@@ -84,7 +87,7 @@ function _btRender(routable, groups, mvLayers) {
   var totalMin = routable.reduce(function(s, f) { return s + f.properties.flight_time_min; }, 0);
 
   var JOB_GAP = 2, BAT_GAP = 10, ICON_W = 18, ICON_H = 9, ICON_Y = 1;
-  var BAR_Y = 16, BAR_H = 8, IDX_CY = 33, IDX_R = 7, SVG_H = 44;
+  var BAR_Y = 16, BAR_H = 8, IDX_CY = 37, IDX_R = 7, SVG_H = 48;
   var PAD_L = 8, PAD_R = 6, LABEL_W = 52;
 
   var mapW = (document.getElementById('map').offsetWidth || 800);
@@ -136,10 +139,12 @@ function _btRender(routable, groups, mvLayers) {
 
     if (seg.isBatStart) {
       out.push('<circle cx="' + cx + '" cy="' + IDX_CY + '" r="' + IDX_R
-        + '" fill="#f59e0b" stroke="#fff" stroke-width="1.5"/>');
+        + '" fill="#f59e0b" stroke="#fff" stroke-width="1.5"'
+        + ' pointer-events="auto" cursor="pointer" data-path="' + escHtml(seg.path) + '"/>');
       out.push('<text x="' + cx + '" y="' + IDX_CY
         + '" text-anchor="middle" dy="0.35em" font-size="8" '
-        + 'font-family="sans-serif" fill="#000" font-weight="700">'
+        + 'font-family="sans-serif" fill="#000" font-weight="700"'
+        + ' pointer-events="auto" cursor="pointer" data-path="' + escHtml(seg.path) + '">'
         + seg.rank + '</text>');
     }
   });
