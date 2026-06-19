@@ -111,5 +111,16 @@ def test_advanced_job_uses_adv_max_height():
     assert cluster_jobs(cards)[0].max_altitude_m == 140
 
 
+def test_first_route_index_and_members():
+    # sort_order is 0-based; route index is 1-based. Site of sorts 1..3 → first
+    # route index 2, members carry per-job route_index + takeoff.
+    cards = [_card("a", 1, 0, 0), _card("b", 2, 20, 0), _card("c", 3, 0, 20)]
+    s = cluster_jobs(cards)[0]
+    assert s.first_route_index == 2
+    assert [m["route_index"] for m in s.members] == [2, 3, 4]
+    assert all(len(m["takeoff_4326"]) == 2 for m in s.members)
+    assert [m["name"] for m in s.members] == ["a", "b", "c"]
+
+
 def test_empty_input():
     assert cluster_jobs([]) == []

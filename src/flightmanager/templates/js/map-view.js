@@ -13,7 +13,7 @@ import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from
 import { showForecastBar, destroyForecastBar, setForecastBarShifted } from './forecast-bar.js';
 import { hideCesiumView } from './cesium-view.js';
 import { clearArrowLayer } from './route-planner.js';
-import { drawLaunchSites } from './launch-sites.js';
+import { drawLaunchSites, clearLaunchSites } from './launch-sites.js';
 // Circular — only called at runtime:
 import { saveEdit } from './polygon-edit.js';
 import { openJob as _openJobFn } from './job-ops.js';
@@ -102,7 +102,7 @@ export function closeMapView() {
   clearMgrsLayer();
   _mvClearLayers();
   _mvHideDim();
-  if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
+  clearLaunchSites(map); _mvRouteLayer = null;
   clearArrowLayer();
   _mvSelected.forEach(function(path) {
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
@@ -130,7 +130,8 @@ async function _mvLoad(folderFilter, skipFit) {
 }
 
 export async function _mvDrawRoute() {
-  if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
+  clearLaunchSites(map);          // tear down layers + detached zoom/move handlers
+  _mvRouteLayer = null;
   // Sequence guard: _mvDrawRoute is fired from several places that can overlap
   // (e.g. _mvApplyFilter + _mvLoad on open). The async fetch below means a stale
   // call could otherwise create a second, untracked layer group that leaks.

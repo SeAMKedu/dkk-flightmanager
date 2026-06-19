@@ -5,22 +5,42 @@
 // Each site renders as one numbered dot at the takeoff centroid; the dots are
 // joined in flight order by the amber dashed route line.
 //
-// Hovering a dot reveals the smallest enclosing circle over the site's survey
-// polygons (crosshair at its centre) and fills the fixed bottom-left
+// The dot is labelled with the site's *first route index* so it lines up with
+// the per-job route-index circles (timeline / high zoom) instead of a separate
+// count. Below zoom 17 the sites render as aggregate dots joined by the dashed
+// route line; at/above zoom 17 (where the route chevrons appear) each site
+// breaks into its individual per-job route-index circles placed at the real
+// takeoff spots, and the route lines are dropped — so the close-up view shows
+// exactly where you launch each job.
+//
+// Hovering a dot/circle reveals the smallest enclosing circle over the site's
+// survey polygons (crosshair at its centre) and fills the fixed bottom-left
 // **announcement box** with everything: the member jobs plus the Flyk fields
-// (centre coords, diameter/radius, max altitude, up-rounded duration). A faint
-// white dotted connector links the box to the hovered dot (drawn beneath the
-// dots). Clicking a dot selects all of that site's jobs.
+// (centre coords, diameter/radius, max altitude, up-rounded duration). A white
+// dotted connector links the box to the hovered marker (drawn beneath it).
+// Clicking an aggregate dot selects all of that site's jobs; clicking a single
+// high-zoom circle selects just that job.
 
 import { escHtml } from './utils.js';
 // Circular (map-view imports this module); only called at runtime:
 import { mvSelectPaths } from './map-view.js';
 
-var _zoomHandler = null;       // detached on every redraw
+// Zoom at/above which sites split into per-job circles (matches the route
+// chevrons' _ARROW_MIN_ZOOM in route-planner.js).
+var DETAIL_ZOOM = 17;
+
 var _moveHandler = null;       // keeps the connector aligned while panning/zooming
 var _panel = null;             // singleton announcement box (#ls-announce)
 var _connector = null;         // singleton dotted box→dot polyline (white, on top)
 var _connectorHalo = null;     // dark halo beneath it, so it reads on any basemap
+
+// Live render state — lets the zoomend handler re-render in place and lets
+// clearLaunchSites() fully tear down when leaving map view.
+var _map = null;
+var _sites = null;
+var _group = null;             // the layer group owned by map-view (_mvRouteLayer)
+var _hoverGroup = null;        // enclosing circle + crosshair for the hovered site
+var _renderHandler = null;     // zoomend → re-render (overview ⇄ detail)
 
 function _fmtM(m) {
   return m >= 1000 ? (m / 1000).toFixed(2) + ' km' : Math.round(m) + ' m';
@@ -72,7 +92,7 @@ function _showAnnounce(map, s) {
     return '<div title="' + e + '">' + e + '</div>';
   }).join('');
   p.innerHTML =
-    '<div class="ls-an-title">Launch site ' + s.index + (range ? ' · ' + range : '') + '</div>'
+    '<div class="ls-an-title">Launch site' + (range ? ' · ' + range : '') + '</div>'
     + '<div class="ls-an-sub">' + s.member_count + (s.member_count === 1 ? ' job' : ' jobs')
     + '</div>'
     + rows.map(function (r) {
@@ -163,79 +183,119 @@ function _pushOutDots(map, markers, sites, minPx) {
   markers.forEach(function (mk, i) { mk.setLatLng(map.layerPointToLatLng(pts[i])); });
 }
 
-/**
- * Render launch sites onto the map. Returns an L.layerGroup (already added to
- * the map) that the caller owns and removes on toggle/redraw.
- */
-export function drawLaunchSites(map, sites) {
-  if (_zoomHandler) { map.off('zoomend', _zoomHandler); _zoomHandler = null; }
-  _hideConnector(map);
+function _circleIcon(label, multi) {
+  return L.divIcon({
+    className: '',
+    html: '<div style="background:#f59e0b;color:#000;font-size:10px;font-weight:700;'
+      + 'width:18px;height:18px;border-radius:50%;display:flex;align-items:center;'
+      + 'justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5)'
+      + (multi ? ';outline:2px solid rgba(245,158,11,.45);outline-offset:1px' : '') + '">'
+      + label + '</div>',
+    iconSize: [18, 18], iconAnchor: [9, 9],
+  });
+}
+
+// Show the hovered site's enclosing circle + announcement box, with the
+// connector anchored at the marker the cursor is on (the dot, or a takeoff
+// circle at high zoom).
+function _showSite(s, anchorLatLng) {
+  _hoverGroup.clearLayers();
+  var c = [s.circle_center_4326[1], s.circle_center_4326[0]];
+  L.circle(c, {
+    radius: s.radius_m, color: '#f59e0b', weight: 1.5, opacity: 0.9,
+    fillColor: '#f59e0b', fillOpacity: 0.07, interactive: false,
+  }).addTo(_hoverGroup);
+  var cross = L.divIcon({
+    className: '',
+    html: '<div style="width:14px;height:14px;position:relative">'
+      + '<div style="position:absolute;left:6px;top:0;width:2px;height:14px;background:#f59e0b"></div>'
+      + '<div style="position:absolute;top:6px;left:0;width:14px;height:2px;background:#f59e0b"></div>'
+      + '</div>',
+    iconSize: [14, 14], iconAnchor: [7, 7],
+  });
+  L.marker(c, { icon: cross, interactive: false }).addTo(_hoverGroup);
+  _showAnnounce(_map, s);
+  _showConnector(_map, anchorLatLng);
+}
+
+function _clearSite() {
+  if (_hoverGroup) _hoverGroup.clearLayers();
   _hideAnnounce();
+  _hideConnector(_map);
+}
 
-  var group = L.layerGroup().addTo(map);
-  if (!sites || !sites.length) return group;
+// Re-draw the current sites for the current zoom into _group (cleared first).
+function _render() {
+  if (!_group) return;
+  _group.clearLayers();
+  _clearSite();
+  if (!_sites || !_sites.length) return;
 
-  // Route line between site centroids, in flight order.
-  if (sites.length >= 2) {
-    var latlngs = sites.map(function (s) { return [s.dot_4326[1], s.dot_4326[0]]; });
-    L.polyline(latlngs, {
+  _hoverGroup = L.layerGroup().addTo(_group);
+  var detail = _map.getZoom() >= DETAIL_ZOOM;
+
+  if (detail) {
+    // Per-job route-index circles at each takeoff; no route lines, no push-out.
+    _sites.forEach(function (s) {
+      (s.members || []).forEach(function (mem) {
+        var tp = mem.takeoff_4326;
+        if (!tp) return;
+        var ll = [tp[1], tp[0]];
+        var m = L.marker(ll, { icon: _circleIcon(mem.route_index != null ? mem.route_index : '·', false) }).addTo(_group);
+        m.on('mouseover', function () { _showSite(s, ll); });
+        m.on('mouseout', function () { _clearSite(); });
+        m.on('click', function (e) {
+          mvSelectPaths([mem.path]);          // select just this job
+          if (e && e.originalEvent) L.DomEvent.stopPropagation(e);
+        });
+      });
+    });
+    return;
+  }
+
+  // Overview: route line between site centroids + one aggregate dot per site.
+  if (_sites.length >= 2) {
+    L.polyline(_sites.map(function (s) { return [s.dot_4326[1], s.dot_4326[0]]; }), {
       color: '#f59e0b', weight: 2, opacity: 0.7, dashArray: '6,4',
-    }).addTo(group);
+    }).addTo(_group);
   }
 
-  var hoverGroup = L.layerGroup().addTo(group);
-
-  function showSite(s) {
-    hoverGroup.clearLayers();
-    var c = [s.circle_center_4326[1], s.circle_center_4326[0]];
-    L.circle(c, {
-      radius: s.radius_m, color: '#f59e0b', weight: 1.5, opacity: 0.9,
-      fillColor: '#f59e0b', fillOpacity: 0.07, interactive: false,
-    }).addTo(hoverGroup);
-    // Circle centre (≠ launch dot) marked with a crosshair.
-    var cross = L.divIcon({
-      className: '',
-      html: '<div style="width:14px;height:14px;position:relative">'
-        + '<div style="position:absolute;left:6px;top:0;width:2px;height:14px;background:#f59e0b"></div>'
-        + '<div style="position:absolute;top:6px;left:0;width:14px;height:2px;background:#f59e0b"></div>'
-        + '</div>',
-      iconSize: [14, 14], iconAnchor: [7, 7],
-    });
-    L.marker(c, { icon: cross, interactive: false }).addTo(hoverGroup);
-    _showAnnounce(map, s);
-    _showConnector(map, [s.dot_4326[1], s.dot_4326[0]]);
-  }
-  function clearSite() {
-    hoverGroup.clearLayers();
-    _hideAnnounce();
-    _hideConnector(map);
-  }
-
-  var markers = sites.map(function (s) {
+  var markers = _sites.map(function (s) {
     var ll = [s.dot_4326[1], s.dot_4326[0]];
-    var multi = s.member_count > 1;
-    var icon = L.divIcon({
-      className: '',
-      html: '<div style="background:#f59e0b;color:#000;font-size:10px;font-weight:700;'
-        + 'width:18px;height:18px;border-radius:50%;display:flex;align-items:center;'
-        + 'justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5)'
-        + (multi ? ';outline:2px solid rgba(245,158,11,.45);outline-offset:1px' : '') + '">'
-        + s.index + '</div>',
-      iconSize: [18, 18], iconAnchor: [9, 9],
-    });
-    var m = L.marker(ll, { icon: icon }).addTo(group);
-    m.on('mouseover', function () { showSite(s); });
-    m.on('mouseout', function () { clearSite(); });
+    var label = s.first_route_index != null ? s.first_route_index : s.index;
+    var m = L.marker(ll, { icon: _circleIcon(label, s.member_count > 1) }).addTo(_group);
+    m.on('mouseover', function () { _showSite(s, [s.dot_4326[1], s.dot_4326[0]]); });
+    m.on('mouseout', function () { _clearSite(); });
     m.on('click', function (e) {
-      mvSelectPaths(s.job_paths);            // select every job flown from this spot
+      mvSelectPaths(s.job_paths);             // select every job flown from this spot
       if (e && e.originalEvent) L.DomEvent.stopPropagation(e);
     });
     return m;
   });
+  _pushOutDots(_map, markers, _sites, 22);
+}
 
-  _pushOutDots(map, markers, sites, 22);
-  _zoomHandler = function () { _pushOutDots(map, markers, sites, 22); };
-  map.on('zoomend', _zoomHandler);
+/**
+ * Render launch sites onto the map. Returns an L.layerGroup (already added to
+ * the map) that the caller owns; call clearLaunchSites(map) to tear down.
+ */
+export function drawLaunchSites(map, sites) {
+  clearLaunchSites(map);
+  _map = map;
+  _sites = sites || [];
+  _group = L.layerGroup().addTo(map);
+  _render();
+  _renderHandler = function () { _render(); };   // overview ⇄ detail on zoom; push-out re-fits
+  map.on('zoomend', _renderHandler);
+  return _group;
+}
 
-  return group;
+/** Remove all launch-site layers and detach map handlers (call on map-view exit). */
+export function clearLaunchSites(map) {
+  var m = map || _map;
+  if (_renderHandler && m) { m.off('zoomend', _renderHandler); _renderHandler = null; }
+  if (m) _hideConnector(m);
+  _hideAnnounce();
+  if (_group && m) m.removeLayer(_group);
+  _group = null; _hoverGroup = null; _sites = null;
 }

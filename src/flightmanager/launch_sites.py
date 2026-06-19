@@ -47,10 +47,18 @@ class LaunchSite:
     radius_m: float = 0.0
     flight_time_min: float | None = None    # Σ member flight times (None if unknown)
     max_altitude_m: float | None = None     # highest flight altitude over members (Flyk field)
+    members: list[dict] = field(default_factory=list)  # per-job {path, name, route_index, takeoff_4326}
 
     @property
     def member_count(self) -> int:
         return len(self.job_paths)
+
+    @property
+    def first_route_index(self) -> int | None:
+        """Route index (1-based) of the site's first job — shown on the map dot so
+        it matches the per-job route-index circles rather than a separate count."""
+        idxs = [m["route_index"] for m in self.members if m.get("route_index") is not None]
+        return min(idxs) if idxs else None
 
     @property
     def diameter_m(self) -> float:
@@ -72,6 +80,8 @@ class LaunchSite:
             "max_altitude_m": (
                 round(self.max_altitude_m, 1) if self.max_altitude_m is not None else None
             ),
+            "first_route_index": self.first_route_index,
+            "members": self.members,
             "member_count": self.member_count,
         }
 
@@ -130,11 +140,23 @@ def _build_site(index: int, members: list[dict]) -> LaunchSite:
             alts.append(float(a))
     max_alt = max(alts) if alts else None
 
+    member_dicts = [
+        {
+            "path": c.get("path") or c.get("name") or "",
+            "name": c.get("name") or c.get("job_name") or "job",
+            # Route index shown on the map is 1-based; stored sort_order is 0-based.
+            "route_index": (c.get("sort_order") + 1) if c.get("sort_order") is not None else None,
+            "takeoff_4326": c.get("takeoff_point_4326"),
+        }
+        for c in members
+    ]
+
     return LaunchSite(
         index=index,
         job_paths=[c.get("path") or c.get("name") or "" for c in members],
         job_names=[c.get("name") or c.get("job_name") or "job" for c in members],
         sort_orders=[c.get("sort_order") for c in members],
+        members=member_dicts,
         dot_4326=[dot_4326.x, dot_4326.y],
         circle_center_4326=[center_4326.x, center_4326.y],
         radius_m=radius_m,
