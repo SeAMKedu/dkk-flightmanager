@@ -224,13 +224,22 @@ async def job_report(path: str, basemap: str = "mml"):
                     headers={"Content-Disposition": f'inline; filename="{fname}"'})
 
 
-@router.post("/api/report/packet")
-async def report_packet(body: dict):
-    """Mission packet PDF for the given job paths.
+# Async report jobs: { job_id: {"queue", "result": bytes|None, "filename", "error"} }.
+# A report draws many maps (overview + per-site + per-job), so generation is run in
+# a thread and streams progress over SSE; the finished PDF is fetched separately.
+_report_jobs: dict = {}
 
-    Body: ``{paths: [...], folder?: str, basemap?: "mml"|"osm", include_job_cards?: bool}``.
+
+@router.post("/api/report/start")
+async def report_start(body: dict):
+    """Start a PDF report job. One path -> flight card, several -> mission packet.
+
+    Body: ``{paths: [...], folder?, basemap?, include_job_cards?}`` -> ``{job_id}``.
+    Stream progress via ``GET /api/report/progress/{job_id}``, then fetch the PDF
+    from ``GET /api/report/result/{job_id}``.
     """
     import asyncio
+    import uuid
 
     from flightmanager import report
 
@@ -241,15 +250,79 @@ async def report_packet(body: dict):
     entries = [e for p in paths if (e := _load_job_entry(output_dir, p))]
     if not entries:
         raise HTTPException(404, detail="No jobs found for the given paths")
-    pdf = await asyncio.to_thread(
-        report.render_packet, _st.config, entries,
-        folder=body.get("folder"),
-        basemap=body.get("basemap", "mml"),
-        include_job_cards=body.get("include_job_cards", True),
-    )
-    name = "dkk-" + (body.get("folder") or "packet")
-    return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{name}.pdf"'})
+
+    basemap = body.get("basemap", "mml")
+    folder = body.get("folder")
+    job_id = uuid.uuid4().hex
+    queue: asyncio.Queue = asyncio.Queue()
+    _report_jobs[job_id] = {"queue": queue, "result": None, "error": None, "filename": None}
+    loop = asyncio.get_running_loop()
+
+    def progress_cb(stage, msg, pct):
+        loop.call_soon_threadsafe(queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct})
+
+    async def run():
+        try:
+            if len(entries) == 1 and not folder:
+                pdf = await asyncio.to_thread(
+                    report.render_job_report, _st.config, entries[0]["params"],
+                    entries[0]["manifest"], basemap=basemap, progress_cb=progress_cb)
+                fname = (entries[0]["params"].get("job_name") or "job") + ".pdf"
+            else:
+                pdf = await asyncio.to_thread(
+                    report.render_packet, _st.config, entries, folder=folder,
+                    basemap=basemap, include_job_cards=body.get("include_job_cards", True),
+                    progress_cb=progress_cb)
+                fname = (folder or "jobs") + ".pdf"
+            _report_jobs[job_id]["result"] = pdf
+            _report_jobs[job_id]["filename"] = fname
+            queue.put_nowait({"stage": "done", "msg": "Ready", "pct": 100})
+        except Exception as e:  # noqa: BLE001
+            _report_jobs[job_id]["error"] = str(e)
+            queue.put_nowait({"stage": "error", "msg": str(e), "pct": 0})
+
+    asyncio.create_task(run())
+    return {"job_id": job_id}
+
+
+@router.get("/api/report/progress/{job_id}")
+async def report_progress(job_id: str):
+    """SSE progress for a report job (``{stage, msg, pct}``; ends on done/error)."""
+    import asyncio
+
+    entry = _report_jobs.get(job_id)
+    if not entry:
+        raise HTTPException(404, detail="Report job not found")
+
+    async def generate():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(entry["queue"].get(), timeout=25.0)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    if event.get("stage") in ("done", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    yield 'data: {"stage":"keepalive"}\n\n'
+        except asyncio.CancelledError:
+            pass
+
+    return SSEResponse(generate(), media_type="text/event-stream",
+                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/api/report/result/{job_id}")
+async def report_result(job_id: str):
+    """Return the finished PDF for a report job (one-shot; frees it afterwards)."""
+    entry = _report_jobs.pop(job_id, None)
+    if entry is None:
+        raise HTTPException(404, detail="Report job not found")
+    if entry.get("error"):
+        raise HTTPException(500, detail=entry["error"])
+    if entry.get("result") is None:
+        raise HTTPException(409, detail="Report not finished")
+    return Response(content=entry["result"], media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{entry["filename"]}"'})
 
 
 def _resolve_centroids(folder: str | None, paths: str | None):

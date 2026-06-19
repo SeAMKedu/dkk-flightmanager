@@ -57,36 +57,72 @@ async function _loadSelectedJobs() {
   return {paths: paths, jobs: jobs};
 }
 
+var _pdfBusy = false;
+
+function _ppShow() {
+  var el = document.getElementById('pdf-progress');
+  if (el) { el.classList.remove('hidden'); _ppSet(0, 'Starting'); }
+}
+function _ppSet(pct, msg) {
+  var f = document.getElementById('pp-fill');
+  var m = document.getElementById('pp-msg');
+  if (f && typeof pct === 'number') f.style.width = Math.max(3, Math.min(100, pct)) + '%';
+  if (m && msg != null) m.textContent = msg;
+}
+function _ppHide() {
+  var el = document.getElementById('pdf-progress');
+  if (el) el.classList.add('hidden');
+}
+
+// Stream a report job's SSE progress into the overlay, then download the PDF.
+function _streamReport(jobId, fileName) {
+  return new Promise(function(resolve, reject) {
+    var es = new EventSource('/api/report/progress/' + jobId);
+    es.onmessage = async function(ev) {
+      var d; try { d = JSON.parse(ev.data); } catch (_) { return; }
+      if (d.stage === 'keepalive') return;
+      if (d.stage === 'error') { es.close(); reject(new Error(d.msg || 'generation error')); return; }
+      if (d.stage === 'done') {
+        es.close(); _ppSet(100, 'Downloading');
+        try {
+          var r = await fetch('/api/report/result/' + jobId);
+          if (!r.ok) { reject(new Error('result HTTP ' + r.status)); return; }
+          var blob = await r.blob();
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url; a.download = fileName; a.click();
+          URL.revokeObjectURL(url);
+          resolve();
+        } catch (e) { reject(e); }
+        return;
+      }
+      if (typeof d.pct === 'number') _ppSet(d.pct, d.msg || '');
+    };
+    es.onerror = function() { es.close(); reject(new Error('progress stream lost')); };
+  });
+}
+
 export async function exportPdf() {
-  var result = await _loadSelectedJobs();
-  if (!result) return;
-  var paths = result.paths;
+  if (_pdfBusy) return;                       // one generation at a time
+  _pdfBusy = true;                            // claim before any await
+  _ppShow();
+  try {
+    var result = await _loadSelectedJobs();
+    if (!result) return;
+    var paths = result.paths;
+    var folders = new Set(paths.map(function(p){ var s = p.indexOf('/'); return s >= 0 ? p.slice(0, s) : null; }));
+    var folder = (folders.size === 1) ? Array.from(folders)[0] : null;
+    var today = new Date().toLocaleDateString('en-CA');   // YYYY-MM-DD, local
+    var fileName = today + '_' + (paths.length === 1 ? paths[0].split('/').pop() : (folder || 'jobs')) + '.pdf';
 
-  var folders = new Set(paths.map(function(p){ var s = p.indexOf('/'); return s >= 0 ? p.slice(0, s) : null; }));
-  var folder = (folders.size === 1) ? Array.from(folders)[0] : null;
-
-  var blob, fileName;
-  if (paths.length === 1) {
-    // Single job -> one-page flight card.
-    var url1 = '/api/jobs/' + paths[0].split('/').map(encodeURIComponent).join('/') + '/report.pdf';
-    var r1 = await fetch(url1);
-    if (!r1.ok) { showError('PDF failed (HTTP ' + r1.status + ')'); return; }
-    blob = await r1.blob();
-    fileName = paths[0].split('/').pop() + '.pdf';
-  } else {
-    // Multiple jobs -> mission packet.
-    var rp = await fetch('/api/report/packet', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({paths: paths, folder: folder})
-    });
-    if (!rp.ok) { showError('PDF packet failed (HTTP ' + rp.status + ')'); return; }
-    blob = await rp.blob();
-    fileName = 'dkk-' + (folder || 'packet') + '.pdf';
+    var start = await apiPost('/api/report/start', {paths: paths, folder: folder});
+    await _streamReport(start.job_id, fileName);
+  } catch (e) {
+    showError('PDF generation failed: ' + (e && e.message ? e.message : e));
+  } finally {
+    _pdfBusy = false;
+    _ppHide();
   }
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url; a.download = fileName; a.click();
-  URL.revokeObjectURL(url);
 }
 
 export async function exportKml() {

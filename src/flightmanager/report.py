@@ -417,11 +417,18 @@ def _mml_key() -> str | None:
     return os.environ.get("MML_API_KEY") or None
 
 
-def render_job_report(base_config, params: dict, manifest: dict, *, basemap: str = "mml") -> bytes:
+def render_job_report(base_config, params: dict, manifest: dict, *, basemap: str = "mml",
+                      progress_cb=None) -> bytes:
     """Render a one-page card for a single job. Returns PDF bytes."""
+    def _p(msg, pct):
+        if progress_cb:
+            progress_cb("report", msg, pct)
+    _p("Analysing survey", 8)
     rd = _render_data_for_job(base_config, params)
+    _p("Rendering map", 55)
     pdf = _new_pdf()
     build_job_card(pdf, params, manifest, rd, _mml_key(), basemap)
+    _p("Finalizing", 98)
     return bytes(pdf.output())
 
 
@@ -614,26 +621,41 @@ def _launch_site_page(pdf: FPDF, site, cards: list[dict], mml_key: str | None, b
 
 
 def render_packet(base_config, job_entries: list[dict], *, folder: str | None = None,
-                  basemap: str = "mml", include_job_cards: bool = True) -> bytes:
+                  basemap: str = "mml", include_job_cards: bool = True, progress_cb=None) -> bytes:
     """Render the full mission packet for the given jobs.
 
     *job_entries*: list of ``{"params": dict, "manifest": dict}`` (params should
     carry ``path``/``job_name``/``folder``). Cover + overview + summary +
     per-launch-site announcement pages + (optionally) per-job cards.
     """
+    def _p(msg, pct):
+        if progress_cb:
+            progress_cb("report", msg, int(pct))
+
     mml_key = _mml_key()
     cards = [_clip_card(e["params"], e.get("manifest") or {}) for e in job_entries]
+    sites = cluster_jobs(cards)
+    _p("Preparing", 3)
+
     pdf = _new_pdf()
     _cover(pdf, cards, folder)
+    _p("Cover", 6)
     pdf.add_page()
     _overview_map(pdf, cards, mml_key, basemap)
-    for site in cluster_jobs(cards):
+    _p("Overview map", 14)
+
+    for i, site in enumerate(sites):
         _launch_site_page(pdf, site, cards, mml_key, basemap)
+        _p(f"Launch site {i + 1}/{len(sites)}", 14 + (i + 1) / max(len(sites), 1) * 12)
+
     if include_job_cards:
-        for e in job_entries:
+        n = len(job_entries)
+        for i, e in enumerate(job_entries):
+            _p(f"Job card {i + 1}/{n}", 26 + i / max(n, 1) * 72)
             try:
                 rd = _render_data_for_job(base_config, e["params"])
                 build_job_card(pdf, e["params"], e.get("manifest") or {}, rd, mml_key, basemap)
             except Exception:
                 continue
+    _p("Finalizing", 99)
     return bytes(pdf.output())

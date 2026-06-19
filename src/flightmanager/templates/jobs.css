@@ -94,6 +94,21 @@
 .sel-action:hover{color:#1e293b;border-color:#475569}
 .sel-action.danger{color:#fca5a5;border-color:#7f1d1d}
 .sel-action.danger:hover{color:#fff;background:#dc2626;border-color:#dc2626}
+/* PDF report progress overlay (independent of the selection action bar, so it
+   stays visible if jobs are deselected mid-generation). The fill is determinate
+   (width = % done) AND carries a moving diagonal stripe, so it shows progress
+   and that work is still happening. */
+#pdf-progress{position:fixed;left:50%;bottom:44px;transform:translateX(-50%);z-index:2000;
+  background:rgba(15,23,42,.93);color:#f1f5f9;border:1px solid #334155;border-radius:8px;
+  padding:11px 16px;min-width:270px;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+#pdf-progress.hidden{display:none}
+.pp-title{font-size:13px;font-weight:700;margin-bottom:2px}
+.pp-msg{font-size:11px;color:#94a3b8;margin-bottom:8px;min-height:14px}
+.pp-bar{height:8px;background:#1e293b;border-radius:4px;overflow:hidden}
+.pp-fill{height:100%;width:3%;background:#f59e0b;border-radius:4px;transition:width .35s ease;
+  background-image:linear-gradient(45deg,rgba(255,255,255,.28) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.28) 50%,rgba(255,255,255,.28) 75%,transparent 75%);
+  background-size:18px 18px;animation:ppstripe .7s linear infinite}
+@keyframes ppstripe{0%{background-position:0 0}100%{background-position:18px 0}}
 .sel-clear{background:none;border:none;color:#475569;font-size:13px;cursor:pointer;padding:0 2px;width:auto;line-height:1}
 .sel-clear:hover{color:#94a3b8}
 .jfolder{margin-bottom:4px}

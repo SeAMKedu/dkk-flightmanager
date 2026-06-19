@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import requests
@@ -23,6 +24,31 @@ from PIL import Image
 _TILE = 256          # standard slippy-map tile size (px)
 _TIMEOUT = 20
 _UA = "dkk-flightmanager/1.0 (+https://maanmittauslaitos.fi)"
+
+# In-memory tile cache + reusable session: a packet draws many overlapping maps
+# (overview + per-site + per-job), so the same tiles are requested repeatedly.
+_TILE_CACHE: "OrderedDict[tuple, Image.Image]" = OrderedDict()
+_TILE_CACHE_MAX = 1500
+_SESSION = requests.Session()
+
+
+def _get_tile(provider: "Provider", z: int, x: int, y: int, *, mml_key, session) -> "Image.Image | None":
+    key = (provider.name, z, x, y)
+    cached = _TILE_CACHE.get(key)
+    if cached is not None:
+        _TILE_CACHE.move_to_end(key)
+        return cached
+    try:
+        url = provider.tile_url(z, x, y, mml_key=mml_key)
+        r = session.get(url, timeout=_TIMEOUT, headers={"User-Agent": _UA})
+        r.raise_for_status()
+        tile = Image.open(io.BytesIO(r.content)).convert("RGB")
+    except Exception:
+        return None
+    _TILE_CACHE[key] = tile
+    if len(_TILE_CACHE) > _TILE_CACHE_MAX:
+        _TILE_CACHE.popitem(last=False)
+    return tile
 
 
 @dataclass
@@ -84,10 +110,15 @@ def pad_bbox(bbox: tuple[float, float, float, float], frac: float = 0.12) -> tup
 
 def fit_bbox(bbox: tuple[float, float, float, float], aspect: float) -> tuple[float, float, float, float]:
     """Expand a bbox to a target ``width/height`` *aspect* (in Web-Mercator) so a
-    basemap fills the page box without distortion. Only ever grows the bbox."""
+    basemap fills the page box without distortion. Only ever grows the bbox.
+
+    Both axes are compared in mercator units: x = ``radians(lon)``, y = the
+    Gudermannian ``_merc_y(lat)``. (Comparing lon-degrees against merc-y radians
+    inflates one axis ~57x and fetches a giant strip of tiles.)
+    """
     minlon, minlat, maxlon, maxlat = bbox
     cx = (minlon + maxlon) / 2
-    wx = maxlon - minlon
+    wx = math.radians(maxlon - minlon)            # mercator-x span
     y0, y1 = _merc_y(minlat), _merc_y(maxlat)
     cym, hy = (y0 + y1) / 2, (y1 - y0)
     if hy <= 0 or wx <= 0:
@@ -96,7 +127,8 @@ def fit_bbox(bbox: tuple[float, float, float, float], aspect: float) -> tuple[fl
         wx = aspect * hy
     else:
         hy = wx / aspect
-    return (cx - wx / 2, _inv_merc_y(cym - hy / 2), cx + wx / 2, _inv_merc_y(cym + hy / 2))
+    half_lon = math.degrees(wx) / 2
+    return (cx - half_lon, _inv_merc_y(cym - hy / 2), cx + half_lon, _inv_merc_y(cym + hy / 2))
 
 
 # ── Web-Mercator math ─────────────────────────────────────────────────────────
@@ -156,7 +188,7 @@ def fetch_basemap(
     """
     minlon, minlat, maxlon, maxlat = bbox_4326
     z = _choose_zoom(bbox_4326, target_px, provider.max_zoom)
-    sess = session or requests.Session()
+    sess = session or _SESSION
 
     # Box corners in global pixels (note: y grows southward).
     x0, y0 = _lonlat_to_world_px(minlon, maxlat, z)   # top-left
@@ -173,14 +205,9 @@ def fetch_basemap(
         for ty in range(ty0, ty1 + 1):
             if not (0 <= tx < n and 0 <= ty < n):
                 continue
-            try:
-                url = provider.tile_url(z, tx, ty, mml_key=mml_key)
-                r = sess.get(url, timeout=_TIMEOUT, headers={"User-Agent": _UA})
-                r.raise_for_status()
-                tile = Image.open(io.BytesIO(r.content)).convert("RGB")
+            tile = _get_tile(provider, z, tx, ty, mml_key=mml_key, session=sess)
+            if tile is not None:
                 canvas.paste(tile, ((tx - tx0) * _TILE, (ty - ty0) * _TILE))
-            except Exception:
-                continue   # leave the grey placeholder for this tile
 
     # Crop the canvas to the exact bbox rectangle.
     cox, coy = tx0 * _TILE, ty0 * _TILE

@@ -243,7 +243,7 @@
       <button class="sel-action" onclick="openGoogleMaps()">Google Maps</button>
       <span class="mv-sep"></span>
       <button class="sel-action" onclick="exportKml()">Export KML</button>
-      <button class="sel-action" onclick="exportPdf()">PDF</button>
+      <button class="sel-action" id="mv-pdf-btn" onclick="exportPdf()">PDF</button>
       <button class="sel-action" onclick="exportRoute()">Export Route</button>
       <span class="mv-sep"></span>
       <button class="sel-action" id="mv-autoroute-btn" onclick="mvAutoRoute()">Auto route</button>
@@ -635,6 +635,12 @@
   <div id="ttitle">Running…</div>
   <div id="ttrack"><div id="tfill"></div></div>
   <div id="tmsg">Starting…</div>
+</div>
+
+<div id="pdf-progress" class="hidden">
+  <div class="pp-title">Generating PDF</div>
+  <div class="pp-msg" id="pp-msg">Starting</div>
+  <div class="pp-bar"><div class="pp-fill" id="pp-fill"></div></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
