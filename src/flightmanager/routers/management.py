@@ -157,6 +157,30 @@ async def jobs_geojson(folder: str | None = None):
     return {"type": "FeatureCollection", "features": features}
 
 
+@router.get("/api/launch_sites")
+async def launch_sites(folder: str | None = None):
+    """Group a folder's jobs into launch sites for flight announcements.
+
+    A launch site = a run of consecutive-flight-order jobs flown from one parking
+    spot (takeoffs within ~50 m). Each carries the takeoff-centroid dot plus the
+    smallest enclosing circle (centre + radius) over its survey polygons — the
+    operating area you announce on Flyk. Registered before ``/api/jobs/{path:path}``.
+    """
+    from flightmanager.launch_sites import cluster_jobs
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    cards: list[dict] = []
+    for group in scan_jobs(output_dir, with_polygon=True):
+        if folder is not None and group["name"] != folder:
+            continue
+        if folder is None and group["name"] is not None:
+            continue
+        cards.extend(group["jobs"])
+
+    sites = cluster_jobs(cards)
+    return {"sites": [s.to_dict() for s in sites]}
+
+
 def _resolve_centroids(folder: str | None, paths: str | None):
     """Return ``(centroids, folder_dir)`` for a folder and/or comma-separated paths.
 

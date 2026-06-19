@@ -13,6 +13,7 @@ import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from
 import { showForecastBar, destroyForecastBar, setForecastBarShifted } from './forecast-bar.js';
 import { hideCesiumView } from './cesium-view.js';
 import { clearArrowLayer } from './route-planner.js';
+import { drawLaunchSites } from './launch-sites.js';
 // Circular — only called at runtime:
 import { saveEdit } from './polygon-edit.js';
 import { openJob as _openJobFn } from './job-ops.js';
@@ -30,6 +31,7 @@ var _mvAllFeatures = [];
 var _mvCurrentFolder = null;
 var _DEFAULT_COLOR = '#3b82f6';
 var _mvRouteLayer = null;
+var _mvRouteSeq = 0;
 var _mvRouteVisible = true;
 var _mvDimLayer = null;
 
@@ -127,44 +129,27 @@ async function _mvLoad(folderFilter, skipFit) {
   } catch(e) { console.error('[mapview]', e); }
 }
 
-export function _mvDrawRoute() {
+export async function _mvDrawRoute() {
   if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
+  // Sequence guard: _mvDrawRoute is fired from several places that can overlap
+  // (e.g. _mvApplyFilter + _mvLoad on open). The async fetch below means a stale
+  // call could otherwise create a second, untracked layer group that leaks.
+  var seq = ++_mvRouteSeq;
   if (!_mvRouteVisible || !_mvMode) return;
 
-  var features = _mvAllFeatures.filter(function(f){ return (f.properties.folder || null) === _mvCurrentFolder; });
-  var routable = features.filter(function(f){ return f.properties.takeoff_point_4326 && !f.properties.skipped; });
-  routable.sort(function(a, b) {
-    var pa = a.properties, pb = b.properties;
-    var soA = pa.sort_order, soB = pb.sort_order;
-    if (soA != null && soB != null) return soA - soB;
-    if (soA != null) return -1;
-    if (soB != null) return 1;
-    return 0;
-  });
-
-  if (routable.length < 2) return;
-
-  var latlngs = routable.map(function(f){
-    var tp = f.properties.takeoff_point_4326;
-    return [tp[1], tp[0]];
-  });
-
-  _mvRouteLayer = L.layerGroup().addTo(map);
-  L.polyline(latlngs, {color: '#f59e0b', weight: 2, opacity: 0.7, dashArray: '6,4'}).addTo(_mvRouteLayer);
-
-  routable.forEach(function(f, i) {
-    var tp = f.properties.takeoff_point_4326;
-    var n = i + 1;
-    var icon = L.divIcon({
-      className: '',
-      html: '<div style="background:#f59e0b;color:#000;font-size:10px;font-weight:700;'
-        + 'width:18px;height:18px;border-radius:50%;display:flex;align-items:center;'
-        + 'justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5)">'
-        + n + '</div>',
-      iconSize: [18, 18], iconAnchor: [9, 9],
-    });
-    L.marker([tp[1], tp[0]], {icon: icon, interactive: false}).addTo(_mvRouteLayer);
-  });
+  // Launch sites: consecutive jobs flown from one parking spot are grouped
+  // server-side into a single numbered dot (takeoff centroid) carrying its
+  // flight-announcement circle. Hover a dot to see the operating-area radius.
+  try {
+    var url = '/api/launch_sites'
+      + (_mvCurrentFolder ? ('?folder=' + encodeURIComponent(_mvCurrentFolder)) : '');
+    var resp = await apiGet(url);
+    if (seq !== _mvRouteSeq) return;            // superseded by a newer call
+    if (!_mvRouteVisible || !_mvMode) return;   // state may have changed during await
+    _mvRouteLayer = drawLaunchSites(map, resp.sites || []);
+  } catch (e) {
+    console.error('[launch-sites]', e);
+  }
 }
 
 export function toggleMvRoute() {
@@ -411,6 +396,14 @@ export function _mvToggleSel(path) {
     if (chk) chk.checked = true;
   }
   _mvUpdateSelBar();
+}
+
+// Select every given job path that isn't already selected (used by launch-site
+// dot clicks to select all jobs flown from that parking spot).
+export function mvSelectPaths(paths) {
+  (paths || []).forEach(function(p) {
+    if (!_mvSelected.has(p)) _mvToggleSel(p);
+  });
 }
 
 export function mvClearSel() {
