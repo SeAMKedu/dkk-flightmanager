@@ -57,6 +57,38 @@ async function _loadSelectedJobs() {
   return {paths: paths, jobs: jobs};
 }
 
+export async function exportPdf() {
+  var result = await _loadSelectedJobs();
+  if (!result) return;
+  var paths = result.paths;
+
+  var folders = new Set(paths.map(function(p){ var s = p.indexOf('/'); return s >= 0 ? p.slice(0, s) : null; }));
+  var folder = (folders.size === 1) ? Array.from(folders)[0] : null;
+
+  var blob, fileName;
+  if (paths.length === 1) {
+    // Single job -> one-page flight card.
+    var url1 = '/api/jobs/' + paths[0].split('/').map(encodeURIComponent).join('/') + '/report.pdf';
+    var r1 = await fetch(url1);
+    if (!r1.ok) { showError('PDF failed (HTTP ' + r1.status + ')'); return; }
+    blob = await r1.blob();
+    fileName = paths[0].split('/').pop() + '.pdf';
+  } else {
+    // Multiple jobs -> mission packet.
+    var rp = await fetch('/api/report/packet', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({paths: paths, folder: folder})
+    });
+    if (!rp.ok) { showError('PDF packet failed (HTTP ' + rp.status + ')'); return; }
+    blob = await rp.blob();
+    fileName = 'dkk-' + (folder || 'packet') + '.pdf';
+  }
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = fileName; a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function exportKml() {
   var result = await _loadSelectedJobs();
   if (!result) return;

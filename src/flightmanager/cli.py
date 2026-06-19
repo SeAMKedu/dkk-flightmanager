@@ -1003,5 +1003,71 @@ def serve_cmd(
     )
 
 
+@app.command("report")
+def report_cmd(
+    paths: list[str] = typer.Argument(
+        default=None, help="Job paths (folder/name or name) to report on."
+    ),
+    folder: Optional[str] = typer.Option(
+        None, "--folder", help="Report every job in this group folder."
+    ),
+    packet: bool = typer.Option(
+        False, "--packet", help="Mission packet (cover + overview + launch sites + cards)."
+    ),
+    basemap: str = typer.Option("mml", "--basemap", help="Basemap: 'mml' (orthophoto) or 'osm'."),
+    no_cards: bool = typer.Option(
+        False, "--no-cards", help="Packet without the per-job detail cards."
+    ),
+    out: Optional[str] = typer.Option(None, "--out", "-o", help="Output PDF path."),
+    open_pdf: bool = typer.Option(False, "--open", help="Open the PDF after generating."),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """Generate a PDF flight card (single job) or mission packet (multiple jobs).
+
+    A single job path produces a one-page card. Multiple paths, ``--folder``, or
+    ``--packet`` produce a mission packet: cover, overview map, per-launch-site
+    flight-announcement pages, then the per-job cards.
+    """
+    import flightmanager._server_state as _st
+    from flightmanager import report
+    from flightmanager.job_store import scan_jobs
+    from flightmanager.routers.management import _load_job_entry
+
+    cfg = _load_cfg(config_path)
+    _st.config = cfg
+    output_dir = Path(cfg.output.output_dir).resolve()
+
+    targets = list(paths or [])
+    if folder:
+        for group in scan_jobs(output_dir):
+            if group["name"] == folder:
+                targets += [c["path"] for c in group["jobs"]]
+    if not targets:
+        typer.echo("No jobs given. Pass job paths or --folder.", err=True)
+        raise typer.Exit(1)
+
+    entries = [e for p in targets if (e := _load_job_entry(output_dir, p))]
+    if not entries:
+        typer.echo("No matching jobs found.", err=True)
+        raise typer.Exit(1)
+
+    as_packet = packet or folder or len(entries) > 1
+    typer.echo(f"Rendering {'packet' if as_packet else 'card'} for {len(entries)} job(s) …")
+    if as_packet:
+        pdf = report.render_packet(cfg, entries, folder=folder,
+                                   basemap=basemap, include_job_cards=not no_cards)
+        default_name = f"dkk-{folder or 'packet'}.pdf"
+    else:
+        e = entries[0]
+        pdf = report.render_job_report(cfg, e["params"], e["manifest"], basemap=basemap)
+        default_name = f"{e['params'].get('job_name') or 'job'}.pdf"
+
+    out_path = Path(out) if out else (output_dir / default_name)
+    out_path.write_bytes(pdf)
+    typer.echo(f"Wrote {out_path}  ({len(pdf) // 1024} KB)")
+    if open_pdf:
+        typer.launch(str(out_path))
+
+
 if __name__ == "__main__":
     app()

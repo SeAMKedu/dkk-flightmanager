@@ -23,6 +23,8 @@ dependencies = [
     "mcp>=1.0",
     "filelock>=3.12",
     "skyfield>=1.49",
+    "fpdf2>=2.7",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]

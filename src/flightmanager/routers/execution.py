@@ -696,10 +696,10 @@ def _apply_template_settings(cfg, ts: dict) -> None:  # noqa: C901
         cfg.home_safety.home_buffer_m = cfg.flight.adv_min_height_m
 
 
-def _prepare_config(req: PreviewRequest):
+def _prepare_config(req: PreviewRequest, base_config=None):
     import copy
 
-    cfg = copy.deepcopy(_st.config)
+    cfg = copy.deepcopy(base_config if base_config is not None else _st.config)
 
     if req.drone and req.drone in [d.name for d in cfg.drones]:
         cfg.default_drone = req.drone

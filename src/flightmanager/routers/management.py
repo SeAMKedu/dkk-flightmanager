@@ -181,6 +181,77 @@ async def launch_sites(folder: str | None = None):
     return {"sites": [s.to_dict() for s in sites]}
 
 
+# ── PDF report ────────────────────────────────────────────────────────────────
+
+def _load_job_entry(output_dir: Path, path: str) -> dict | None:
+    """Return ``{"params", "manifest"}`` for a job path (manifest reconstructed
+    for CLI-only jobs). None if the job dir is missing."""
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        return None
+    params = load_params(job_dir)
+    manifest: dict = {}
+    mp = job_dir / "manifest.json"
+    if mp.exists():
+        try:
+            manifest = json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = {}
+    if params is None:
+        params = params_from_manifest(name, manifest) if manifest else {}
+    params.setdefault("job_name", name)
+    params["folder"] = folder
+    params["path"] = path
+    return {"params": params, "manifest": manifest}
+
+
+@router.get("/api/jobs/{path:path}/report.pdf")
+async def job_report(path: str, basemap: str = "mml"):
+    """One-page PDF flight card for a job. Registered before ``/api/jobs/{path:path}``."""
+    import asyncio
+
+    from flightmanager import report
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    entry = _load_job_entry(output_dir, path)
+    if entry is None:
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+    pdf = await asyncio.to_thread(
+        report.render_job_report, _st.config, entry["params"], entry["manifest"], basemap=basemap,
+    )
+    fname = (entry["params"].get("job_name") or "job") + ".pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+
+
+@router.post("/api/report/packet")
+async def report_packet(body: dict):
+    """Mission packet PDF for the given job paths.
+
+    Body: ``{paths: [...], folder?: str, basemap?: "mml"|"osm", include_job_cards?: bool}``.
+    """
+    import asyncio
+
+    from flightmanager import report
+
+    paths = body.get("paths") or []
+    if not paths:
+        raise HTTPException(400, detail="No job paths given")
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    entries = [e for p in paths if (e := _load_job_entry(output_dir, p))]
+    if not entries:
+        raise HTTPException(404, detail="No jobs found for the given paths")
+    pdf = await asyncio.to_thread(
+        report.render_packet, _st.config, entries,
+        folder=body.get("folder"),
+        basemap=body.get("basemap", "mml"),
+        include_job_cards=body.get("include_job_cards", True),
+    )
+    name = "dkk-" + (body.get("folder") or "packet")
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{name}.pdf"'})
+
+
 def _resolve_centroids(folder: str | None, paths: str | None):
     """Return ``(centroids, folder_dir)`` for a folder and/or comma-separated paths.
 

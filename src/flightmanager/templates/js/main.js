@@ -23,7 +23,7 @@ import { showFolderOnMap, openMapView, closeMapView, mvOpenJob, mvToggleSkip,
 import { toggleJobSelection, clearSelection, openMergeModal, closeMergeModal, submitMerge } from './multi-select.js';
 import { closeCardMenu, createFolder, closeFolderDialog, submitFolder, showMoveMenu, doMoveJob } from './card-menu.js';
 import { autoSortFolder, closeRouteConfirmModal } from './drag-reorder.js';
-import { bulkMove, bulkDelete, exportKml, openGoogleMaps, routeRename,
+import { bulkMove, bulkDelete, exportKml, exportPdf, openGoogleMaps, routeRename,
          exportRoute, closeExportRouteModal, submitExportRoute,
          unifiedMerge, unifiedBulkMove, unifiedBulkDelete, unifiedClearSel } from './bulk-ops.js';
 import { openBatchDialog, closeBatchDialog, setBatchType, submitBatch } from './batch-modal.js';
@@ -93,7 +93,7 @@ Object.assign(window, {
   autoSortFolder, closeRouteConfirmModal,
 
   // bulk-ops
-  bulkMove, bulkDelete, exportKml, openGoogleMaps, routeRename,
+  bulkMove, bulkDelete, exportKml, exportPdf, openGoogleMaps, routeRename,
   exportRoute, closeExportRouteModal, submitExportRoute,
   unifiedMerge, unifiedBulkMove, unifiedBulkDelete, unifiedClearSel,
 
