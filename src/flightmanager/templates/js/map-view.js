@@ -12,6 +12,7 @@ import { getMvStatColor, getMvStatMode, statModeColorsJobs, clearMgrsLayer, rend
 import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
 import { showForecastBar, destroyForecastBar, setForecastBarShifted } from './forecast-bar.js';
 import { hideCesiumView } from './cesium-view.js';
+import { clearArrowLayer } from './route-planner.js';
 // Circular — only called at runtime:
 import { saveEdit } from './polygon-edit.js';
 import { openJob as _openJobFn } from './job-ops.js';
@@ -59,6 +60,7 @@ export function openMapView(folderFilter) {
   Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
   resetLrs();
   editLayers.clearLayers();
+  clearArrowLayer();
   clearTakeoffForMapView();
   _hideVlos();
 
@@ -99,6 +101,7 @@ export function closeMapView() {
   _mvClearLayers();
   _mvHideDim();
   if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
+  clearArrowLayer();
   _mvSelected.forEach(function(path) {
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
     if (card) card.classList.remove('selected');

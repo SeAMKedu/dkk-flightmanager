@@ -140,6 +140,10 @@ function _drawRoughPreview(polygon4326, angleDeg, stripM, fpAcross) {
   notifyCesiumRouteReady(null, null);
 }
 
+export function clearArrowLayer() {
+  if (_arrowLayer) { map.removeLayer(_arrowLayer); _arrowLayer = null; }
+}
+
 export function _clearRouteLayer() {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
   if (_arrowLayer)    { map.removeLayer(_arrowLayer);    _arrowLayer    = null; }
