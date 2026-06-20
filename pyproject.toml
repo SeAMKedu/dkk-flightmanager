@@ -48,7 +48,8 @@ flightmanager = "flightmanager.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-flightmanager = ["templates/*.html", "templates/*.css", "templates/*.js", "drones.toml"]
+# Recursive globs so nested templates/js/<subfolder>/*.js are packaged too.
+flightmanager = ["templates/**/*.html", "templates/**/*.css", "templates/**/*.js", "drones.toml"]
 
 [tool.ruff]
 src = ["src"]
