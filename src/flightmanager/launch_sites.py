@@ -38,16 +38,22 @@ DEFAULT_MAX_RADIUS_M = 50.0
 class LaunchSite:
     """One parking spot's worth of consecutive jobs, plus its announcement circle."""
 
-    index: int                              # 1-based visit order
+    index: int  # 1-based visit order
     job_paths: list[str] = field(default_factory=list)
     job_names: list[str] = field(default_factory=list)
     sort_orders: list[int | None] = field(default_factory=list)
-    dot_4326: list[float] = field(default_factory=list)            # [lon, lat] takeoff centroid
-    circle_center_4326: list[float] = field(default_factory=list)  # [lon, lat] min-circle centre
+    dot_4326: list[float] = field(default_factory=list)  # [lon, lat] takeoff centroid
+    circle_center_4326: list[float] = field(
+        default_factory=list
+    )  # [lon, lat] min-circle centre
     radius_m: float = 0.0
-    flight_time_min: float | None = None    # Σ member flight times (None if unknown)
-    max_altitude_m: float | None = None     # highest flight altitude over members (Flyk field)
-    members: list[dict] = field(default_factory=list)  # per-job {path, name, route_index, takeoff_4326}
+    flight_time_min: float | None = None  # Σ member flight times (None if unknown)
+    max_altitude_m: float | None = (
+        None  # highest flight altitude over members (Flyk field)
+    )
+    members: list[dict] = field(
+        default_factory=list
+    )  # per-job {path, name, route_index, takeoff_4326}
 
     @property
     def member_count(self) -> int:
@@ -57,7 +63,9 @@ class LaunchSite:
     def first_route_index(self) -> int | None:
         """Route index (1-based) of the site's first job — shown on the map dot so
         it matches the per-job route-index circles rather than a separate count."""
-        idxs = [m["route_index"] for m in self.members if m.get("route_index") is not None]
+        idxs = [
+            m["route_index"] for m in self.members if m.get("route_index") is not None
+        ]
         return min(idxs) if idxs else None
 
     @property
@@ -75,10 +83,14 @@ class LaunchSite:
             "radius_m": round(self.radius_m, 1),
             "diameter_m": round(self.diameter_m, 1),
             "flight_time_min": (
-                round(self.flight_time_min, 1) if self.flight_time_min is not None else None
+                round(self.flight_time_min, 1)
+                if self.flight_time_min is not None
+                else None
             ),
             "max_altitude_m": (
-                round(self.max_altitude_m, 1) if self.max_altitude_m is not None else None
+                round(self.max_altitude_m, 1)
+                if self.max_altitude_m is not None
+                else None
             ),
             "first_route_index": self.first_route_index,
             "members": self.members,
@@ -91,11 +103,13 @@ def _routable(cards: list[dict]) -> list[dict]:
     out = [c for c in cards if c.get("takeoff_point_4326") and not c.get("skipped")]
     # Flight order: explicit sort_order first (ascending), then name. Mirrors the
     # ordering used by the map-view route layer and KML export.
-    out.sort(key=lambda c: (
-        0 if c.get("sort_order") is not None else 1,
-        c.get("sort_order") if c.get("sort_order") is not None else 0,
-        c.get("name") or c.get("job_name") or "",
-    ))
+    out.sort(
+        key=lambda c: (
+            0 if c.get("sort_order") is not None else 1,
+            c.get("sort_order") if c.get("sort_order") is not None else 0,
+            c.get("name") or c.get("job_name") or "",
+        )
+    )
     return out
 
 
@@ -145,7 +159,9 @@ def _build_site(index: int, members: list[dict]) -> LaunchSite:
             "path": c.get("path") or c.get("name") or "",
             "name": c.get("name") or c.get("job_name") or "job",
             # Route index shown on the map is 1-based; stored sort_order is 0-based.
-            "route_index": (c.get("sort_order") + 1) if c.get("sort_order") is not None else None,
+            "route_index": (c.get("sort_order") + 1)
+            if c.get("sort_order") is not None
+            else None,
             "takeoff_4326": c.get("takeoff_point_4326"),
         }
         for c in members

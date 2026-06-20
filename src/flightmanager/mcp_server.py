@@ -49,17 +49,20 @@ def set_config_path(path: str) -> None:
 def _is_integrated() -> bool:
     """True when this module is running inside the flightmanager serve FastAPI process."""
     import flightmanager._server_state as _st
+
     return _st.config is not None
 
 
 def _config():
     """Return the active AppConfig — from server state if integrated, else load locally."""
     import flightmanager._server_state as _st
+
     if _st.config is not None:
         return _st.config
     global _cfg
     if _cfg is None:
         from flightmanager.config import load_config
+
         _cfg = load_config(_cfg_path)
     return _cfg
 
@@ -80,6 +83,7 @@ def _pipeline_guard():
     """
     if _is_integrated():
         import flightmanager._server_state as _st
+
         with _st.job_lock:
             if _st.active_job_id is not None:
                 raise RuntimeError(
@@ -94,6 +98,7 @@ def _pipeline_guard():
     else:
         from flightmanager._pipeline_lock import pipeline_lock
         from filelock import Timeout
+
         try:
             with pipeline_lock(Path(_config().cache.cache_dir), timeout=0):
                 yield
@@ -160,6 +165,7 @@ def _prepare_config(  # noqa: C901
 def jobs_list_resource() -> str:
     """All jobs grouped by folder. Use the list_jobs tool for filtering."""
     from flightmanager.job_store import scan_jobs
+
     groups = scan_jobs(_output_dir())
     return json.dumps(groups, ensure_ascii=False, indent=2)
 
@@ -168,6 +174,7 @@ def jobs_list_resource() -> str:
 def job_detail_resource(path: str) -> str:
     """Full params and manifest for one job. path = 'name' or 'folder/name'."""
     from flightmanager.job_store import resolve_job_dir
+
     folder, name, job_dir = resolve_job_dir(_output_dir(), path)
     if not job_dir.exists():
         return json.dumps({"error": f"Job not found: {path}"})
@@ -176,7 +183,9 @@ def job_detail_resource(path: str) -> str:
         p = job_dir / fname
         if p.exists():
             try:
-                result[fname.replace(".json", "")] = json.loads(p.read_text(encoding="utf-8"))
+                result[fname.replace(".json", "")] = json.loads(
+                    p.read_text(encoding="utf-8")
+                )
             except Exception as e:
                 result[fname.replace(".json", "")] = {"error": str(e)}
     return json.dumps(result, ensure_ascii=False, indent=2)
@@ -188,21 +197,25 @@ def config_resource() -> str:
     cfg = _config()
     drone = cfg.active_drone()
     height = drone.height_from_gsd(cfg.flight.target_gsd_cm)
-    return json.dumps({
-        "default_drone": cfg.default_drone,
-        "active_drone": drone.label,
-        "target_gsd_cm": cfg.flight.target_gsd_cm,
-        "derived_height_m": round(height, 1),
-        "max_height_agl_m": cfg.flight.max_height_agl_m,
-        "overlap_front_pct": cfg.flight.overlap_front_pct,
-        "overlap_side_pct": cfg.flight.overlap_side_pct,
-        "operating_subcategory": cfg.home_safety.operating_subcategory,
-        "home_buffer_m": cfg.home_safety.home_buffer_m,
-        "offset_enabled": cfg.home_safety.offset_enabled,
-        "simplify_mode": cfg.polygon.simplify_mode,
-        "simplify_tolerance_m": cfg.polygon.simplify_tolerance_m,
-        "output_dir": str(_output_dir()),
-    }, ensure_ascii=False, indent=2)
+    return json.dumps(
+        {
+            "default_drone": cfg.default_drone,
+            "active_drone": drone.label,
+            "target_gsd_cm": cfg.flight.target_gsd_cm,
+            "derived_height_m": round(height, 1),
+            "max_height_agl_m": cfg.flight.max_height_agl_m,
+            "overlap_front_pct": cfg.flight.overlap_front_pct,
+            "overlap_side_pct": cfg.flight.overlap_side_pct,
+            "operating_subcategory": cfg.home_safety.operating_subcategory,
+            "home_buffer_m": cfg.home_safety.home_buffer_m,
+            "offset_enabled": cfg.home_safety.offset_enabled,
+            "simplify_mode": cfg.polygon.simplify_mode,
+            "simplify_tolerance_m": cfg.polygon.simplify_tolerance_m,
+            "output_dir": str(_output_dir()),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.resource("drones://list")
@@ -211,15 +224,17 @@ def drones_resource() -> str:
     cfg = _config()
     result = []
     for d in cfg.drones:
-        result.append({
-            "name": d.name,
-            "label": d.label,
-            "is_default": d.name == cfg.default_drone,
-            "gsd_at_50m_cm": round(d.gsd_from_height(50), 2),
-            "gsd_at_80m_cm": round(d.gsd_from_height(80), 2),
-            "gsd_at_100m_cm": round(d.gsd_from_height(100), 2),
-            "battery_minutes": d.battery_minutes,
-        })
+        result.append(
+            {
+                "name": d.name,
+                "label": d.label,
+                "is_default": d.name == cfg.default_drone,
+                "gsd_at_50m_cm": round(d.gsd_from_height(50), 2),
+                "gsd_at_80m_cm": round(d.gsd_from_height(80), 2),
+                "gsd_at_100m_cm": round(d.gsd_from_height(100), 2),
+                "battery_minutes": d.battery_minutes,
+            }
+        )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -250,6 +265,7 @@ def list_jobs(
     subcategory, color, skipped, sort_order, takeoff_point_4326.
     """
     from flightmanager.job_store import scan_jobs
+
     groups = scan_jobs(_output_dir())
 
     all_jobs: list[dict] = []
@@ -281,6 +297,7 @@ def get_job(path: str) -> str:
     Returns JSON with job_params, manifest, and a derived summary.
     """
     from flightmanager.job_store import resolve_job_dir, read_job_card
+
     folder, name, job_dir = resolve_job_dir(_output_dir(), path)
     if not job_dir.exists():
         return json.dumps({"error": f"Job not found: {path}"})
@@ -301,53 +318,59 @@ def get_job(path: str) -> str:
     zones = manifest.get("zones", {})
     zone_hits = zones.get("intersecting_zones", [])
 
-    return json.dumps({
-        "card": card,
-        "inputs": params.get("inputs", {}),       # editable intent
-        "flight": params.get("flight", {}),        # editable intent (requested params)
-        "polygon": params.get("polygon", {}),      # editable intent
-        # Provenance flags come from the card (the single manifest+params merge point).
-        "flight_ready": card.get("flight_ready"),
-        "needs_review": card.get("needs_review"),
-        "review_reasons": manifest.get("review_reasons", []),
-        "geometry": manifest.get("geometry", {}),
-        "stats": {
-            "area_ha": card.get("area_ha"),
-            "original_area_ha": card.get("original_area_ha"),
-            "area_lost_pct": card.get("area_lost_pct"),
-            "vertex_count": card.get("vertex_count"),
-            "drone": card.get("drone"),
-            "drone_label": card.get("drone_label"),
-            "height_m": card.get("height_m"),
-            "subcategory": card.get("subcategory"),
-            "strip_speed_ms": card.get("strip_speed_ms"),
-            "waypoint_mode": card.get("waypoint_mode", False),
-            "adv_min_height_m": card.get("adv_min_height_m"),
-            "adv_max_height_m": card.get("adv_max_height_m"),
-            "flight_time_min": card.get("flight_time_min"),
-            "photo_count": card.get("photo_count"),
-            "battery_count": card.get("battery_count"),
-            "over_one_battery": card.get("over_one_battery", False),
+    return json.dumps(
+        {
+            "card": card,
+            "inputs": params.get("inputs", {}),  # editable intent
+            "flight": params.get("flight", {}),  # editable intent (requested params)
+            "polygon": params.get("polygon", {}),  # editable intent
+            # Provenance flags come from the card (the single manifest+params merge point).
+            "flight_ready": card.get("flight_ready"),
+            "needs_review": card.get("needs_review"),
+            "review_reasons": manifest.get("review_reasons", []),
+            "geometry": manifest.get("geometry", {}),
+            "stats": {
+                "area_ha": card.get("area_ha"),
+                "original_area_ha": card.get("original_area_ha"),
+                "area_lost_pct": card.get("area_lost_pct"),
+                "vertex_count": card.get("vertex_count"),
+                "drone": card.get("drone"),
+                "drone_label": card.get("drone_label"),
+                "height_m": card.get("height_m"),
+                "subcategory": card.get("subcategory"),
+                "strip_speed_ms": card.get("strip_speed_ms"),
+                "waypoint_mode": card.get("waypoint_mode", False),
+                "adv_min_height_m": card.get("adv_min_height_m"),
+                "adv_max_height_m": card.get("adv_max_height_m"),
+                "flight_time_min": card.get("flight_time_min"),
+                "photo_count": card.get("photo_count"),
+                "battery_count": card.get("battery_count"),
+                "over_one_battery": card.get("over_one_battery", False),
+            },
+            "zones": {
+                "checked": zones.get("checked", False),
+                "clear": not zone_hits,
+                "hit_count": len(zone_hits),
+                "hits": [
+                    {
+                        "name": h.get("name", ""),
+                        "type": h.get("zone_type", ""),
+                        "lower_limit_m": h.get("lower_limit_m_agl"),
+                        "upper_limit_m": h.get("upper_limit_m_agl"),
+                    }
+                    for h in zone_hits
+                ],
+            },
+            "output_files": {
+                "kmz": str(next(job_dir.glob("*.kmz"), "")),
+                "manifest": str(job_dir / "manifest.json")
+                if (job_dir / "manifest.json").exists()
+                else "",
+            },
         },
-        "zones": {
-            "checked": zones.get("checked", False),
-            "clear": not zone_hits,
-            "hit_count": len(zone_hits),
-            "hits": [
-                {
-                    "name": h.get("name", ""),
-                    "type": h.get("zone_type", ""),
-                    "lower_limit_m": h.get("lower_limit_m_agl"),
-                    "upper_limit_m": h.get("upper_limit_m_agl"),
-                }
-                for h in zone_hits
-            ],
-        },
-        "output_files": {
-            "kmz": str(next(job_dir.glob("*.kmz"), "")),
-            "manifest": str(job_dir / "manifest.json") if (job_dir / "manifest.json").exists() else "",
-        },
-    }, ensure_ascii=False, indent=2)
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -360,6 +383,7 @@ def job_stats(folder: str | None = None) -> str:
     Returns counts, total survey area, zone hit summary, and folder list.
     """
     from flightmanager.job_store import scan_jobs
+
     groups = scan_jobs(_output_dir())
 
     all_jobs: list[dict] = []
@@ -374,27 +398,33 @@ def job_stats(folder: str | None = None) -> str:
 
     total_flight_time = sum(j.get("flight_time_min") or 0.0 for j in all_jobs)
     total_photos = sum(j.get("photo_count") or 0 for j in all_jobs)
-    total_batteries = sum(j.get("battery_count") or 0 for j in all_jobs if not j.get("untouched"))
+    total_batteries = sum(
+        j.get("battery_count") or 0 for j in all_jobs if not j.get("untouched")
+    )
     total_area_lost = sum(
         (j.get("area_ha") or 0.0) * (j.get("area_lost_pct") or 0.0) / 100
         for j in all_jobs
     )
 
-    return json.dumps({
-        "total_jobs": len(all_jobs),
-        "total_area_ha": round(total_area, 2),
-        "total_area_lost_ha": round(total_area_lost, 2),
-        "total_flight_time_min": round(total_flight_time, 1),
-        "total_flight_time_h": round(total_flight_time / 60, 2),
-        "total_photo_count": total_photos,
-        "total_battery_count": total_batteries,
-        "flight_ready": sum(1 for j in all_jobs if j.get("flight_ready")),
-        "needs_review": sum(1 for j in all_jobs if j.get("needs_review")),
-        "untouched": sum(1 for j in all_jobs if j.get("untouched")),
-        "failed": sum(1 for j in all_jobs if j.get("status") == "failed"),
-        "folders": folder_names,
-        "filter": folder,
-    }, ensure_ascii=False, indent=2)
+    return json.dumps(
+        {
+            "total_jobs": len(all_jobs),
+            "total_area_ha": round(total_area, 2),
+            "total_area_lost_ha": round(total_area_lost, 2),
+            "total_flight_time_min": round(total_flight_time, 1),
+            "total_flight_time_h": round(total_flight_time / 60, 2),
+            "total_photo_count": total_photos,
+            "total_battery_count": total_batteries,
+            "flight_ready": sum(1 for j in all_jobs if j.get("flight_ready")),
+            "needs_review": sum(1 for j in all_jobs if j.get("needs_review")),
+            "untouched": sum(1 for j in all_jobs if j.get("untouched")),
+            "failed": sum(1 for j in all_jobs if j.get("status") == "failed"),
+            "folders": folder_names,
+            "filter": folder,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +442,9 @@ def create_folder(name: str) -> str:
     Returns the folder path on success.
     """
     if "/" in name or "\\" in name or not name.strip():
-        return json.dumps({"error": "Folder name must not contain slashes or be blank."})
+        return json.dumps(
+            {"error": "Folder name must not contain slashes or be blank."}
+        )
     folder_dir = _output_dir() / name
     folder_dir.mkdir(parents=True, exist_ok=True)
     (folder_dir / ".dkk-folder").touch()
@@ -488,7 +520,9 @@ def export_existing_job(  # noqa: C901
 
     params_path = job_dir / "job_params.json"
     if not params_path.exists():
-        return json.dumps({"error": f"No job_params.json found for {path} — cannot re-export."})
+        return json.dumps(
+            {"error": f"No job_params.json found for {path} — cannot re-export."}
+        )
 
     try:
         stored = json.loads(params_path.read_text(encoding="utf-8"))
@@ -501,7 +535,9 @@ def export_existing_job(  # noqa: C901
     custom_polygon = stored.get("custom_polygon_4326")
 
     if not parcel_ids and not property_ids and not custom_polygon:
-        return json.dumps({"error": "Stored job has no parcel IDs or polygon — cannot re-export."})
+        return json.dumps(
+            {"error": "Stored job has no parcel IDs or polygon — cannot re-export."}
+        )
 
     stored_flight = stored.get("flight", {})
     stored_poly = stored.get("polygon", {})
@@ -519,6 +555,7 @@ def export_existing_job(  # noqa: C901
     # Apply stored template settings (overlap, safety, advanced mode)
     if stored_ts:
         from flightmanager.routers.execution import _apply_template_settings
+
         _apply_template_settings(cfg, stored_ts)
 
     if folder:
@@ -529,7 +566,8 @@ def export_existing_job(  # noqa: C901
     try:
         with _pipeline_guard():
             manifest, _route_geojson = export_job(
-                name, cfg,
+                name,
+                cfg,
                 parcel_ids=parcel_ids,
                 property_ids=property_ids,
                 custom_polygon_4326=custom_polygon,
@@ -542,6 +580,7 @@ def export_existing_job(  # noqa: C901
     if color:
         try:
             from flightmanager.job_store import save_params
+
             stored["color"] = color
             save_params(job_dir, stored)
         except Exception:
@@ -561,23 +600,27 @@ def export_existing_job(  # noqa: C901
         if p is not None and Path(p).exists()
     }
 
-    return json.dumps({
-        "job_path": path,
-        "output_dir": str(job_dir),
-        "flight_ready": manifest.get("flight_ready", False),
-        "needs_review": manifest.get("needs_review", False),
-        "review_reasons": manifest.get("review_reasons", []),
-        "survey_area_ha": g.get("final_area_ha"),
-        "area_lost_pct": g.get("area_lost_pct"),
-        "drone_label": f.get("drone_label"),
-        "flight_height_m": f.get("derived_height_m"),
-        "flight_time_min": bat.get("estimated_flight_time_min"),
-        "photo_count": bat.get("estimated_photo_count"),
-        "battery_count": 2 if bat.get("over_one_battery") else (1 if bat else None),
-        "zones_clear": not z.get("intersecting_zones"),
-        "zone_hit_count": len(z.get("intersecting_zones", [])),
-        "output_files": output_files,
-    }, ensure_ascii=False, indent=2)
+    return json.dumps(
+        {
+            "job_path": path,
+            "output_dir": str(job_dir),
+            "flight_ready": manifest.get("flight_ready", False),
+            "needs_review": manifest.get("needs_review", False),
+            "review_reasons": manifest.get("review_reasons", []),
+            "survey_area_ha": g.get("final_area_ha"),
+            "area_lost_pct": g.get("area_lost_pct"),
+            "drone_label": f.get("drone_label"),
+            "flight_height_m": f.get("derived_height_m"),
+            "flight_time_min": bat.get("estimated_flight_time_min"),
+            "photo_count": bat.get("estimated_photo_count"),
+            "battery_count": 2 if bat.get("over_one_battery") else (1 if bat else None),
+            "zones_clear": not z.get("intersecting_zones"),
+            "zone_hit_count": len(z.get("intersecting_zones", [])),
+            "output_files": output_files,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -613,11 +656,17 @@ def create_preview(
     from flightmanager.pipeline import analyse_survey
 
     if not parcel_ids and not property_ids and not bbox:
-        return json.dumps({"error": "Provide at least one of parcel_ids, property_ids, or bbox."})
+        return json.dumps(
+            {"error": "Provide at least one of parcel_ids, property_ids, or bbox."}
+        )
 
     cfg = _prepare_config(
-        drone=drone, height_m=height_m, subcategory=subcategory,
-        offset_m=offset_m, simplify=simplify, keepout=keepout,
+        drone=drone,
+        height_m=height_m,
+        subcategory=subcategory,
+        offset_m=offset_m,
+        simplify=simplify,
+        keepout=keepout,
     )
 
     bbox_3067 = None
@@ -628,7 +677,11 @@ def create_preview(
                 raise ValueError
             bbox_3067 = tuple(parts)
         except ValueError:
-            return json.dumps({"error": "bbox must be 'xmin,ymin,xmax,ymax' (four floats in EPSG:3067)."})
+            return json.dumps(
+                {
+                    "error": "bbox must be 'xmin,ymin,xmax,ymax' (four floats in EPSG:3067)."
+                }
+            )
 
     try:
         with _pipeline_guard():
@@ -645,33 +698,37 @@ def create_preview(
 
     stats = result.get("stats", {})
     zone_hits = result.get("zone_hits", [])
-    return json.dumps({
-        "original_area_ha": stats.get("original_area_ha"),
-        "final_area_ha": stats.get("final_area_ha"),
-        "area_lost_pct": stats.get("area_lost_pct"),
-        "survey_vertex_count": stats.get("survey_vertex_count"),
-        "flight_height_m": stats.get("flight_height_m"),
-        "target_gsd_cm": stats.get("target_gsd_cm"),
-        "drone": stats.get("drone"),
-        "drone_label": stats.get("drone_label"),
-        "home_buffer_m": stats.get("home_buffer_m"),
-        "needs_review": stats.get("needs_review"),
-        "flight_ready": stats.get("flight_ready"),
-        "review_reasons": stats.get("review_reasons", []),
-        "zones_checked": stats.get("zones_checked"),
-        "zones_clear": stats.get("zones_clear"),
-        "zone_count": stats.get("zone_count", 0),
-        "zone_hits": [
-            {
-                "name": h.get("name", ""),
-                "type": h.get("zone_type", ""),
-                "lower_limit_m": h.get("lower_limit_m_agl"),
-                "upper_limit_m": h.get("upper_limit_m_agl"),
-                "context_only": h.get("context_only", False),
-            }
-            for h in zone_hits
-        ],
-    }, ensure_ascii=False, indent=2)
+    return json.dumps(
+        {
+            "original_area_ha": stats.get("original_area_ha"),
+            "final_area_ha": stats.get("final_area_ha"),
+            "area_lost_pct": stats.get("area_lost_pct"),
+            "survey_vertex_count": stats.get("survey_vertex_count"),
+            "flight_height_m": stats.get("flight_height_m"),
+            "target_gsd_cm": stats.get("target_gsd_cm"),
+            "drone": stats.get("drone"),
+            "drone_label": stats.get("drone_label"),
+            "home_buffer_m": stats.get("home_buffer_m"),
+            "needs_review": stats.get("needs_review"),
+            "flight_ready": stats.get("flight_ready"),
+            "review_reasons": stats.get("review_reasons", []),
+            "zones_checked": stats.get("zones_checked"),
+            "zones_clear": stats.get("zones_clear"),
+            "zone_count": stats.get("zone_count", 0),
+            "zone_hits": [
+                {
+                    "name": h.get("name", ""),
+                    "type": h.get("zone_type", ""),
+                    "lower_limit_m": h.get("lower_limit_m_agl"),
+                    "upper_limit_m": h.get("upper_limit_m_agl"),
+                    "context_only": h.get("context_only", False),
+                }
+                for h in zone_hits
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -719,7 +776,9 @@ def create_batch(
         "height_m": height_m,
         "subcategory": subcategory or cfg.home_safety.operating_subcategory,
         "offset_m": cfg.polygon.survey_offset_m,
-        "simplify": "auto" if cfg.polygon.simplify_mode == "auto" else str(cfg.polygon.simplify_tolerance_m),
+        "simplify": "auto"
+        if cfg.polygon.simplify_mode == "auto"
+        else str(cfg.polygon.simplify_tolerance_m),
         "keepout": cfg.home_safety.offset_enabled,
         "preview_radius_m": None,
     }
@@ -727,8 +786,13 @@ def create_batch(
     try:
         with _pipeline_guard():
             results = create_skeleton_jobs(
-                ids, id_type, output_dir, folder, params,
-                progress_cb=None, config=cfg,
+                ids,
+                id_type,
+                output_dir,
+                folder,
+                params,
+                progress_cb=None,
+                config=cfg,
             )
     except RuntimeError as e:
         return json.dumps({"error": str(e)})
@@ -739,13 +803,17 @@ def create_batch(
     skipped = sum(1 for r in results if r["status"] == "skipped")
     failed = sum(1 for r in results if r["status"] == "failed")
 
-    return json.dumps({
-        "created": ok,
-        "skipped": skipped,
-        "failed": failed,
-        "folder": folder,
-        "results": results,
-    }, ensure_ascii=False, indent=2)
+    return json.dumps(
+        {
+            "created": ok,
+            "skipped": skipped,
+            "failed": failed,
+            "folder": folder,
+            "results": results,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -786,13 +854,21 @@ def run_export(
     from flightmanager.pipeline import export_job
 
     if not parcel_ids and not property_ids and not bbox:
-        return json.dumps({"error": "Provide at least one of parcel_ids, property_ids, or bbox."})
+        return json.dumps(
+            {"error": "Provide at least one of parcel_ids, property_ids, or bbox."}
+        )
     if not name or "/" in name or "\\" in name:
-        return json.dumps({"error": "Job name must be non-empty and contain no slashes."})
+        return json.dumps(
+            {"error": "Job name must be non-empty and contain no slashes."}
+        )
 
     cfg = _prepare_config(
-        drone=drone, height_m=height_m, subcategory=subcategory,
-        offset_m=offset_m, simplify=simplify, keepout=keepout,
+        drone=drone,
+        height_m=height_m,
+        subcategory=subcategory,
+        offset_m=offset_m,
+        simplify=simplify,
+        keepout=keepout,
     )
 
     base_output_dir = _output_dir()
@@ -812,12 +888,17 @@ def run_export(
                 raise ValueError
             bbox_3067 = tuple(parts)
         except ValueError:
-            return json.dumps({"error": "bbox must be 'xmin,ymin,xmax,ymax' (four floats in EPSG:3067)."})
+            return json.dumps(
+                {
+                    "error": "bbox must be 'xmin,ymin,xmax,ymax' (four floats in EPSG:3067)."
+                }
+            )
 
     try:
         with _pipeline_guard():
             manifest, _route_geojson = export_job(
-                name, cfg,
+                name,
+                cfg,
                 parcel_ids=parcel_ids or None,
                 property_ids=property_ids or None,
                 bbox_3067=bbox_3067,
@@ -840,7 +921,9 @@ def run_export(
             "subcategory": subcategory or cfg.home_safety.operating_subcategory,
         },
         "polygon": {
-            "offset_m": offset_m if offset_m is not None else cfg.polygon.survey_offset_m,
+            "offset_m": offset_m
+            if offset_m is not None
+            else cfg.polygon.survey_offset_m,
             "simplify": simplify or cfg.polygon.simplify_mode,
             "keepout": keepout,
         },
@@ -850,6 +933,7 @@ def run_export(
     }
     try:
         from flightmanager.job_store import save_params
+
         save_params(job_dir, params_doc)
     except Exception:
         pass
@@ -867,20 +951,24 @@ def run_export(
         if p is not None and Path(p).exists()
     }
 
-    return json.dumps({
-        "job_path": job_rel,
-        "output_dir": str(job_dir),
-        "flight_ready": manifest.get("flight_ready", False),
-        "needs_review": manifest.get("needs_review", False),
-        "review_reasons": manifest.get("review_reasons", []),
-        "survey_area_ha": g.get("final_area_ha"),
-        "area_lost_pct": g.get("area_lost_pct"),
-        "survey_vertex_count": g.get("survey_vertex_count"),
-        "drone_label": f.get("drone_label"),
-        "flight_height_m": f.get("derived_height_m"),
-        "target_gsd_cm": f.get("target_gsd_cm"),
-        "zones_checked": z.get("checked", False),
-        "zones_clear": not z.get("intersecting_zones"),
-        "zone_hit_count": len(z.get("intersecting_zones", [])),
-        "output_files": output_files,
-    }, ensure_ascii=False, indent=2)
+    return json.dumps(
+        {
+            "job_path": job_rel,
+            "output_dir": str(job_dir),
+            "flight_ready": manifest.get("flight_ready", False),
+            "needs_review": manifest.get("needs_review", False),
+            "review_reasons": manifest.get("review_reasons", []),
+            "survey_area_ha": g.get("final_area_ha"),
+            "area_lost_pct": g.get("area_lost_pct"),
+            "survey_vertex_count": g.get("survey_vertex_count"),
+            "drone_label": f.get("drone_label"),
+            "flight_height_m": f.get("derived_height_m"),
+            "target_gsd_cm": f.get("target_gsd_cm"),
+            "zones_checked": z.get("checked", False),
+            "zones_clear": not z.get("intersecting_zones"),
+            "zone_hit_count": len(z.get("intersecting_zones", [])),
+            "output_files": output_files,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )

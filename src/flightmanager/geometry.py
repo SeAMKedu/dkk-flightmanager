@@ -64,9 +64,9 @@ class SurveyGeometry:
     bbox_3067: tuple[float, float, float, float]  # xmin, ymin, xmax, ymax
 
     # Area statistics
-    original_area_ha: float   # merged parcels before any keep-out
-    final_area_ha: float      # after keep-out subtraction
-    area_lost_pct: float      # (original - final) / original × 100
+    original_area_ha: float  # merged parcels before any keep-out
+    final_area_ha: float  # after keep-out subtraction
+    area_lost_pct: float  # (original - final) / original × 100
 
     # Home proximity
     min_dist_to_home_m: float | None  # None when no buildings were supplied
@@ -121,14 +121,18 @@ def process_survey(
     survey = apply_survey_offset(survey, polygon_cfg.survey_offset_m)
 
     # 5. Build keep-out zone
-    keepout = build_keepout(buildings, home_safety, power_line_geoms, power_line_buffer_m)
+    keepout = build_keepout(
+        buildings, home_safety, power_line_geoms, power_line_buffer_m
+    )
 
     # 6. Apply keep-out (or measure distance)
     survey, min_dist, offset_applied = _apply_keepout(survey, keepout, home_safety)
 
     # Fraction of original parcel covered by the flight polygon
     covered = survey.intersection(merged)
-    area_lost_pct = max(0.0, (1.0 - covered.area / merged.area) * 100) if merged.area > 0 else 0.0
+    area_lost_pct = (
+        max(0.0, (1.0 - covered.area / merged.area) * 100) if merged.area > 0 else 0.0
+    )
     log.info("Keep-out: %.1f%% of original parcel area unreachable", area_lost_pct)
 
     if area_lost_pct > home_safety.max_area_loss_pct:
@@ -139,10 +143,15 @@ def process_survey(
         log.warning(reason)
         review_reasons.append(reason)
 
-    if min_dist is not None and not offset_applied and min_dist < home_safety.home_buffer_m:
+    if (
+        min_dist is not None
+        and not offset_applied
+        and min_dist < home_safety.home_buffer_m
+    ):
         log.warning(
             "Survey polygon is %.1f m from nearest home (buffer %.1f m)",
-            min_dist, home_safety.home_buffer_m,
+            min_dist,
+            home_safety.home_buffer_m,
         )
 
     # 7. Ensure validity
@@ -259,7 +268,9 @@ def build_keepout(
 
     res_codes = set(home_safety.residential_kohdeluokka)
     a3_codes = set(home_safety.a3_additional_kohdeluokka)
-    relevant_codes = res_codes | a3_codes if home_safety.operating_subcategory == "A3" else res_codes
+    relevant_codes = (
+        res_codes | a3_codes if home_safety.operating_subcategory == "A3" else res_codes
+    )
     relevant = [b for b in buildings if b.kohdeluokka in relevant_codes]
 
     if relevant:
@@ -267,17 +278,22 @@ def build_keepout(
         zones.extend(b.geometry.buffer(buf) for b in relevant)
         log.info(
             "Keep-out: buffered %d building(s) by %.1f m (subcategory %s)",
-            len(relevant), buf, home_safety.operating_subcategory,
+            len(relevant),
+            buf,
+            home_safety.operating_subcategory,
         )
     else:
-        log.debug("No relevant buildings for keep-out in subcategory %s",
-                  home_safety.operating_subcategory)
+        log.debug(
+            "No relevant buildings for keep-out in subcategory %s",
+            home_safety.operating_subcategory,
+        )
 
     if power_line_geoms and power_line_buffer_m > 0:
         zones.extend(g.buffer(power_line_buffer_m) for g in power_line_geoms)
         log.info(
             "Keep-out: buffered %d overhead power line(s) by %.1f m",
-            len(power_line_geoms), power_line_buffer_m,
+            len(power_line_geoms),
+            power_line_buffer_m,
         )
 
     if not zones:
@@ -301,7 +317,9 @@ def _apply_keepout(
     if home_safety.offset_enabled:
         result = survey.difference(keepout)
         if result.is_empty:
-            log.error("Keep-out completely covers the survey area — flagging for review")
+            log.error(
+                "Keep-out completely covers the survey area — flagging for review"
+            )
             result = survey  # return original so pipeline can flag and surface it
         log.info("Keep-out applied")
         return result, None, True
@@ -329,7 +347,9 @@ def _enforce_policy(
     if isinstance(geom, MultiPolygon):
         sub_geoms = list(geom.geoms)
         if cfg.multipart_policy == "split":
-            log.info("multipart_policy=split: producing %d separate pieces", len(sub_geoms))
+            log.info(
+                "multipart_policy=split: producing %d separate pieces", len(sub_geoms)
+            )
             pieces = sub_geoms
         elif cfg.multipart_policy == "largest":
             largest = max(sub_geoms, key=lambda g: g.area)
@@ -391,8 +411,11 @@ def _enforce_hole_policy(
         # "clip" here is treated the same — the hole is filled rather than routed around,
         # which is acceptable for open-field surveys where holes indicate nearby buildings
         # already handled by the keep-out buffer.
-        log.info("hole_policy=%s: filling %s interior ring(s)", policy,
-                 "MultiPolygon" if isinstance(geom, MultiPolygon) else "Polygon")
+        log.info(
+            "hole_policy=%s: filling %s interior ring(s)",
+            policy,
+            "MultiPolygon" if isinstance(geom, MultiPolygon) else "Polygon",
+        )
         return _fill_holes(geom), []
 
     return geom, []
@@ -404,7 +427,9 @@ def _fix_winding(geom: BaseGeometry) -> BaseGeometry:
     shapely 2.x uses orient_polygons(geom, clockwise=False) for CCW exterior.
     """
     if isinstance(geom, (Polygon, MultiPolygon)):
-        return orient_polygons(geom, exterior_cw=False)  # exterior_cw=False → CCW exterior
+        return orient_polygons(
+            geom, exterior_cw=False
+        )  # exterior_cw=False → CCW exterior
     return geom
 
 
@@ -462,5 +487,3 @@ def suggest_takeoff_point(polygon_3067: "BaseGeometry") -> tuple[float, float]:
         return (c.x, c.y)
 
     return (best_pt.x, best_pt.y)
-
-

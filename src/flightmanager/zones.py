@@ -52,7 +52,9 @@ _to_4326 = Transformer.from_crs("EPSG:3067", "EPSG:4326", always_xy=True)
 
 log = logging.getLogger(__name__)
 
-_API_URL = "https://eservices.traficom.fi/Ilmatilasovellus/api/uas-reservations/json?lang=fi"
+_API_URL = (
+    "https://eservices.traficom.fi/Ilmatilasovellus/api/uas-reservations/json?lang=fi"
+)
 
 # Only these restriction values are flagged; NO_RESTRICTION is informational.
 _FLAGGED_RESTRICTIONS = {"PROHIBITED", "REQ_AUTHORISATION"}
@@ -60,9 +62,9 @@ _FLAGGED_RESTRICTIONS = {"PROHIBITED", "REQ_AUTHORISATION"}
 
 @dataclass
 class AltitudeLimits:
-    upper_limit: float | None       # numeric value
-    upper_uom: str | None           # "M" or "FT"
-    upper_ref: str | None           # "AGL" or "AMSL"
+    upper_limit: float | None  # numeric value
+    upper_uom: str | None  # "M" or "FT"
+    upper_ref: str | None  # "AGL" or "AMSL"
     lower_limit: float | None
     lower_uom: str | None
     lower_ref: str | None
@@ -132,24 +134,28 @@ class AltitudeLimits:
 class ZoneHit:
     identifier: str
     name: str
-    restriction: str       # PROHIBITED | REQ_AUTHORISATION
+    restriction: str  # PROHIBITED | REQ_AUTHORISATION
     reason: list[str]
     altitude: AltitudeLimits
     properties: dict
-    geom: BaseGeometry | None = None  # zone geometry in EPSG:4326, for nesting detection
-    buffer_only: bool = False         # True when zone only hits the search buffer, not the actual survey polygon
+    geom: BaseGeometry | None = (
+        None  # zone geometry in EPSG:4326, for nesting detection
+    )
+    buffer_only: bool = False  # True when zone only hits the search buffer, not the actual survey polygon
 
 
 @dataclass
 class ZoneCheckResult:
     checked: bool
     intersecting_zones: list[ZoneHit] = field(default_factory=list)
-    related_zones: list[ZoneHit] = field(default_factory=list)  # inner/nested zones, shown for context
+    related_zones: list[ZoneHit] = field(
+        default_factory=list
+    )  # inner/nested zones, shown for context
     needs_review: bool = False
     flight_ready: bool = True
     reasons: list[str] = field(default_factory=list)
-    fetched_date: str = ""   # ISO date when zone data was last fetched from Traficom
-    attribution: str = ""    # CC-BY attribution string for manifest
+    fetched_date: str = ""  # ISO date when zone data was last fetched from Traficom
+    attribution: str = ""  # CC-BY attribution string for manifest
 
 
 def check_zones(
@@ -175,8 +181,8 @@ def check_zones(
     features, fetched_date = _get_features(config, cache_dir, session)
     attribution = (
         f"Contains data from Traficom, UAS Geographical Zones, retrieved {fetched_date}."
-        if fetched_date else
-        "Contains data from Traficom, UAS Geographical Zones."
+        if fetched_date
+        else "Contains data from Traficom, UAS Geographical Zones."
     )
     if features is None:
         reason = (
@@ -185,15 +191,21 @@ def check_zones(
         )
         log.warning(reason)
         return ZoneCheckResult(
-            checked=False, needs_review=True, reasons=[reason],
-            fetched_date=fetched_date, attribution=attribution,
+            checked=False,
+            needs_review=True,
+            reasons=[reason],
+            fetched_date=fetched_date,
+            attribution=attribution,
         )
 
     # Expand survey polygon for the search so nearby zones are also reported.
     if config.check_buffer_m > 0:
-        survey_search = shp_transform(_to_4326.transform,
-                                      shp_transform(_to_3067.transform, survey_4326)
-                                      .buffer(config.check_buffer_m))
+        survey_search = shp_transform(
+            _to_4326.transform,
+            shp_transform(_to_3067.transform, survey_4326).buffer(
+                config.check_buffer_m
+            ),
+        )
         log.debug("Zone search buffered by %.0f m", config.check_buffer_m)
     else:
         survey_search = survey_4326
@@ -201,7 +213,9 @@ def check_zones(
     hits = _intersect(survey_search, features)
     if not hits:
         log.info("Zone check passed — no intersecting UAS restrictions found")
-        return ZoneCheckResult(checked=True, fetched_date=fetched_date, attribution=attribution)
+        return ZoneCheckResult(
+            checked=True, fetched_date=fetched_date, attribution=attribution
+        )
 
     # Mark each hit as buffer_only when it doesn't touch the actual survey polygon.
     for h in hits:
@@ -218,7 +232,11 @@ def check_zones(
     reasons = []
     for h in hits:
         alt_note = h.altitude.ceiling_note(flight_height_m)
-        proximity = "is within {:.0f} m of".format(config.check_buffer_m) if h.buffer_only else "intersects"
+        proximity = (
+            "is within {:.0f} m of".format(config.check_buffer_m)
+            if h.buffer_only
+            else "intersects"
+        )
         reason = (
             f"Survey area {proximity} UAS zone '{h.name}' [{h.identifier}] "
             f"restriction={h.restriction} reason={h.reason} — {alt_note}"
@@ -245,7 +263,9 @@ def check_zones(
 
 def _file_date(path: Path) -> str:
     """ISO date (YYYY-MM-DD) of a file's last-modified time."""
-    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime(
+        "%Y-%m-%d"
+    )
 
 
 def _get_features(
@@ -272,7 +292,9 @@ def _get_features(
     if _cache_fresh(cache_path, config.max_age_days):
         log.debug("Zone cache hit: %s", cache_path)
         _ns.record_hit("zones")
-        return _parse_features(json.loads(cache_path.read_text(encoding="utf-8"))), _file_date(cache_path)
+        return _parse_features(
+            json.loads(cache_path.read_text(encoding="utf-8"))
+        ), _file_date(cache_path)
 
     return _fetch_and_cache(cache_path, session)
 
@@ -290,7 +312,8 @@ def _warn_if_stale(path: Path, max_age_days: int) -> None:
         log.warning(
             "UAS zones file is %.0f days old (max %d). "
             "Restrictions may have changed — consider refreshing.",
-            age_days, max_age_days,
+            age_days,
+            max_age_days,
         )
 
 
@@ -313,7 +336,9 @@ def _fetch_and_cache(
         # Fall back to stale cache if present
         if cache_path.exists():
             log.warning("Using stale zone cache as fallback")
-            return _parse_features(json.loads(cache_path.read_text(encoding="utf-8"))), _file_date(cache_path)
+            return _parse_features(
+                json.loads(cache_path.read_text(encoding="utf-8"))
+            ), _file_date(cache_path)
         return None, ""
     finally:
         if owns_session:
@@ -323,7 +348,8 @@ def _fetch_and_cache(
     cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     log.info(
         "UAS zones cached: %d feature(s) → %s",
-        len(data.get("features", [])), cache_path,
+        len(data.get("features", [])),
+        cache_path,
     )
     return _parse_features(data), today
 
@@ -353,8 +379,11 @@ def _intersect(survey: BaseGeometry, features: list[dict]) -> list[ZoneHit]:
         try:
             zone_geom = shape(g.get("horizontalProjection", {}))
         except Exception as exc:
-            log.warning("Skipping malformed zone geometry [%s]: %s",
-                        feat.get("identifier", "?"), exc)
+            log.warning(
+                "Skipping malformed zone geometry [%s]: %s",
+                feat.get("identifier", "?"),
+                exc,
+            )
             continue
 
         if survey.intersects(zone_geom):
@@ -366,15 +395,17 @@ def _intersect(survey: BaseGeometry, features: list[dict]) -> list[ZoneHit]:
                 lower_uom=g.get("uomDimensions"),
                 lower_ref=g.get("lowerVerticalReference"),
             )
-            hits.append(ZoneHit(
-                identifier=feat.get("identifier", ""),
-                name=feat.get("name", "unknown"),
-                restriction=restriction,
-                reason=feat.get("reason", []),
-                altitude=altitude,
-                properties=feat,
-                geom=zone_geom,
-            ))
+            hits.append(
+                ZoneHit(
+                    identifier=feat.get("identifier", ""),
+                    name=feat.get("name", "unknown"),
+                    restriction=restriction,
+                    reason=feat.get("reason", []),
+                    altitude=altitude,
+                    properties=feat,
+                    geom=zone_geom,
+                )
+            )
 
     return hits
 
@@ -417,14 +448,16 @@ def _find_related(hits: list[ZoneHit], all_features: list[dict]) -> list[ZoneHit
             lower_uom=g.get("uomDimensions"),
             lower_ref=g.get("lowerVerticalReference"),
         )
-        related.append(ZoneHit(
-            identifier=ident,
-            name=feat.get("name", "unknown"),
-            restriction=feat.get("restriction", ""),
-            reason=feat.get("reason", []),
-            altitude=altitude,
-            properties=feat,
-            geom=zone_geom,
-        ))
+        related.append(
+            ZoneHit(
+                identifier=ident,
+                name=feat.get("name", "unknown"),
+                restriction=feat.get("restriction", ""),
+                reason=feat.get("reason", []),
+                altitude=altitude,
+                properties=feat,
+                geom=zone_geom,
+            )
+        )
 
     return related

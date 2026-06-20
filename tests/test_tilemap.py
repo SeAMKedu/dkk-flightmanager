@@ -13,10 +13,11 @@ def test_pad_bbox_grows_outward():
 
 def test_fit_bbox_matches_aspect():
     import math
+
     b = (22.0, 62.0, 22.1, 62.05)
-    fitted = tilemap.fit_bbox(b, 2.0)   # want mercator width = 2x height
-    wx = math.radians(fitted[2] - fitted[0])                          # mercator-x span
-    hy = tilemap._merc_y(fitted[3]) - tilemap._merc_y(fitted[1])      # mercator-y span
+    fitted = tilemap.fit_bbox(b, 2.0)  # want mercator width = 2x height
+    wx = math.radians(fitted[2] - fitted[0])  # mercator-x span
+    hy = tilemap._merc_y(fitted[3]) - tilemap._merc_y(fitted[1])  # mercator-y span
     assert abs((wx / hy) - 2.0) < 1e-6
     # only grows
     assert fitted[0] <= b[0] and fitted[2] >= b[2]
@@ -25,7 +26,8 @@ def test_fit_bbox_matches_aspect():
 def test_fit_bbox_wide_field_stays_landscape():
     # A wide, thin field must not blow up the height (the lon-deg vs merc-rad bug).
     import math
-    b = (22.0, 62.000, 22.08, 62.004)   # ~4 km wide, ~0.4 km tall
+
+    b = (22.0, 62.000, 22.08, 62.004)  # ~4 km wide, ~0.4 km tall
     fitted = tilemap.fit_bbox(b, 1.58)
     wx = math.radians(fitted[2] - fitted[0])
     hy = tilemap._merc_y(fitted[3]) - tilemap._merc_y(fitted[1])
@@ -40,12 +42,12 @@ def test_world_px_increasing_east_and_south():
     x_e, _ = tilemap._lonlat_to_world_px(23.0, 62.0, z)
     _, y_n = tilemap._lonlat_to_world_px(22.0, 63.0, z)
     _, y_s = tilemap._lonlat_to_world_px(22.0, 62.0, z)
-    assert x_e > x_w          # east -> larger x
-    assert y_s > y_n          # south -> larger y
+    assert x_e > x_w  # east -> larger x
+    assert y_s > y_n  # south -> larger y
 
 
 def test_choose_zoom_clamped():
-    b = (22.0, 62.0, 22.001, 62.001)   # tiny bbox -> wants a high zoom
+    b = (22.0, 62.0, 22.001, 62.001)  # tiny bbox -> wants a high zoom
     assert tilemap._choose_zoom(b, 1000, max_zoom=15) == 15
 
 
@@ -56,6 +58,7 @@ def test_basemap_transform_maps_corners():
     left, top = tilemap._lonlat_to_world_px(22.0, 62.05, z)
     right, bottom = tilemap._lonlat_to_world_px(22.1, 62.0, z)
     from PIL import Image
+
     img = Image.new("RGB", (int(right - left), int(bottom - top)))
     bm = tilemap.Basemap(image=img, attribution="x", _ox=left, _oy=top, _z=z)
     tlx, tly = bm.lonlat_to_px(22.0, 62.05)

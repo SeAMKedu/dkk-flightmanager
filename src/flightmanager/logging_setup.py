@@ -39,9 +39,10 @@ def setup_logging(
     # Console handler: attach exactly once for the process lifetime. Adding one
     # per job is what produced duplicated console lines (same message/timestamp
     # repeated once per accumulated handler).
-    if not any(isinstance(h, logging.StreamHandler)
-               and not isinstance(h, logging.FileHandler)
-               for h in logger.handlers):
+    if not any(
+        isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+        for h in logger.handlers
+    ):
         console = logging.StreamHandler(sys.stderr)
         console.setFormatter(formatter)
         logger.addHandler(console)

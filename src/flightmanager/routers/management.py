@@ -82,8 +82,8 @@ async def job_events():
 
 class PolygonOpRequest(BaseModel):
     operation: str  # "bridge" | "subtract"
-    polygon: dict   # GeoJSON Polygon or MultiPolygon (current survey)
-    points: list    # 3 or 4 [lng, lat] coordinates
+    polygon: dict  # GeoJSON Polygon or MultiPolygon (current survey)
+    points: list  # 3 or 4 [lng, lat] coordinates
 
 
 class SplitRequest(BaseModel):
@@ -123,37 +123,39 @@ async def jobs_geojson(folder: str | None = None):
         if folder is not None and group["name"] != folder:
             continue
         for card in group["jobs"]:
-            features.append({
-                "type": "Feature",
-                "geometry": card.get("_geometry"),
-                "properties": {
-                    "path":              card["path"],
-                    "name":              card["name"],
-                    "folder":            card["folder"],
-                    "color":             card["color"],
-                    "untouched":         card["untouched"],
-                    "flight_ready":      card.get("flight_ready"),
-                    "needs_review":      card.get("needs_review"),
-                    "area_ha":           card.get("area_ha"),
-                    "original_area_ha":  card.get("original_area_ha"),
-                    "area_lost_pct":     card.get("area_lost_pct"),
-                    "subcategory":       card.get("subcategory"),
-                    "height_m":          card.get("height_m"),
-                    "waypoint_mode":     card.get("waypoint_mode", False),
-                    "adv_min_height_m":  card.get("adv_min_height_m"),
-                    "adv_max_height_m":  card.get("adv_max_height_m"),
-                    "battery_count":     card.get("battery_count"),
-                    "strip_speed_ms":    card.get("strip_speed_ms"),
-                    "flight_time_min":   card.get("flight_time_min"),
-                    "photo_count":       card.get("photo_count"),
-                    "over_one_battery":  card.get("over_one_battery"),
-                    "drone":             card.get("drone"),
-                    "status":            card.get("status", "ok"),
-                    "sort_order":        card.get("sort_order"),
-                    "takeoff_point_4326": card.get("takeoff_point_4326"),
-                    "skipped":           card.get("skipped", False),
-                },
-            })
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": card.get("_geometry"),
+                    "properties": {
+                        "path": card["path"],
+                        "name": card["name"],
+                        "folder": card["folder"],
+                        "color": card["color"],
+                        "untouched": card["untouched"],
+                        "flight_ready": card.get("flight_ready"),
+                        "needs_review": card.get("needs_review"),
+                        "area_ha": card.get("area_ha"),
+                        "original_area_ha": card.get("original_area_ha"),
+                        "area_lost_pct": card.get("area_lost_pct"),
+                        "subcategory": card.get("subcategory"),
+                        "height_m": card.get("height_m"),
+                        "waypoint_mode": card.get("waypoint_mode", False),
+                        "adv_min_height_m": card.get("adv_min_height_m"),
+                        "adv_max_height_m": card.get("adv_max_height_m"),
+                        "battery_count": card.get("battery_count"),
+                        "strip_speed_ms": card.get("strip_speed_ms"),
+                        "flight_time_min": card.get("flight_time_min"),
+                        "photo_count": card.get("photo_count"),
+                        "over_one_battery": card.get("over_one_battery"),
+                        "drone": card.get("drone"),
+                        "status": card.get("status", "ok"),
+                        "sort_order": card.get("sort_order"),
+                        "takeoff_point_4326": card.get("takeoff_point_4326"),
+                        "skipped": card.get("skipped", False),
+                    },
+                }
+            )
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -182,6 +184,7 @@ async def launch_sites(folder: str | None = None):
 
 
 # ── PDF report ────────────────────────────────────────────────────────────────
+
 
 def _load_job_entry(output_dir: Path, path: str) -> dict | None:
     """Return ``{"params", "manifest"}`` for a job path (manifest reconstructed
@@ -217,11 +220,18 @@ async def job_report(path: str, basemap: str = "mml"):
     if entry is None:
         raise HTTPException(404, detail=f"Job '{path}' not found")
     pdf = await asyncio.to_thread(
-        report.render_job_report, _st.config, entry["params"], entry["manifest"], basemap=basemap,
+        report.render_job_report,
+        _st.config,
+        entry["params"],
+        entry["manifest"],
+        basemap=basemap,
     )
     fname = (entry["params"].get("job_name") or "job") + ".pdf"
-    return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{fname}"'},
+    )
 
 
 # Async report jobs: { job_id: {"queue", "result": bytes|None, "filename", "error"} }.
@@ -255,24 +265,41 @@ async def report_start(body: dict):
     folder = body.get("folder")
     job_id = uuid.uuid4().hex
     queue: asyncio.Queue = asyncio.Queue()
-    _report_jobs[job_id] = {"queue": queue, "result": None, "error": None, "filename": None}
+    _report_jobs[job_id] = {
+        "queue": queue,
+        "result": None,
+        "error": None,
+        "filename": None,
+    }
     loop = asyncio.get_running_loop()
 
     def progress_cb(stage, msg, pct):
-        loop.call_soon_threadsafe(queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct})
+        loop.call_soon_threadsafe(
+            queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct}
+        )
 
     async def run():
         try:
             if len(entries) == 1 and not folder:
                 pdf = await asyncio.to_thread(
-                    report.render_job_report, _st.config, entries[0]["params"],
-                    entries[0]["manifest"], basemap=basemap, progress_cb=progress_cb)
+                    report.render_job_report,
+                    _st.config,
+                    entries[0]["params"],
+                    entries[0]["manifest"],
+                    basemap=basemap,
+                    progress_cb=progress_cb,
+                )
                 fname = (entries[0]["params"].get("job_name") or "job") + ".pdf"
             else:
                 pdf = await asyncio.to_thread(
-                    report.render_packet, _st.config, entries, folder=folder,
-                    basemap=basemap, include_job_cards=body.get("include_job_cards", True),
-                    progress_cb=progress_cb)
+                    report.render_packet,
+                    _st.config,
+                    entries,
+                    folder=folder,
+                    basemap=basemap,
+                    include_job_cards=body.get("include_job_cards", True),
+                    progress_cb=progress_cb,
+                )
                 fname = (folder or "jobs") + ".pdf"
             _report_jobs[job_id]["result"] = pdf
             _report_jobs[job_id]["filename"] = fname
@@ -307,8 +334,11 @@ async def report_progress(job_id: str):
         except asyncio.CancelledError:
             pass
 
-    return SSEResponse(generate(), media_type="text/event-stream",
-                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return SSEResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/api/report/result/{job_id}")
@@ -321,8 +351,11 @@ async def report_result(job_id: str):
         raise HTTPException(500, detail=entry["error"])
     if entry.get("result") is None:
         raise HTTPException(409, detail="Report not finished")
-    return Response(content=entry["result"], media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{entry["filename"]}"'})
+    return Response(
+        content=entry["result"],
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{entry["filename"]}"'},
+    )
 
 
 def _resolve_centroids(folder: str | None, paths: str | None):
@@ -403,10 +436,15 @@ async def refresh_scan(folder: str | None = None):
                 continue
             status = refresh_status(manifest, _st.config.cache, PIPELINE_VERSION)
             if status["needs_refresh"]:
-                stale.append({
-                    "path": card["path"], "name": card["name"], "folder": card["folder"],
-                    "reasons": status["reasons"], "missing_tiles": status["missing_tiles"],
-                })
+                stale.append(
+                    {
+                        "path": card["path"],
+                        "name": card["name"],
+                        "folder": card["folder"],
+                        "reasons": status["reasons"],
+                        "missing_tiles": status["missing_tiles"],
+                    }
+                )
     return {"pipeline_version": PIPELINE_VERSION, "stale": stale}
 
 
@@ -421,7 +459,9 @@ async def mgrs_tiles(folder: str | None = None, paths: str | None = None):
 
     centroids, _ = _resolve_centroids(folder, paths)
     return await asyncio.to_thread(
-        sat.tiles_with_neighbors, centroids, _st.config.satellites,
+        sat.tiles_with_neighbors,
+        centroids,
+        _st.config.satellites,
     )
 
 
@@ -445,7 +485,8 @@ async def export_kml(req: ExportKmlRequest):
             if manifest_path.exists():
                 try:
                     params = params_from_manifest(
-                        job_dir.name, json.loads(manifest_path.read_text(encoding="utf-8"))
+                        job_dir.name,
+                        json.loads(manifest_path.read_text(encoding="utf-8")),
                     )
                 except Exception:
                     continue
@@ -454,11 +495,13 @@ async def export_kml(req: ExportKmlRequest):
         params.setdefault("job_name", job_dir.name)
         jobs.append(params)
 
-    jobs.sort(key=lambda p: (
-        0 if p.get("sort_order") is not None else 1,
-        p.get("sort_order") or 0,
-        p.get("job_name") or "",
-    ))
+    jobs.sort(
+        key=lambda p: (
+            0 if p.get("sort_order") is not None else 1,
+            p.get("sort_order") or 0,
+            p.get("job_name") or "",
+        )
+    )
     kml = build_jobs_kml(jobs)
     return Response(content=kml, media_type="application/vnd.google-earth.kml+xml")
 
@@ -545,7 +588,9 @@ async def get_job(path: str):
     return {"params": params, "cache_stale": stale, "folder": folder}
 
 
-def _rename_job(job_dir: Path, old_name: str, new_name: str, folder: str | None) -> dict:  # noqa: C901
+def _rename_job(  # noqa: C901
+    job_dir: Path, old_name: str, new_name: str, folder: str | None
+) -> dict:
     """Rename a job directory and all name-prefixed files inside it.
 
     Applies an atomic rename with rollback: file renames are attempted first;
@@ -555,12 +600,14 @@ def _rename_job(job_dir: Path, old_name: str, new_name: str, folder: str | None)
     """
     new_dir = job_dir.parent / new_name
     if new_dir.exists():
-        raise HTTPException(409, detail=f"Job '{new_name}' already exists in this location")
+        raise HTTPException(
+            409, detail=f"Job '{new_name}' already exists in this location"
+        )
 
     renames: list[tuple[Path, Path]] = []
     for f in job_dir.iterdir():
         if f.name.startswith(f"{old_name}.") or f.name.startswith(f"{old_name}_"):
-            suffix = f.name[len(old_name):]
+            suffix = f.name[len(old_name) :]
             renames.append((f, job_dir / f"{new_name}{suffix}"))
 
     done: list[tuple[Path, Path]] = []
@@ -617,7 +664,9 @@ async def update_job(path: str, body: dict):
         raise HTTPException(404, detail=f"Job '{path}' not found")
 
     # Simple field update (color, sort_order, skipped — no rename)
-    if "new_name" not in body and ("color" in body or "sort_order" in body or "skipped" in body):
+    if "new_name" not in body and (
+        "color" in body or "sort_order" in body or "skipped" in body
+    ):
         data = load_params(job_dir)
         if data is not None:
             try:
@@ -631,7 +680,12 @@ async def update_job(path: str, body: dict):
                 save_params(job_dir, data)
             except Exception as exc:
                 raise HTTPException(500, detail=f"Could not update job: {exc}")
-        return {"path": path, "color": body.get("color"), "sort_order": body.get("sort_order"), "skipped": body.get("skipped")}
+        return {
+            "path": path,
+            "color": body.get("color"),
+            "sort_order": body.get("sort_order"),
+            "skipped": body.get("skipped"),
+        }
 
     # Rename
     new_name: str = body.get("new_name", "").strip()
@@ -828,13 +882,18 @@ def _build_operation_polygon(pts: list):
             poly = make_valid(poly)
         return poly
     if len(pts) == 4:
-        for order in [[pts[0], pts[1], pts[2], pts[3]], [pts[0], pts[1], pts[3], pts[2]]]:
+        for order in [
+            [pts[0], pts[1], pts[2], pts[3]],
+            [pts[0], pts[1], pts[3], pts[2]],
+        ]:
             candidate = ShapelyPolygon(order)
             if not candidate.is_valid:
                 candidate = make_valid(candidate)
             if candidate.is_valid and not candidate.is_empty and candidate.area > 0:
                 return candidate
-        raise HTTPException(400, detail="Selected points do not form a valid quadrilateral")
+        raise HTTPException(
+            400, detail="Selected points do not form a valid quadrilateral"
+        )
     raise HTTPException(400, detail=f"Expected 3 or 4 points, got {len(pts)}")
 
 
@@ -851,7 +910,11 @@ async def polygon_op(req: PolygonOpRequest):
         if not quad.is_valid or quad.is_empty:
             raise HTTPException(400, detail="Selected points do not form a valid shape")
 
-        result = unary_union([survey, quad]) if req.operation == "bridge" else survey.difference(quad)
+        result = (
+            unary_union([survey, quad])
+            if req.operation == "bridge"
+            else survey.difference(quad)
+        )
 
         if result is None or result.is_empty:
             raise HTTPException(400, detail="Operation produced empty geometry")
@@ -881,16 +944,22 @@ def _unique_ids(id_lists: list[list[str]]) -> list[str]:
 
 def _merge_by_ids(all_params: list[tuple[Path, dict]], new_name: str) -> dict:
     """Combine parcel/property IDs from all sources into one skeleton job."""
-    parcel_ids = _unique_ids([p.get("inputs", {}).get("parcel_ids") or [] for _, p in all_params])
-    property_ids = _unique_ids([p.get("inputs", {}).get("property_ids") or [] for _, p in all_params])
+    parcel_ids = _unique_ids(
+        [p.get("inputs", {}).get("parcel_ids") or [] for _, p in all_params]
+    )
+    property_ids = _unique_ids(
+        [p.get("inputs", {}).get("property_ids") or [] for _, p in all_params]
+    )
     first = all_params[0][1]
     return {
         "job_name": new_name,
         "saved_at": None,
-        "inputs":   {"parcel_ids": parcel_ids, "property_ids": property_ids},
-        "flight":   first.get("flight", {}),
-        "polygon":  first.get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
-        "safety":   first.get("safety",  {"preview_radius_m": None}),
+        "inputs": {"parcel_ids": parcel_ids, "property_ids": property_ids},
+        "flight": first.get("flight", {}),
+        "polygon": first.get(
+            "polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}
+        ),
+        "safety": first.get("safety", {"preview_radius_m": None}),
         "custom_polygon_4326": None,
         "batch_created": False,
         "color": None,
@@ -918,7 +987,9 @@ def _merge_by_polygon(all_params: list[tuple[Path, dict]], new_name: str) -> dic
                 geom = make_valid(geom)
             polys.append(geom)
         except Exception as exc:
-            raise HTTPException(400, detail=f"Invalid geometry for '{job_dir.name}': {exc}")
+            raise HTTPException(
+                400, detail=f"Invalid geometry for '{job_dir.name}': {exc}"
+            )
 
     merged = unary_union(polys)
     if not merged.is_valid:
@@ -926,16 +997,22 @@ def _merge_by_polygon(all_params: list[tuple[Path, dict]], new_name: str) -> dic
     if merged.is_empty:
         raise HTTPException(400, detail="Union produced empty geometry")
 
-    parcel_ids = _unique_ids([p.get("inputs", {}).get("parcel_ids") or [] for _, p in all_params])
-    property_ids = _unique_ids([p.get("inputs", {}).get("property_ids") or [] for _, p in all_params])
+    parcel_ids = _unique_ids(
+        [p.get("inputs", {}).get("parcel_ids") or [] for _, p in all_params]
+    )
+    property_ids = _unique_ids(
+        [p.get("inputs", {}).get("property_ids") or [] for _, p in all_params]
+    )
     first = all_params[0][1]
     return {
         "job_name": new_name,
         "saved_at": None,
-        "inputs":  {"parcel_ids": parcel_ids, "property_ids": property_ids},
-        "flight":  first.get("flight", {}),
-        "polygon": first.get("polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}),
-        "safety":  first.get("safety",  {"preview_radius_m": None}),
+        "inputs": {"parcel_ids": parcel_ids, "property_ids": property_ids},
+        "flight": first.get("flight", {}),
+        "polygon": first.get(
+            "polygon", {"offset_m": 0.0, "simplify": "auto", "keepout": True}
+        ),
+        "safety": first.get("safety", {"preview_radius_m": None}),
         "custom_polygon_4326": dict(mapping(merged)),
         "batch_created": False,
         "color": None,
@@ -987,7 +1064,9 @@ async def merge_jobs(req: MergeRequest):
     def _is_id_job(job_dir: Path, p: dict) -> bool:
         inputs = p.get("inputs", {})
         has_ids = bool(inputs.get("parcel_ids") or inputs.get("property_ids"))
-        return has_ids and p.get("batch_created", False) and not any(job_dir.glob("*.kmz"))
+        return (
+            has_ids and p.get("batch_created", False) and not any(job_dir.glob("*.kmz"))
+        )
 
     if all(_is_id_job(d, p) for d, p in all_params):
         merged_params = _merge_by_ids(all_params, new_name)
@@ -1067,7 +1146,9 @@ async def export_route(body: dict):
     try:
         dest_path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise HTTPException(400, detail=f"Cannot create destination folder: {exc}") from exc
+        raise HTTPException(
+            400, detail=f"Cannot create destination folder: {exc}"
+        ) from exc
 
     output_dir = Path(_st.config.output.output_dir).resolve()
     groups = scan_jobs(output_dir)

@@ -51,7 +51,9 @@ def test_handlers_do_not_accumulate_across_distinct_jobs(tmp_path, clean_logger)
 
 def test_previous_file_handler_is_closed_on_switch(tmp_path, clean_logger):
     setup_logging("job-a", tmp_path)
-    first_fh = next(h for h in clean_logger.handlers if isinstance(h, logging.FileHandler))
+    first_fh = next(
+        h for h in clean_logger.handlers if isinstance(h, logging.FileHandler)
+    )
     setup_logging("job-b", tmp_path)
     # The old handler must be detached and its descriptor closed.
     assert first_fh not in clean_logger.handlers

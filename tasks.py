@@ -11,6 +11,12 @@ def lint(c):
 
 
 @task
+def fmt(c):
+    """Ruff: check formatting (no changes). Use `ruff format .` to apply."""
+    c.run("ruff format --check .")
+
+
+@task
 def cc(c):
     """Radon: cyclomatic complexity — show grade C and worse."""
     c.run(f"radon cc {SRC} -s -n C")
@@ -32,6 +38,6 @@ def loc(c):
         print(f"{metrics['loc']:>5}  {path}")
 
 
-@task(pre=[lint, cc, mi, loc])
+@task(pre=[lint, fmt, cc, mi, loc])
 def check(c):
     """Run all checks."""

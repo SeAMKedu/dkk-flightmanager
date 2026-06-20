@@ -20,7 +20,9 @@ def _lat(dy_m: float) -> float:
     return LAT0 + dy_m / _M_PER_DEG_LAT
 
 
-def _card(name: str, sort_order, dx_m: float, dy_m: float, *, half=10.0, **extra) -> dict:
+def _card(
+    name: str, sort_order, dx_m: float, dy_m: float, *, half=10.0, **extra
+) -> dict:
     """A job card whose takeoff + square polygon sit at (dx_m, dy_m) from origin."""
     lon, lat = _lon(dx_m), _lat(dy_m)
     ring = [
@@ -31,7 +33,9 @@ def _card(name: str, sort_order, dx_m: float, dy_m: float, *, half=10.0, **extra
         [_lon(dx_m - half), _lat(dy_m - half)],
     ]
     card = {
-        "path": name, "name": name, "sort_order": sort_order,
+        "path": name,
+        "name": name,
+        "sort_order": sort_order,
         "takeoff_point_4326": [lon, lat],
         "_geometry": {"type": "Polygon", "coordinates": [ring]},
         "flight_time_min": 5.0,
@@ -45,7 +49,7 @@ def test_close_jobs_form_one_site_far_job_splits():
         _card("a", 0, 0, 0),
         _card("b", 1, 20, 0),
         _card("c", 2, 0, 25),
-        _card("d", 3, 300, 0),   # ~300 m away → new site
+        _card("d", 3, 300, 0),  # ~300 m away → new site
     ]
     sites = cluster_jobs(cards)
     assert [s.member_count for s in sites] == [3, 1]
@@ -61,7 +65,7 @@ def test_later_job_near_earlier_site_is_its_own_site():
         _card("b", 1, 15, 0),
         _card("c", 2, 400, 0),
         _card("d", 3, 415, 0),
-        _card("e", 4, 5, 10),     # physically near a/b but visited last → own site
+        _card("e", 4, 5, 10),  # physically near a/b but visited last → own site
     ]
     sites = cluster_jobs(cards)
     assert [s.member_count for s in sites] == [2, 2, 1]
@@ -82,8 +86,13 @@ def test_skipped_and_takeoffless_jobs_excluded():
     cards = [
         _card("a", 0, 0, 0),
         _card("b", 1, 10, 0, skipped=True),
-        {"path": "c", "name": "c", "sort_order": 2, "takeoff_point_4326": None,
-         "_geometry": None},
+        {
+            "path": "c",
+            "name": "c",
+            "sort_order": 2,
+            "takeoff_point_4326": None,
+            "_geometry": None,
+        },
     ]
     sites = cluster_jobs(cards)
     assert len(sites) == 1
@@ -96,7 +105,7 @@ def test_site_carries_circle_and_summed_time():
     s = sites[0]
     assert s.radius_m > 0
     assert s.diameter_m == 2 * s.radius_m
-    assert s.flight_time_min == 10.0          # 5 + 5
+    assert s.flight_time_min == 10.0  # 5 + 5
     assert len(s.circle_center_4326) == 2
     assert len(s.dot_4326) == 2
 

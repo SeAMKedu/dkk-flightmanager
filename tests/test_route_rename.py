@@ -24,7 +24,10 @@ def is_routed(params: dict) -> bool:
     JS: j.params.sort_order != null || j.params.takeoff_point_4326 != null
     Skeleton jobs have neither and are excluded from the rename sequence.
     """
-    return params.get("sort_order") is not None or params.get("takeoff_point_4326") is not None
+    return (
+        params.get("sort_order") is not None
+        or params.get("takeoff_point_4326") is not None
+    )
 
 
 def route_name(date_str: str, index: int, total: int, original_name: str) -> str:
@@ -36,6 +39,7 @@ def route_name(date_str: str, index: int, total: int, original_name: str) -> str
 
 
 # ── strip_prefix ──────────────────────────────────────────────────────────────
+
 
 class TestStripPrefix:
     def test_strips_two_digit_index(self):
@@ -71,6 +75,7 @@ class TestStripPrefix:
 
 
 # ── route_name ────────────────────────────────────────────────────────────────
+
 
 class TestRouteName:
     def test_basic_two_digit(self):
@@ -108,12 +113,15 @@ class TestRouteName:
 
 # ── is_routed (skeleton filter) ───────────────────────────────────────────────
 
+
 class TestIsRouted:
     def test_sort_order_alone_is_routed(self):
         assert is_routed({"sort_order": 1, "takeoff_point_4326": None}) is True
 
     def test_takeoff_point_alone_is_routed(self):
-        assert is_routed({"sort_order": None, "takeoff_point_4326": [25.0, 60.0]}) is True
+        assert (
+            is_routed({"sort_order": None, "takeoff_point_4326": [25.0, 60.0]}) is True
+        )
 
     def test_both_present_is_routed(self):
         assert is_routed({"sort_order": 0, "takeoff_point_4326": [25.0, 60.0]}) is True
@@ -132,13 +140,25 @@ class TestIsRouted:
     def test_mixed_selection_only_routed_jobs_renamed(self):
         # Simulate routeRename filtering a mixed selection.
         jobs = [
-            {"name": "field-A", "params": {"sort_order": 1, "takeoff_point_4326": [25.0, 60.0]}},
-            {"name": "skeleton-1", "params": {"sort_order": None, "takeoff_point_4326": None}},
-            {"name": "field-B", "params": {"sort_order": 2, "takeoff_point_4326": [25.1, 60.1]}},
+            {
+                "name": "field-A",
+                "params": {"sort_order": 1, "takeoff_point_4326": [25.0, 60.0]},
+            },
+            {
+                "name": "skeleton-1",
+                "params": {"sort_order": None, "takeoff_point_4326": None},
+            },
+            {
+                "name": "field-B",
+                "params": {"sort_order": 2, "takeoff_point_4326": [25.1, 60.1]},
+            },
             {"name": "skeleton-2", "params": {}},
         ]
         routed = [j for j in jobs if is_routed(j["params"])]
         assert [j["name"] for j in routed] == ["field-A", "field-B"]
         # Index sequence is 1..n of routed jobs only
-        names = [route_name("20260608", i + 1, len(routed), j["name"]) for i, j in enumerate(routed)]
+        names = [
+            route_name("20260608", i + 1, len(routed), j["name"])
+            for i, j in enumerate(routed)
+        ]
         assert names == ["20260608-01-field-A", "20260608-02-field-B"]

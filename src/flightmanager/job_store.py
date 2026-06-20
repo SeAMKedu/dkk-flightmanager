@@ -74,7 +74,9 @@ class JobParams(BaseModel):
     safety: dict = Field(default_factory=dict)
     template_settings: dict = Field(default_factory=dict)
     custom_polygon_4326: dict | None = None
-    survey_outline: dict | None = None  # simplified survey polygon for map view / instant paint
+    survey_outline: dict | None = (
+        None  # simplified survey polygon for map view / instant paint
+    )
     takeoff_point_4326: list | None = None
     color: str | None = None
     sort_order: int | None = None
@@ -187,7 +189,9 @@ def make_thumbnail_svg(survey_geojson: dict | None) -> str | None:
 
         paths = []
         for ring in rings:
-            pts = " ".join(f"{x:.1f},{y:.1f}" for c in ring for x, y in (to_svg(c[0], c[1]),))
+            pts = " ".join(
+                f"{x:.1f},{y:.1f}" for c in ring for x, y in (to_svg(c[0], c[1]),)
+            )
             paths.append(
                 f'<polygon points="{pts}" fill="#3b82f6" fill-opacity="0.7"'
                 f' stroke="#1d4ed8" stroke-width="1"/>'
@@ -219,7 +223,9 @@ def is_folder_dir(d: Path) -> bool:
     if (d / ".dkk-folder").exists():
         return True
     try:
-        return any(sub.is_dir() and is_job_dir(sub) for sub in d.iterdir() if sub.is_dir())
+        return any(
+            sub.is_dir() and is_job_dir(sub) for sub in d.iterdir() if sub.is_dir()
+        )
     except PermissionError:
         return False
 
@@ -304,18 +310,24 @@ def _battery_summary(bat: dict) -> dict:
     if "pieces" in bat:
         pieces = bat["pieces"]
         return {
-            "flight_time_min": sum(p.get("estimated_flight_time_min", 0) for p in pieces),
+            "flight_time_min": sum(
+                p.get("estimated_flight_time_min", 0) for p in pieces
+            ),
             "photo_count": sum(p.get("estimated_photo_count", 0) for p in pieces),
             "over_one_battery": bat.get("over_any_battery", False),
-            "battery_count": sum(2 if p.get("over_one_battery", False) else 1 for p in pieces),
+            "battery_count": sum(
+                2 if p.get("over_one_battery", False) else 1 for p in pieces
+            ),
         }
-    return {"flight_time_min": None, "photo_count": None,
-            "over_one_battery": False, "battery_count": None}
+    return {
+        "flight_time_min": None,
+        "photo_count": None,
+        "over_one_battery": False,
+        "battery_count": None,
+    }
 
 
-def _build_job_card(
-    job_dir: Path, folder: str | None, with_polygon: bool
-) -> dict:
+def _build_job_card(job_dir: Path, folder: str | None, with_polygon: bool) -> dict:
     """Parse a job directory into a summary card dict (uncached)."""
     name = job_dir.name
     path = f"{folder}/{name}" if folder else name
@@ -386,14 +398,18 @@ def _build_job_card(
         # Subcategory: prefer the manifest's resolved value (provenance), fall back to
         # the job_params intent (flight.subcategory) for not-yet-exported jobs.
         "subcategory": safety.get("operating_subcategory")
-                       or (params.get("flight") or {}).get("subcategory"),
+        or (params.get("flight") or {}).get("subcategory"),
         "vertex_count": g.get("survey_vertex_count"),
         "drone": f.get("drone"),
         "drone_label": f.get("drone_label"),
         "height_m": f.get("derived_height_m"),
         "waypoint_mode": f.get("waypoint_mode", False),
-        "adv_min_height_m": (params.get("template_settings") or {}).get("adv_min_height_m"),
-        "adv_max_height_m": (params.get("template_settings") or {}).get("adv_max_height_m"),
+        "adv_min_height_m": (params.get("template_settings") or {}).get(
+            "adv_min_height_m"
+        ),
+        "adv_max_height_m": (params.get("template_settings") or {}).get(
+            "adv_max_height_m"
+        ),
         "strip_speed_ms": f.get("strip_speed_ms"),
         "flight_time_min": bat["flight_time_min"],
         "photo_count": bat["photo_count"],
@@ -462,7 +478,11 @@ def _adjust_sibling_area_lost(groups: list[dict]) -> None:
         if len(cards) < 2:
             continue
 
-        originals = [c["original_area_ha"] for c in cards if c.get("original_area_ha") is not None]
+        originals = [
+            c["original_area_ha"]
+            for c in cards
+            if c.get("original_area_ha") is not None
+        ]
         if not originals:
             continue
         original_ha = max(originals)
@@ -470,7 +490,9 @@ def _adjust_sibling_area_lost(groups: list[dict]) -> None:
             continue
 
         combined_ha = sum(c["area_ha"] for c in cards if c.get("area_ha") is not None)
-        combined_lost_pct = round(max(0.0, (original_ha - combined_ha) / original_ha * 100), 2)
+        combined_lost_pct = round(
+            max(0.0, (original_ha - combined_ha) / original_ha * 100), 2
+        )
 
         for card in cards:
             card["area_lost_pct"] = combined_lost_pct
@@ -497,14 +519,18 @@ def scan_jobs(output_dir: Path, with_polygon: bool = False) -> list[dict]:
                 for sub in sorted(entry.iterdir()):
                     if sub.is_dir():
                         folder_jobs.append(
-                            read_job_card(sub, folder=entry.name, with_polygon=with_polygon)
+                            read_job_card(
+                                sub, folder=entry.name, with_polygon=with_polygon
+                            )
                         )
             except PermissionError:
                 pass
             folder_jobs.sort(key=_tier_sort_key)
             folder_groups.append({"name": entry.name, "jobs": folder_jobs})
         else:
-            root_jobs.append(read_job_card(entry, folder=None, with_polygon=with_polygon))
+            root_jobs.append(
+                read_job_card(entry, folder=None, with_polygon=with_polygon)
+            )
 
     root_jobs.sort(key=_tier_sort_key)
 

@@ -15,8 +15,12 @@ _DEFAULT_COLOR = "#3b82f6"
 
 def _escape_xml(s: str) -> str:
     return (
-        str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        .replace('"', "&quot;").replace("'", "&apos;")
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
     )
 
 

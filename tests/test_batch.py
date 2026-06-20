@@ -14,11 +14,15 @@ from flightmanager.config import AppConfig, CacheConfig, FlightConfig
 from flightmanager.parcels import Parcel
 
 
-_POLY_3067 = Polygon([
-    (300_000, 6_900_000), (301_000, 6_900_000),
-    (301_000, 6_901_000), (300_000, 6_901_000),
-    (300_000, 6_900_000),
-])
+_POLY_3067 = Polygon(
+    [
+        (300_000, 6_900_000),
+        (301_000, 6_900_000),
+        (301_000, 6_901_000),
+        (300_000, 6_901_000),
+        (300_000, 6_900_000),
+    ]
+)
 
 _PARCEL = Parcel(
     parcel_id="TEST001",
@@ -62,18 +66,24 @@ class TestCreateSkeletonJobs:
 
     def test_job_params_contains_polygon(self, tmp_path):
         _run(tmp_path, ["TEST001"])
-        params = json.loads((tmp_path / "output" / "TEST001" / "job_params.json").read_text())
+        params = json.loads(
+            (tmp_path / "output" / "TEST001" / "job_params.json").read_text()
+        )
         assert params["custom_polygon_4326"] is not None
         assert params["custom_polygon_4326"]["type"] in ("Polygon", "MultiPolygon")
 
     def test_batch_created_flag_set(self, tmp_path):
         _run(tmp_path, ["TEST001"])
-        params = json.loads((tmp_path / "output" / "TEST001" / "job_params.json").read_text())
+        params = json.loads(
+            (tmp_path / "output" / "TEST001" / "job_params.json").read_text()
+        )
         assert params["batch_created"] is True
 
     def test_parcel_id_recorded_in_inputs(self, tmp_path):
         _run(tmp_path, ["TEST001"])
-        params = json.loads((tmp_path / "output" / "TEST001" / "job_params.json").read_text())
+        params = json.loads(
+            (tmp_path / "output" / "TEST001" / "job_params.json").read_text()
+        )
         assert "TEST001" in params["inputs"]["parcel_ids"]
 
     def test_skips_existing_job_dir(self, tmp_path):
@@ -93,11 +103,15 @@ class TestCreateSkeletonJobs:
         assert params_path.exists()
 
     def test_multiple_ids_all_created(self, tmp_path):
-        parcel_b = Parcel(parcel_id="TEST002", tunnus=2, year=2025, area_ha=50.0, geometry=_POLY_3067)
+        parcel_b = Parcel(
+            parcel_id="TEST002", tunnus=2, year=2025, area_ha=50.0, geometry=_POLY_3067
+        )
         cfg = _config(tmp_path)
         with (
             patch.dict(os.environ, {"MML_API_KEY": "test-key"}),
-            patch("flightmanager.batch.fetch_parcels", side_effect=[[_PARCEL], [parcel_b]]),
+            patch(
+                "flightmanager.batch.fetch_parcels", side_effect=[[_PARCEL], [parcel_b]]
+            ),
         ):
             results = create_skeleton_jobs(
                 ids=["TEST001", "TEST002"],
@@ -113,7 +127,9 @@ class TestCreateSkeletonJobs:
 
     def test_params_written_into_job(self, tmp_path):
         _run(tmp_path, ["TEST001"], params={"subcategory": "A2", "offset_m": 5.0})
-        params = json.loads((tmp_path / "output" / "TEST001" / "job_params.json").read_text())
+        params = json.loads(
+            (tmp_path / "output" / "TEST001" / "job_params.json").read_text()
+        )
         assert params["flight"]["subcategory"] == "A2"
         assert params["polygon"]["offset_m"] == 5.0
 

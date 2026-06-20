@@ -54,9 +54,11 @@ from flightmanager.route import (
 if TYPE_CHECKING:
     from flightmanager.config import DroneConfig
 
-_MAX_CLIMB_MS  = 10.0   # DJI waypoint-mode max climb (m/s) — kept above photogrammetric limit
-_PL_SCAN_M     = 200.0  # powerline influence radius (m)
-_ALT_MERGE_M   = 2.0    # merge consecutive waypoints within this altitude delta
+_MAX_CLIMB_MS = (
+    10.0  # DJI waypoint-mode max climb (m/s) — kept above photogrammetric limit
+)
+_PL_SCAN_M = 200.0  # powerline influence radius (m)
+_ALT_MERGE_M = 2.0  # merge consecutive waypoints within this altitude delta
 # Kohdeluokka codes treated as non-habited structures; excluded from 1:1 altitude rule.
 # Agricultural/storage buildings are part of the farm operation, not uninvolved-person hazards.
 _AGRI_CODES: frozenset[int] = frozenset({42260, 42261, 42262})
@@ -69,7 +71,7 @@ _AGRI_CODES: frozenset[int] = frozenset({42260, 42261, 42262})
 
 def _altitude_at(
     pt: Point,
-    bldg_pairs: list[tuple],    # list of (shapely_geom, height_m)
+    bldg_pairs: list[tuple],  # list of (shapely_geom, height_m)
     pl_geoms: list,
     *,
     H_max: float,
@@ -79,7 +81,7 @@ def _altitude_at(
     """EU 1:1 altitude at a 2-D world point, clamped to [H_min, H_max]."""
     if bldg_pairs:
         d_eff = min(pt.distance(g) + h for g, h in bldg_pairs)
-        alt   = float(min(max(d_eff, H_min), H_max))
+        alt = float(min(max(d_eff, H_min), H_max))
     else:
         alt = H_max
     for pl_g in pl_geoms:
@@ -89,8 +91,10 @@ def _altitude_at(
 
 
 def _sample_strip(
-    x1: float, y1: float,
-    x2: float, y2: float,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
     bldg_pairs: list[tuple],
     pl_geoms: list,
     *,
@@ -112,8 +116,11 @@ def _sample_strip(
         x = x1 + t * (x2 - x1)
         y = y1 + t * (y2 - y1)
         alt = _altitude_at(
-            Point(x, y), bldg_pairs, pl_geoms,
-            H_max=H_max, H_min=H_min,
+            Point(x, y),
+            bldg_pairs,
+            pl_geoms,
+            H_max=H_max,
+            H_min=H_min,
             powerline_clearance_m=powerline_clearance_m,
         )
         result.append((x, y, alt))
@@ -140,9 +147,14 @@ def _sample_path(
     result: list[tuple[float, float, float]] = []
     for k in range(len(pts) - 1):
         seg = _sample_strip(
-            pts[k][0], pts[k][1], pts[k + 1][0], pts[k + 1][1],
-            bldg_pairs, pl_geoms,
-            H_max=H_max, H_min=H_min,
+            pts[k][0],
+            pts[k][1],
+            pts[k + 1][0],
+            pts[k + 1][1],
+            bldg_pairs,
+            pl_geoms,
+            H_max=H_max,
+            H_min=H_min,
             powerline_clearance_m=powerline_clearance_m,
             sample_m=sample_m,
         )
@@ -210,11 +222,15 @@ def _smooth_strip_along(
     n = len(samples)
     alts = [s[2] for s in samples]
     for i in range(1, n):
-        d    = math.hypot(samples[i][0] - samples[i - 1][0], samples[i][1] - samples[i - 1][1])
+        d = math.hypot(
+            samples[i][0] - samples[i - 1][0], samples[i][1] - samples[i - 1][1]
+        )
         step = slope_m_per_m * max(d, 1e-3)
         alts[i] = min(alts[i], alts[i - 1] + step)
     for i in range(n - 2, -1, -1):
-        d    = math.hypot(samples[i + 1][0] - samples[i][0], samples[i + 1][1] - samples[i][1])
+        d = math.hypot(
+            samples[i + 1][0] - samples[i][0], samples[i + 1][1] - samples[i][1]
+        )
         step = slope_m_per_m * max(d, 1e-3)
         alts[i] = min(alts[i], alts[i + 1] + step)
     alts = [max(H_min, min(H_max, a)) for a in alts]
@@ -240,10 +256,13 @@ def _fill_narrow_dips(
     result = list(alts)
     cum = [0.0]
     for k in range(1, n):
-        cum.append(cum[-1] + math.hypot(
-            samples[k][0] - samples[k - 1][0],
-            samples[k][1] - samples[k - 1][1],
-        ))
+        cum.append(
+            cum[-1]
+            + math.hypot(
+                samples[k][0] - samples[k - 1][0],
+                samples[k][1] - samples[k - 1][1],
+            )
+        )
     for i in range(n):
         for j in range(i + 1, n):
             span = cum[j] - cum[i]
@@ -273,7 +292,8 @@ def _slope_across(
     """Max altitude change per metre of cross-track distance (m/m)."""
     speed = max(0.5, drone.auto_speed(H_max, overlap_front_pct))
     photogrammetry_limit = (
-        slope_f * drone.focal_length_mm
+        slope_f
+        * drone.focal_length_mm
         / (drone.sensor_w_mm * (1.0 - overlap_side_pct / 100.0))
     )
     physical_limit = _MAX_CLIMB_MS / speed
@@ -293,7 +313,8 @@ def _slope_along_m_per_m(
     """
     speed = max(0.5, drone.auto_speed(H_max, overlap_front_pct))
     photogrammetry_limit = (
-        slope_f * drone.focal_length_mm
+        slope_f
+        * drone.focal_length_mm
         / (drone.sensor_h_mm * (1.0 - overlap_front_pct / 100.0))
     )
     physical_limit = _MAX_CLIMB_MS / speed
@@ -338,8 +359,8 @@ def _apply_slope_filter(
 def compute_adaptive_route(  # noqa: C901
     polygon_3067,
     angle_deg: float,
-    buildings: list,          # list[Building]
-    power_lines: list,        # list[PowerLine]
+    buildings: list,  # list[Building]
+    power_lines: list,  # list[PowerLine]
     *,
     drone: DroneConfig,
     H_max: float,
@@ -378,28 +399,29 @@ def compute_adaptive_route(  # noqa: C901
         polygon_3067 = max(polygon_3067.geoms, key=lambda g: g.area)
 
     bldg_pairs: list[tuple] = [
-        (b.geometry, building_height_m(b)) for b in buildings
+        (b.geometry, building_height_m(b))
+        for b in buildings
         if not habited_only or b.kohdeluokka not in _AGRI_CODES
     ]
     pl_geoms: list = [pl.geometry for pl in power_lines if pl.is_overhead]
 
-    sensor_w_m = drone.image_width_px  * drone.pixel_pitch_um * 1e-6
+    sensor_w_m = drone.image_width_px * drone.pixel_pitch_um * 1e-6
     sensor_h_m = drone.image_height_px * drone.pixel_pitch_um * 1e-6
-    focal_m    = drone.focal_length_mm * 1e-3
+    focal_m = drone.focal_length_mm * 1e-3
 
     def _stepover(alt: float) -> float:
         return max(1.0, alt * sensor_w_m / focal_m * (1.0 - overlap_side_pct / 100.0))
 
     # ── Rotate polygon to strip-aligned space ─────────────────────────────────
-    cx, cy    = polygon_3067.centroid.x, polygon_3067.centroid.y
+    cx, cy = polygon_3067.centroid.x, polygon_3067.centroid.y
     rot_angle = angle_deg - 90.0
-    rot_rad   = math.radians(rot_angle)
+    rot_rad = math.radians(rot_angle)
     cos_r, sin_r = math.cos(rot_rad), math.sin(rot_rad)
 
     rotated = rotate(polygon_3067, rot_angle, origin=(cx, cy), use_radians=False)
-    ring    = list(rotated.exterior.coords)
-    minx_r  = min(x for x, _ in ring)
-    maxx_r  = max(x for x, _ in ring)
+    ring = list(rotated.exterior.coords)
+    minx_r = min(x for x, _ in ring)
+    maxx_r = max(x for x, _ in ring)
     _, miny, _, maxy = rotated.bounds
 
     back_rad = math.radians(90.0 - angle_deg)
@@ -427,8 +449,14 @@ def compute_adaptive_route(  # noqa: C901
             wx0, wy0 = _back(x0, y)
             wx1, wy1 = _back(x1, y)
             samples = _sample_strip(
-                wx0, wy0, wx1, wy1, bldg_pairs, pl_geoms,
-                H_max=H_max, H_min=H_min,
+                wx0,
+                wy0,
+                wx1,
+                wy1,
+                bldg_pairs,
+                pl_geoms,
+                H_max=H_max,
+                H_min=H_min,
                 powerline_clearance_m=powerline_clearance_m,
                 sample_m=sample_m,
             )
@@ -441,24 +469,38 @@ def compute_adaptive_route(  # noqa: C901
     if not strips_y:
         return (
             RouteResult(
-                strip_count=0, photo_count=0, strip_dist_m=0.0,
-                turn_dist_m=0.0, angle_deg=angle_deg,
-                strips_3067=[], transit_segs_3067=[],
-                first_wp_3067=None, last_wp_3067=None,
+                strip_count=0,
+                photo_count=0,
+                strip_dist_m=0.0,
+                turn_dist_m=0.0,
+                angle_deg=angle_deg,
+                strips_3067=[],
+                transit_segs_3067=[],
+                first_wp_3067=None,
+                last_wp_3067=None,
             ),
-            [], [], [],
+            [],
+            [],
+            [],
         )
 
     raw_segs = _clip_strips_to_polygon(ring, strips_y)
     if not raw_segs:
         return (
             RouteResult(
-                strip_count=0, photo_count=0, strip_dist_m=0.0,
-                turn_dist_m=0.0, angle_deg=angle_deg,
-                strips_3067=[], transit_segs_3067=[],
-                first_wp_3067=None, last_wp_3067=None,
+                strip_count=0,
+                photo_count=0,
+                strip_dist_m=0.0,
+                turn_dist_m=0.0,
+                angle_deg=angle_deg,
+                strips_3067=[],
+                transit_segs_3067=[],
+                first_wp_3067=None,
+                last_wp_3067=None,
             ),
-            [], [], [],
+            [],
+            [],
+            [],
         )
 
     # ── Greedy nearest-neighbour ordering ─────────────────────────────────────
@@ -473,9 +515,7 @@ def compute_adaptive_route(  # noqa: C901
     strips_3067 = _greedy_nn_order(raw_segs, home_rot_x, home_rot_y, _back)
 
     # ── Route geometry ─────────────────────────────────────────────────────────
-    strip_dist_m = sum(
-        math.hypot(x2 - x1, y2 - y1) for x1, y1, x2, y2 in strips_3067
-    )
+    strip_dist_m = sum(math.hypot(x2 - x1, y2 - y1) for x1, y1, x2, y2 in strips_3067)
 
     transit_segs: list[list[tuple[float, float]]] = []
     turn_dist_m = 0.0
@@ -483,8 +523,8 @@ def compute_adaptive_route(  # noqa: C901
         if home_3067 is not None:
             transit_segs.append([home_3067, (strips_3067[0][0], strips_3067[0][1])])
         for i in range(len(strips_3067) - 1):
-            p1   = (strips_3067[i][2],     strips_3067[i][3])
-            p2   = (strips_3067[i + 1][0], strips_3067[i + 1][1])
+            p1 = (strips_3067[i][2], strips_3067[i][3])
+            p2 = (strips_3067[i + 1][0], strips_3067[i + 1][1])
             path = _boundary_route(polygon_3067, p1, p2)
             transit_segs.append(path)
             turn_dist_m += sum(
@@ -505,8 +545,14 @@ def compute_adaptive_route(  # noqa: C901
     strip_waypoints_raw: list[list[tuple[float, float, float]]] = []
     for x1, y1, x2, y2 in strips_3067:
         samples = _sample_strip(
-            x1, y1, x2, y2, bldg_pairs, pl_geoms,
-            H_max=H_max, H_min=H_min,
+            x1,
+            y1,
+            x2,
+            y2,
+            bldg_pairs,
+            pl_geoms,
+            H_max=H_max,
+            H_min=H_min,
             powerline_clearance_m=powerline_clearance_m,
             sample_m=sample_m,
         )
@@ -518,10 +564,7 @@ def compute_adaptive_route(  # noqa: C901
     raw_alt = [min(wp[2] for wp in wps) for wps in strip_waypoints_raw]
 
     # Slope-filter the per-strip minimum altitudes (cross-strip direction)
-    midpoints = [
-        ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-        for x1, y1, x2, y2 in strips_3067
-    ]
+    midpoints = [((x1 + x2) / 2.0, (y1 + y2) / 2.0) for x1, y1, x2, y2 in strips_3067]
     sc = _slope_across(drone, H_max, overlap_front_pct, overlap_side_pct, slope_f)
     altitude_profile = _apply_slope_filter(raw_alt, midpoints, sc, H_min)
 
@@ -532,9 +575,9 @@ def compute_adaptive_route(  # noqa: C901
     # the camera fires at the correct interval for consistent forward overlap.
     strip_waypoints: list[list[tuple[float, float, float, float]]] = []
     for i, wps in enumerate(strip_waypoints_raw):
-        floor   = altitude_profile[i]
+        floor = altitude_profile[i]
         old_min = min(wp[2] for wp in wps)
-        shift   = max(0.0, floor - old_min)
+        shift = max(0.0, floor - old_min)
         out: list[tuple[float, float, float, float]] = []
         for x, y, a in wps:
             a_f = min(max(a + shift, H_min), H_max)
@@ -553,8 +596,11 @@ def compute_adaptive_route(  # noqa: C901
             transit_waypoints.append([])
             continue
         samples = _sample_path(
-            seg, bldg_pairs, pl_geoms,
-            H_max=H_max, H_min=H_min,
+            seg,
+            bldg_pairs,
+            pl_geoms,
+            H_max=H_max,
+            H_min=H_min,
             powerline_clearance_m=powerline_clearance_m,
             sample_m=sample_m,
         )
@@ -563,8 +609,10 @@ def compute_adaptive_route(  # noqa: C901
     # ── Photo count (per-strip minimum altitude) ───────────────────────────────
     photo_count = 0
     for i, (x1, y1, x2, y2) in enumerate(strips_3067):
-        alt      = altitude_profile[i]
-        photo_m  = max(0.5, alt * sensor_h_m / focal_m * (1.0 - overlap_front_pct / 100.0))
+        alt = altitude_profile[i]
+        photo_m = max(
+            0.5, alt * sensor_h_m / focal_m * (1.0 - overlap_front_pct / 100.0)
+        )
         strip_len = math.hypot(x2 - x1, y2 - y1)
         photo_count += max(1, math.ceil(strip_len / photo_m) + 1)
 

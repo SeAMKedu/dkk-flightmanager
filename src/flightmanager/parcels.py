@@ -41,10 +41,10 @@ class ParcelNotFoundError(KeyError):
 
 @dataclass
 class Parcel:
-    parcel_id: str          # PERUSLOHKOTUNNUS
-    tunnus: int             # TUNNUS (internal numeric ID)
-    year: int               # VUOSI
-    area_ha: float          # PINTA_ALA
+    parcel_id: str  # PERUSLOHKOTUNNUS
+    tunnus: int  # TUNNUS (internal numeric ID)
+    year: int  # VUOSI
+    area_ha: float  # PINTA_ALA
     geometry: BaseGeometry  # Shapely, EPSG:3067
 
 
@@ -103,7 +103,9 @@ def _fetch_by_ids_cached(
     from flightmanager.geo_cache import get_parcel_cache, put_parcel_cache
 
     if cache_config is None:
-        log.info("Fetching parcels from %s layer=%s mode=ids (no cache)", _WFS_URL, layer)
+        log.info(
+            "Fetching parcels from %s layer=%s mode=ids (no cache)", _WFS_URL, layer
+        )
         return [_to_parcel(f) for f in _fetch_by_ids(parcel_ids, layer, cfg, sess)]
 
     cached: list[Parcel] = []
@@ -113,13 +115,15 @@ def _fetch_by_ids_cached(
         record = get_parcel_cache(cache_config, pid, cfg.lpis_year)
         if record is not None:
             geom = wkt_loads(record.geometry_wkt)
-            cached.append(Parcel(
-                parcel_id=record.parcel_id,
-                tunnus=record.tunnus,
-                year=record.lpis_year,
-                area_ha=record.area_ha,
-                geometry=geom,
-            ))
+            cached.append(
+                Parcel(
+                    parcel_id=record.parcel_id,
+                    tunnus=record.tunnus,
+                    year=record.lpis_year,
+                    area_ha=record.area_ha,
+                    geometry=geom,
+                )
+            )
             _ns.record_hit("parcels")
             log.debug("Parcel cache hit: %s year=%d", pid, cfg.lpis_year)
         else:
@@ -128,13 +132,20 @@ def _fetch_by_ids_cached(
     if missing_ids:
         log.info(
             "Fetching parcels from %s layer=%s mode=ids (%d/%d not cached)",
-            _WFS_URL, layer, len(missing_ids), len(parcel_ids),
+            _WFS_URL,
+            layer,
+            len(missing_ids),
+            len(parcel_ids),
         )
         features = _fetch_by_ids(missing_ids, layer, cfg, sess)
         fetched = [_to_parcel(f) for f in features]
         for p in fetched:
             put_parcel_cache(
-                cache_config, p.parcel_id, p.year, p.tunnus, p.area_ha,
+                cache_config,
+                p.parcel_id,
+                p.year,
+                p.tunnus,
+                p.area_ha,
                 wkt_dumps(p.geometry),
             )
         cached.extend(fetched)
@@ -215,7 +226,9 @@ def _paginate(
 
         log.debug(
             "Page startIndex=%d: got %d features (matched=%s)",
-            start, returned, matched,
+            start,
+            returned,
+            matched,
         )
 
         # Stop when the server tells us we have everything, or the page is short.

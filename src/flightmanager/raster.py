@@ -41,19 +41,30 @@ from flightmanager.crs import require_4326
 
 log = logging.getLogger(__name__)
 
-_DSM_MAX_PX = 512   # longest side of the in-memory thumbnail for the web-UI live preview
+_DSM_MAX_PX = 512  # longest side of the in-memory thumbnail for the web-UI live preview
 
 # Viridis colormap — 11 control points (0.0 … 1.0) from matplotlib's viridis LUT.
-_VIRIDIS_STOPS = np.array([
-    [ 68,   1,  84], [ 72,  36, 117], [ 65,  68, 135], [ 53,  95, 141],
-    [ 42, 120, 142], [ 33, 144, 141], [ 39, 168, 128], [ 82, 191, 104],
-    [140, 209,  72], [195, 223,  35], [253, 231,  37],
-], dtype=np.float32)
+_VIRIDIS_STOPS = np.array(
+    [
+        [68, 1, 84],
+        [72, 36, 117],
+        [65, 68, 135],
+        [53, 95, 141],
+        [42, 120, 142],
+        [33, 144, 141],
+        [39, 168, 128],
+        [82, 191, 104],
+        [140, 209, 72],
+        [195, 223, 35],
+        [253, 231, 37],
+    ],
+    dtype=np.float32,
+)
 
 
 def _colorize_viridis(norm: np.ndarray) -> np.ndarray:
     """Map normalized float32 [0,1] array to viridis RGB. Returns (H, W, 3) uint8."""
-    n = len(_VIRIDIS_STOPS)           # 11 stops → 10 intervals
+    n = len(_VIRIDIS_STOPS)  # 11 stops → 10 intervals
     scaled = np.clip(norm, 0.0, 1.0) * (n - 1)
     idx_lo = np.floor(scaled).astype(np.int32)
     idx_hi = np.minimum(idx_lo + 1, n - 1)
@@ -97,10 +108,10 @@ def build_preview_dsm_thumbnail(
     margin_lat = margin_m * deg_per_m_lat
     margin_lon = margin_m * deg_per_m_lon
 
-    dst_left   = bounds[0] - margin_lon
+    dst_left = bounds[0] - margin_lon
     dst_bottom = bounds[1] - margin_lat
-    dst_right  = bounds[2] + margin_lon
-    dst_top    = bounds[3] + margin_lat
+    dst_right = bounds[2] + margin_lon
+    dst_top = bounds[3] + margin_lat
 
     aspect = (dst_right - dst_left) / max(dst_top - dst_bottom, 1e-9)
     if aspect >= 1:
@@ -108,13 +119,20 @@ def build_preview_dsm_thumbnail(
     else:
         tw, th = max(1, int(round(_DSM_MAX_PX * aspect))), _DSM_MAX_PX
 
-    dst_transform = transform_from_bounds(dst_left, dst_bottom, dst_right, dst_top, tw, th)
+    dst_transform = transform_from_bounds(
+        dst_left, dst_bottom, dst_right, dst_top, tw, th
+    )
     dst_data = np.full((1, th, tw), _NODATA, dtype="float32")
     reproject(
-        source=mosaic, destination=dst_data,
-        src_transform=mosaic_transform, src_crs=src_crs,
-        src_nodata=_NODATA, dst_transform=dst_transform, dst_crs=dst_crs,
-        dst_nodata=_NODATA, resampling=Resampling.average,
+        source=mosaic,
+        destination=dst_data,
+        src_transform=mosaic_transform,
+        src_crs=src_crs,
+        src_nodata=_NODATA,
+        dst_transform=dst_transform,
+        dst_crs=dst_crs,
+        dst_nodata=_NODATA,
+        resampling=Resampling.average,
     )
 
     valid_mask = dst_data[0] != _NODATA
@@ -129,7 +147,7 @@ def build_preview_dsm_thumbnail(
     else:
         norm[valid_mask] = 0.5
 
-    rgb = _colorize_viridis(norm)     # (H, W, 3) uint8
+    rgb = _colorize_viridis(norm)  # (H, W, 3) uint8
     rgba = np.zeros((4, th, tw), dtype=np.uint8)
     rgba[0] = rgb[:, :, 0]
     rgba[1] = rgb[:, :, 1]
@@ -141,7 +159,13 @@ def build_preview_dsm_thumbnail(
             dst.write(rgba)
         png_bytes = mem.read()
 
-    return base64.b64encode(png_bytes).decode(), (dst_left, dst_bottom, dst_right, dst_top)
+    return base64.b64encode(png_bytes).decode(), (
+        dst_left,
+        dst_bottom,
+        dst_right,
+        dst_top,
+    )
+
 
 _NODATA = -9999.0
 _DST_CRS = CRS.from_epsg(4326)
@@ -281,24 +305,30 @@ def build_site_dsm(
     margin_lat = margin_m * deg_per_m_lat
     margin_lon = margin_m * deg_per_m_lon
 
-    dst_left   = bounds[0] - margin_lon
+    dst_left = bounds[0] - margin_lon
     dst_bottom = bounds[1] - margin_lat
-    dst_right  = bounds[2] + margin_lon
-    dst_top    = bounds[3] + margin_lat
+    dst_right = bounds[2] + margin_lon
+    dst_top = bounds[3] + margin_lat
 
     # Target resolution: match the source 2 m/px
     res_lon = _SRC_RES_M * deg_per_m_lon
     res_lat = _SRC_RES_M * deg_per_m_lat
 
-    dst_width  = max(1, int(round((dst_right - dst_left)  / res_lon)))
-    dst_height = max(1, int(round((dst_top   - dst_bottom) / res_lat)))
+    dst_width = max(1, int(round((dst_right - dst_left) / res_lon)))
+    dst_height = max(1, int(round((dst_top - dst_bottom) / res_lat)))
     dst_transform = transform_from_bounds(
         dst_left, dst_bottom, dst_right, dst_top, dst_width, dst_height
     )
 
     log.debug(
         "DSM output: %dx%d px, bounds (%.5f,%.5f)→(%.5f,%.5f), margin %d m",
-        dst_width, dst_height, dst_left, dst_bottom, dst_right, dst_top, margin_m,
+        dst_width,
+        dst_height,
+        dst_left,
+        dst_bottom,
+        dst_right,
+        dst_top,
+        margin_m,
     )
 
     # ------------------------------------------------------------------
@@ -332,15 +362,15 @@ def build_site_dsm(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     profile = {
-        "driver":    "GTiff",
-        "dtype":     "float32",
-        "width":     dst_width,
-        "height":    dst_height,
-        "count":     1,
-        "crs":       _DST_CRS,
+        "driver": "GTiff",
+        "dtype": "float32",
+        "width": dst_width,
+        "height": dst_height,
+        "count": 1,
+        "crs": _DST_CRS,
         "transform": dst_transform,
-        "nodata":    _NODATA,
-        "compress":  "lzw",
+        "nodata": _NODATA,
+        "compress": "lzw",
     }
     with rasterio.open(output_path, "w", **profile) as ds:
         ds.write(dst_data)
@@ -350,8 +380,10 @@ def build_site_dsm(
     stats = _stats(output_path)
     log.info(
         "DSM stats: %dx%d px, elevation %.1f–%.1f m (WGS-84 ellipsoidal), margin %d m",
-        stats["shape"][0], stats["shape"][1],
-        stats["elevation_min_m"], stats["elevation_max_m"],
+        stats["shape"][0],
+        stats["shape"][1],
+        stats["elevation_min_m"],
+        stats["elevation_max_m"],
         margin_m,
     )
     return stats
@@ -370,10 +402,10 @@ def _stats(path: Path) -> dict:
             )
         bounds = ds.bounds
     return {
-        "crs":              "EPSG:4326",
-        "shape":            (ds.width, ds.height),
-        "bounds_4326":      (bounds.left, bounds.bottom, bounds.right, bounds.top),
-        "elevation_min_m":  float(np.min(valid)),
-        "elevation_max_m":  float(np.max(valid)),
+        "crs": "EPSG:4326",
+        "shape": (ds.width, ds.height),
+        "bounds_4326": (bounds.left, bounds.bottom, bounds.right, bounds.top),
+        "elevation_min_m": float(np.min(valid)),
+        "elevation_max_m": float(np.max(valid)),
         "valid_pixel_count": int(len(valid)),
     }

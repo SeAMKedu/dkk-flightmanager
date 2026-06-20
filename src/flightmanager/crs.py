@@ -40,8 +40,12 @@ def assert_crs(geom: BaseGeometry, epsg: int) -> None:
     xmin, ymin, xmax, ymax = _FINLAND_BOUNDS[epsg]
     bx = geom.bounds  # (minx, miny, maxx, maxy)
 
-    if not (xmin <= bx[0] <= xmax and xmin <= bx[2] <= xmax
-            and ymin <= bx[1] <= ymax and ymin <= bx[3] <= ymax):
+    if not (
+        xmin <= bx[0] <= xmax
+        and xmin <= bx[2] <= xmax
+        and ymin <= bx[1] <= ymax
+        and ymin <= bx[3] <= ymax
+    ):
         _label = {EPSG_3067: "EPSG:3067 (ETRS-TM35FIN)", EPSG_4326: "EPSG:4326 (WGS84)"}
         raise CRSError(
             f"Geometry bounds {bx} are outside the expected range for "

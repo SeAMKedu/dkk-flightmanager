@@ -49,16 +49,16 @@ from flightmanager.waypoints import ONE_BATTERY_MINUTES, budget_estimate
 log = logging.getLogger(__name__)
 
 # ---- WPML constants (all from fixtures/FIXTURE_NOTES.md) ----
-_WPML_NS  = "http://www.dji.com/wpmz/1.0.6"
-_KML_NS   = "http://www.opengis.net/kml/2.2"
-_WPML     = f"{{{_WPML_NS}}}"
-_KML      = f"{{{_KML_NS}}}"
-_NSMAP    = {None: _KML_NS, "wpml": _WPML_NS}
+_WPML_NS = "http://www.dji.com/wpmz/1.0.6"
+_KML_NS = "http://www.opengis.net/kml/2.2"
+_WPML = f"{{{_WPML_NS}}}"
+_KML = f"{{{_KML_NS}}}"
+_NSMAP = {None: _KML_NS, "wpml": _WPML_NS}
 
 # Fallback M3M constants used when no DroneConfig is supplied (backward compat).
-_DRONE_ENUM      = "77"
-_DRONE_SUB_ENUM  = "0"
-_PAYLOAD_ENUM    = "68"
+_DRONE_ENUM = "77"
+_DRONE_SUB_ENUM = "0"
+_PAYLOAD_ENUM = "68"
 _PAYLOAD_SUB_ENUM = "3"
 _PAYLOAD_POS_IDX = "0"
 
@@ -92,6 +92,7 @@ def resolve_strip_speed(
 
 # ---- Public return type ----
 
+
 @dataclass
 class KmzResult:
     kmz_path: Path
@@ -110,6 +111,7 @@ class KmzResult:
 
 
 # ---- Main entry point ----
+
 
 def build_kmz(
     survey_4326: BaseGeometry,
@@ -135,14 +137,19 @@ def build_kmz(
 
     height_m = (
         drone.height_from_gsd(flight_config.target_gsd_cm)
-        if drone else flight_config.derived_flight_height_m
+        if drone
+        else flight_config.derived_flight_height_m
     )
     gsd_cm = flight_config.target_gsd_cm
     speed_ms = resolve_strip_speed(flight_config, drone, height_m)
 
     log.info(
         "Building KMZ: height=%.1f m, GSD=%.1f cm, speed=%.1f m/s, drone=%s, terrain_follow=%s",
-        height_m, gsd_cm, speed_ms, drone.name if drone else "m3m(default)", dsm_path is not None,
+        height_m,
+        gsd_cm,
+        speed_ms,
+        drone.name if drone else "m3m(default)",
+        dsm_path is not None,
     )
 
     # Battery budget estimate
@@ -153,7 +160,8 @@ def build_kmz(
         log.warning(
             "Estimated flight time %.1f min exceeds one battery (%.0f min). "
             "Consider splitting the job.",
-            budget["flight_time_min"], battery_limit,
+            budget["flight_time_min"],
+            battery_limit,
         )
 
     # DSM filename inside the KMZ — confirmed path from fixture
@@ -166,14 +174,30 @@ def build_kmz(
     adv_strip_wps = None
     adv_transit_wps = None
     if flight_config.advanced_mode and drone is not None:
-        template_xml, waylines_xml, adv_route, adv_alt_profile, adv_strip_wps, adv_transit_wps = _build_advanced_files(
-            survey_4326, flight_config, speed_ms=speed_ms, drone=drone,
-            height_m=height_m, buildings=buildings, power_lines=power_lines,
+        (
+            template_xml,
+            waylines_xml,
+            adv_route,
+            adv_alt_profile,
+            adv_strip_wps,
+            adv_transit_wps,
+        ) = _build_advanced_files(
+            survey_4326,
+            flight_config,
+            speed_ms=speed_ms,
+            drone=drone,
+            height_m=height_m,
+            buildings=buildings,
+            power_lines=power_lines,
         )
         embed_dsm = False  # DSM not used in explicit waypoint mode
     else:
-        template_xml = _build_template_kml(survey_4326, flight_config, dsm_kmz_name, speed_ms=speed_ms, drone=drone)
-        waylines_xml = _build_waylines_stub(flight_config, speed_ms=speed_ms, drone=drone)
+        template_xml = _build_template_kml(
+            survey_4326, flight_config, dsm_kmz_name, speed_ms=speed_ms, drone=drone
+        )
+        waylines_xml = _build_waylines_stub(
+            flight_config, speed_ms=speed_ms, drone=drone
+        )
         embed_dsm = True
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +229,7 @@ def build_kmz(
 
 # ---- Advanced mode: compute route + altitudes + build files ----
 
+
 def _build_advanced_files(  # noqa: C901
     survey_4326: BaseGeometry,
     cfg: FlightConfig,
@@ -228,7 +253,7 @@ def _build_advanced_files(  # noqa: C901
     from flightmanager.waylines_builder import build_waylines
 
     survey_3067 = reproject_to_3067(survey_4326)
-    angle_deg   = compute_auto_angle(survey_3067)
+    angle_deg = compute_auto_angle(survey_3067)
 
     H_max = cfg.adv_max_height_m if cfg.adv_max_height_m is not None else height_m
 
@@ -250,27 +275,40 @@ def _build_advanced_files(  # noqa: C901
     if route.strip_count == 0:
         raise ValueError("Adaptive route produced no strips — polygon too small?")
 
-    n_instrip_wps  = sum(max(0, len(wps) - 2) for wps in strip_wps)
-    n_transit_wps  = sum(max(0, len(wps) - 2) for wps in transit_wps)
+    n_instrip_wps = sum(max(0, len(wps) - 2) for wps in strip_wps)
+    n_transit_wps = sum(max(0, len(wps) - 2) for wps in transit_wps)
     log.info(
         "Adaptive advanced mode: %d strips, altitude %.1f–%.1f m, "
         "%d instrip + %d transit intermediate waypoints (H_max=%.1f)",
-        len(alt_profile), min(alt_profile), max(alt_profile),
-        n_instrip_wps, n_transit_wps, H_max,
+        len(alt_profile),
+        min(alt_profile),
+        max(alt_profile),
+        n_instrip_wps,
+        n_transit_wps,
+        H_max,
     )
 
     template_xml = _build_template_kml(
-        survey_4326, cfg, dsm_kmz_name=None, speed_ms=speed_ms, drone=drone,
+        survey_4326,
+        cfg,
+        dsm_kmz_name=None,
+        speed_ms=speed_ms,
+        drone=drone,
         template_type="waypoint",
     )
     waylines_xml = build_waylines(
-        route, alt_profile, drone=drone, cfg=cfg,
-        strip_waypoints=strip_wps, transit_waypoints=transit_wps,
+        route,
+        alt_profile,
+        drone=drone,
+        cfg=cfg,
+        strip_waypoints=strip_wps,
+        transit_waypoints=transit_wps,
     )
     return template_xml, waylines_xml, route, alt_profile, strip_wps, transit_wps
 
 
 # ---- template.kml builder ----
+
 
 def _build_template_kml(
     survey_4326: BaseGeometry,
@@ -281,98 +319,102 @@ def _build_template_kml(
     drone: DroneConfig | None = None,
     template_type: str = "mapping2d",
 ) -> str:
-    height   = drone.height_from_gsd(cfg.target_gsd_cm) if drone else cfg.derived_flight_height_m
+    height = (
+        drone.height_from_gsd(cfg.target_gsd_cm)
+        if drone
+        else cfg.derived_flight_height_m
+    )
     height_s = f"{height:.15g}"
-    now_ms   = str(int(time.time() * 1000))
+    now_ms = str(int(time.time() * 1000))
 
     root = etree.Element(f"{_KML}kml", nsmap=_NSMAP)
-    doc  = etree.SubElement(root, f"{_KML}Document")
+    doc = etree.SubElement(root, f"{_KML}Document")
 
     _tx(doc, f"{_WPML}createTime", now_ms)
     _tx(doc, f"{_WPML}updateTime", now_ms)
 
     # missionConfig
     mc = etree.SubElement(doc, f"{_WPML}missionConfig")
-    _tx(mc, f"{_WPML}flyToWaylineMode",     "safely")
-    _tx(mc, f"{_WPML}finishAction",          cfg.finish_action)
-    _tx(mc, f"{_WPML}exitOnRCLost",          "executeLostAction")
-    _tx(mc, f"{_WPML}executeRCLostAction",   cfg.rc_lost_action)
+    _tx(mc, f"{_WPML}flyToWaylineMode", "safely")
+    _tx(mc, f"{_WPML}finishAction", cfg.finish_action)
+    _tx(mc, f"{_WPML}exitOnRCLost", "executeLostAction")
+    _tx(mc, f"{_WPML}executeRCLostAction", cfg.rc_lost_action)
     _tx(mc, f"{_WPML}takeOffSecurityHeight", f"{cfg.takeoff_security_height_m:.6g}")
-    _tx(mc, f"{_WPML}globalRTHHeight",       f"{cfg.rth_height_m:.6g}")
+    _tx(mc, f"{_WPML}globalRTHHeight", f"{cfg.rth_height_m:.6g}")
     _tx(mc, f"{_WPML}globalTransitionalSpeed", f"{cfg.transitional_speed_ms:.6g}")
-    de = str(drone.drone_enum)         if drone else _DRONE_ENUM
-    ds = str(drone.drone_sub_enum)     if drone else _DRONE_SUB_ENUM
-    pe = str(drone.payload_enum)       if drone else _PAYLOAD_ENUM
-    ps = str(drone.payload_sub_enum)   if drone else _PAYLOAD_SUB_ENUM
+    de = str(drone.drone_enum) if drone else _DRONE_ENUM
+    ds = str(drone.drone_sub_enum) if drone else _DRONE_SUB_ENUM
+    pe = str(drone.payload_enum) if drone else _PAYLOAD_ENUM
+    ps = str(drone.payload_sub_enum) if drone else _PAYLOAD_SUB_ENUM
     pp = str(drone.payload_position_index) if drone else _PAYLOAD_POS_IDX
-    img_fmt = drone.image_format       if drone else "visable,narrow_band"
+    img_fmt = drone.image_format if drone else "visable,narrow_band"
 
     di = etree.SubElement(mc, f"{_WPML}droneInfo")
-    _tx(di, f"{_WPML}droneEnumValue",    de)
+    _tx(di, f"{_WPML}droneEnumValue", de)
     _tx(di, f"{_WPML}droneSubEnumValue", ds)
     _tx(mc, f"{_WPML}waylineAvoidLimitAreaMode", "0")
     pi_el = etree.SubElement(mc, f"{_WPML}payloadInfo")
-    _tx(pi_el, f"{_WPML}payloadEnumValue",    pe)
+    _tx(pi_el, f"{_WPML}payloadEnumValue", pe)
     _tx(pi_el, f"{_WPML}payloadSubEnumValue", ps)
     _tx(pi_el, f"{_WPML}payloadPositionIndex", pp)
 
     # Folder
     folder = etree.SubElement(doc, f"{_KML}Folder")
     _tx(folder, f"{_WPML}templateType", template_type)
-    _tx(folder, f"{_WPML}templateId",   "0")
+    _tx(folder, f"{_WPML}templateId", "0")
 
     wc = etree.SubElement(folder, f"{_WPML}waylineCoordinateSysParam")
-    _tx(wc, f"{_WPML}coordinateMode",    "WGS84")
-    _tx(wc, f"{_WPML}heightMode",        "relativeToStartPoint")
+    _tx(wc, f"{_WPML}coordinateMode", "WGS84")
+    _tx(wc, f"{_WPML}heightMode", "relativeToStartPoint")
     _tx(wc, f"{_WPML}globalShootHeight", height_s)
     if dsm_kmz_name:
         # Terrain-follow via DSM — confirmed field names from fixture (2026-05-30)
-        _tx(wc, f"{_WPML}surfaceFollowModeEnable",  "1")
-        _tx(wc, f"{_WPML}isRealtimeSurfaceFollow",  "0")
-        _tx(wc, f"{_WPML}surfaceRelativeHeight",     height_s)
-        _tx(wc, f"{_WPML}dsmFile",                  dsm_kmz_name)
+        _tx(wc, f"{_WPML}surfaceFollowModeEnable", "1")
+        _tx(wc, f"{_WPML}isRealtimeSurfaceFollow", "0")
+        _tx(wc, f"{_WPML}surfaceRelativeHeight", height_s)
+        _tx(wc, f"{_WPML}dsmFile", dsm_kmz_name)
 
     _tx(folder, f"{_WPML}autoFlightSpeed", f"{speed_ms:.15g}")
 
     # Placemark
     pm = etree.SubElement(folder, f"{_KML}Placemark")
-    _tx(pm, f"{_WPML}caliFlightEnable",        "0")
-    _tx(pm, f"{_WPML}elevationOptimizeEnable",  "0")
-    _tx(pm, f"{_WPML}smartObliqueEnable",       "0")
-    _tx(pm, f"{_WPML}quickOrthoMappingEnable",  "0")
-    _tx(pm, f"{_WPML}facadeWaylineEnable",      "0")
-    _tx(pm, f"{_WPML}isLookAtSceneSet",         "0")
-    _tx(pm, f"{_WPML}smartObliqueGimbalPitch",  "-45")
-    _tx(pm, f"{_WPML}shootType",                "distance")
-    _tx(pm, f"{_WPML}direction",                "0")
-    _tx(pm, f"{_WPML}margin",                   "0")
+    _tx(pm, f"{_WPML}caliFlightEnable", "0")
+    _tx(pm, f"{_WPML}elevationOptimizeEnable", "0")
+    _tx(pm, f"{_WPML}smartObliqueEnable", "0")
+    _tx(pm, f"{_WPML}quickOrthoMappingEnable", "0")
+    _tx(pm, f"{_WPML}facadeWaylineEnable", "0")
+    _tx(pm, f"{_WPML}isLookAtSceneSet", "0")
+    _tx(pm, f"{_WPML}smartObliqueGimbalPitch", "-45")
+    _tx(pm, f"{_WPML}shootType", "distance")
+    _tx(pm, f"{_WPML}direction", "0")
+    _tx(pm, f"{_WPML}margin", "0")
     _tx(pm, f"{_WPML}efficiencyFlightModeEnable", "0")
 
     ov = etree.SubElement(pm, f"{_WPML}overlap")
-    _tx(ov, f"{_WPML}orthoLidarOverlapH",  str(cfg.overlap_front_pct))
-    _tx(ov, f"{_WPML}orthoLidarOverlapW",  str(cfg.overlap_side_pct))
+    _tx(ov, f"{_WPML}orthoLidarOverlapH", str(cfg.overlap_front_pct))
+    _tx(ov, f"{_WPML}orthoLidarOverlapW", str(cfg.overlap_side_pct))
     _tx(ov, f"{_WPML}orthoCameraOverlapH", str(cfg.overlap_front_pct))
     _tx(ov, f"{_WPML}orthoCameraOverlapW", str(cfg.overlap_side_pct))
 
     # Survey polygon
-    poly_el  = etree.SubElement(pm, f"{_KML}Polygon")
-    outer    = etree.SubElement(poly_el, f"{_KML}outerBoundaryIs")
-    ring     = etree.SubElement(outer, f"{_KML}LinearRing")
+    poly_el = etree.SubElement(pm, f"{_KML}Polygon")
+    outer = etree.SubElement(poly_el, f"{_KML}outerBoundaryIs")
+    ring = etree.SubElement(outer, f"{_KML}LinearRing")
     coords_el = etree.SubElement(ring, f"{_KML}coordinates")
     coords_el.text = "\n" + _polygon_coords(survey_4326) + "\n"
 
     _tx(pm, f"{_WPML}ellipsoidHeight", height_s)
-    _tx(pm, f"{_WPML}height",          height_s)
+    _tx(pm, f"{_WPML}height", height_s)
 
     # payloadParam
     pp_el = etree.SubElement(folder, f"{_WPML}payloadParam")
     _tx(pp_el, f"{_WPML}payloadPositionIndex", pp)
-    _tx(pp_el, f"{_WPML}dewarpingEnable",     "0")
-    _tx(pp_el, f"{_WPML}returnMode",          "singleReturnFirst")
-    _tx(pp_el, f"{_WPML}samplingRate",        "240000")
-    _tx(pp_el, f"{_WPML}scanningMode",        "nonRepetitive")
+    _tx(pp_el, f"{_WPML}dewarpingEnable", "0")
+    _tx(pp_el, f"{_WPML}returnMode", "singleReturnFirst")
+    _tx(pp_el, f"{_WPML}samplingRate", "240000")
+    _tx(pp_el, f"{_WPML}scanningMode", "nonRepetitive")
     _tx(pp_el, f"{_WPML}modelColoringEnable", "0")
-    _tx(pp_el, f"{_WPML}imageFormat",         img_fmt)
+    _tx(pp_el, f"{_WPML}imageFormat", img_fmt)
 
     return etree.tostring(
         root,
@@ -382,47 +424,49 @@ def _build_template_kml(
     ).decode("utf-8")
 
 
-def _build_waylines_stub(cfg: FlightConfig, *, speed_ms: float, drone: DroneConfig | None = None) -> str:
+def _build_waylines_stub(
+    cfg: FlightConfig, *, speed_ms: float, drone: DroneConfig | None = None
+) -> str:
     """Minimal waylines.wpml — missionConfig only, no waypoints.
 
     DJI Pilot 2 regenerates the lawnmower waypoints from template.kml on
     import.  We include this file because the reference KMZ contains it
     (open question 6) and omitting it may cause import failures.
     """
-    de = str(drone.drone_enum)             if drone else _DRONE_ENUM
-    ds = str(drone.drone_sub_enum)         if drone else _DRONE_SUB_ENUM
-    pe = str(drone.payload_enum)           if drone else _PAYLOAD_ENUM
-    ps = str(drone.payload_sub_enum)       if drone else _PAYLOAD_SUB_ENUM
+    de = str(drone.drone_enum) if drone else _DRONE_ENUM
+    ds = str(drone.drone_sub_enum) if drone else _DRONE_SUB_ENUM
+    pe = str(drone.payload_enum) if drone else _PAYLOAD_ENUM
+    ps = str(drone.payload_sub_enum) if drone else _PAYLOAD_SUB_ENUM
     pp = str(drone.payload_position_index) if drone else _PAYLOAD_POS_IDX
 
     root = etree.Element(f"{_KML}kml", nsmap=_NSMAP)
-    doc  = etree.SubElement(root, f"{_KML}Document")
+    doc = etree.SubElement(root, f"{_KML}Document")
 
     mc = etree.SubElement(doc, f"{_WPML}missionConfig")
-    _tx(mc, f"{_WPML}flyToWaylineMode",     "safely")
-    _tx(mc, f"{_WPML}finishAction",          cfg.finish_action)
-    _tx(mc, f"{_WPML}exitOnRCLost",          "executeLostAction")
-    _tx(mc, f"{_WPML}executeRCLostAction",   cfg.rc_lost_action)
+    _tx(mc, f"{_WPML}flyToWaylineMode", "safely")
+    _tx(mc, f"{_WPML}finishAction", cfg.finish_action)
+    _tx(mc, f"{_WPML}exitOnRCLost", "executeLostAction")
+    _tx(mc, f"{_WPML}executeRCLostAction", cfg.rc_lost_action)
     _tx(mc, f"{_WPML}takeOffSecurityHeight", f"{cfg.takeoff_security_height_m:.6g}")
-    _tx(mc, f"{_WPML}globalRTHHeight",       f"{cfg.rth_height_m:.6g}")
+    _tx(mc, f"{_WPML}globalRTHHeight", f"{cfg.rth_height_m:.6g}")
     _tx(mc, f"{_WPML}globalTransitionalSpeed", f"{cfg.transitional_speed_ms:.6g}")
     di = etree.SubElement(mc, f"{_WPML}droneInfo")
-    _tx(di, f"{_WPML}droneEnumValue",    de)
+    _tx(di, f"{_WPML}droneEnumValue", de)
     _tx(di, f"{_WPML}droneSubEnumValue", ds)
     _tx(mc, f"{_WPML}waylineAvoidLimitAreaMode", "0")
     pi_el = etree.SubElement(mc, f"{_WPML}payloadInfo")
-    _tx(pi_el, f"{_WPML}payloadEnumValue",    pe)
+    _tx(pi_el, f"{_WPML}payloadEnumValue", pe)
     _tx(pi_el, f"{_WPML}payloadSubEnumValue", ps)
     _tx(pi_el, f"{_WPML}payloadPositionIndex", pp)
 
     # Empty folder — Pilot 2 fills this from the template polygon
     folder = etree.SubElement(doc, f"{_KML}Folder")
-    _tx(folder, f"{_WPML}templateId",        "0")
+    _tx(folder, f"{_WPML}templateId", "0")
     _tx(folder, f"{_WPML}executeHeightMode", "WGS84")
-    _tx(folder, f"{_WPML}waylineId",         "0")
-    _tx(folder, f"{_WPML}distance",          "0")
-    _tx(folder, f"{_WPML}duration",          "0")
-    _tx(folder, f"{_WPML}autoFlightSpeed",   f"{speed_ms:.15g}")
+    _tx(folder, f"{_WPML}waylineId", "0")
+    _tx(folder, f"{_WPML}distance", "0")
+    _tx(folder, f"{_WPML}duration", "0")
+    _tx(folder, f"{_WPML}autoFlightSpeed", f"{speed_ms:.15g}")
 
     return etree.tostring(
         root,
@@ -434,8 +478,10 @@ def _build_waylines_stub(cfg: FlightConfig, *, speed_ms: float, drone: DroneConf
 
 # ---- Helpers ----
 
+
 def _validate_polygon(geom: BaseGeometry) -> None:
     from shapely.geometry import Polygon
+
     if not isinstance(geom, Polygon):
         raise ValueError(
             f"KMZ polygon must be a single Polygon, got {type(geom).__name__}. "

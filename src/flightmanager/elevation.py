@@ -36,8 +36,7 @@ from flightmanager.cache import FetcherFn
 log = logging.getLogger(__name__)
 
 _WCS_URL = (
-    "https://avoin-karttakuva.maanmittauslaitos.fi"
-    "/ortokuvat-ja-korkeusmallit/wcs/v2"
+    "https://avoin-karttakuva.maanmittauslaitos.fi/ortokuvat-ja-korkeusmallit/wcs/v2"
 )
 _COVERAGE_ID = "korkeusmalli_2m"
 _SOURCE_ATTRIBUTION = (
@@ -72,8 +71,9 @@ def tile_fetcher(
             "api-key": api_key,
         }
 
-        log.info("Fetching DEM tile %s (%.0f×%.0f m)", tile_id,
-                 xmax - xmin, ymax - ymin)
+        log.info(
+            "Fetching DEM tile %s (%.0f×%.0f m)", tile_id, xmax - xmin, ymax - ymin
+        )
 
         resp = sess.get(_WCS_URL, params=params, timeout=timeout_s, stream=True)
         resp.raise_for_status()

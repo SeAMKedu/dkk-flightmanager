@@ -46,15 +46,16 @@ _GRID_CACHE: dict[str, "_GridIndex"] = {}
 
 @dataclass
 class _GridIndex:
-    tree: object                      # shapely.strtree.STRtree
-    geoms: list                       # parallel to tree input order
-    names: list[str]                  # MGRS tile id per geom
+    tree: object  # shapely.strtree.STRtree
+    geoms: list  # parallel to tree input order
+    names: list[str]  # MGRS tile id per geom
     centers: dict[str, tuple[float, float]]  # tile_id -> (lat, lon) of centroid
-    geom_by_name: dict[str, object]   # tile_id -> shapely geometry
+    geom_by_name: dict[str, object]  # tile_id -> shapely geometry
 
     def geojson(self, tile_id: str) -> dict | None:
         """GeoJSON geometry (EPSG:4326) for *tile_id*, or None."""
         from shapely.geometry import mapping
+
         g = self.geom_by_name.get(tile_id)
         return mapping(g) if g is not None else None
 
@@ -75,7 +76,9 @@ class OverpassResult:
     grid_ok: bool
     grid_msg: str = ""
     tile_centers: dict[str, tuple[float, float]] = field(default_factory=dict)
-    tile_geojson: dict[str, dict] = field(default_factory=dict)  # tile_id -> GeoJSON geometry
+    tile_geojson: dict[str, dict] = field(
+        default_factory=dict
+    )  # tile_id -> GeoJSON geometry
     attribution: str = (
         "Orbital data from CelesTrak. Sentinel-2 tiling grid: "
         "https://zenodo.org/records/10998972"
@@ -120,8 +123,13 @@ def load_grid(grid_path: str | Path) -> _GridIndex | None:
         centers[name] = (c.y, c.x)  # (lat, lon)
         geom_by_name[name] = geom
 
-    idx = _GridIndex(tree=STRtree(geoms), geoms=geoms, names=names,
-                     centers=centers, geom_by_name=geom_by_name)
+    idx = _GridIndex(
+        tree=STRtree(geoms),
+        geoms=geoms,
+        names=names,
+        centers=centers,
+        geom_by_name=geom_by_name,
+    )
     _GRID_CACHE[key] = idx
     log.info("Indexed %d MGRS tiles", len(names))
     return idx
@@ -146,10 +154,12 @@ def tile_for_point(lat: float, lon: float, grid: _GridIndex) -> str | None:
         return None
     if len(hits) == 1:
         return hits[0]
+
     # Multiple overlapping tiles — pick the one whose centre is closest.
     def _dist(name: str) -> float:
         clat, clon = grid.centers[name]
         return (clat - lat) ** 2 + (clon - lon) ** 2
+
     return min(hits, key=_dist)
 
 
@@ -198,9 +208,11 @@ def tiles_with_neighbors(
     """
     grid = load_grid(cfg.grid_file)
     if grid is None:
-        return {"grid_ok": False,
-                "grid_msg": f"Sentinel-2 grid file not found: {cfg.grid_file}",
-                "tiles": []}
+        return {
+            "grid_ok": False,
+            "grid_msg": f"Sentinel-2 grid file not found: {cfg.grid_file}",
+            "tiles": [],
+        }
 
     counts: dict[str, int] = {}
     for lat, lon in points_latlon:
@@ -210,13 +222,25 @@ def tiles_with_neighbors(
 
     job_ids = set(counts)
     tiles = [
-        {"id": tid, "geometry": grid.geojson(tid),
-         "center": list(grid.centers[tid]), "is_job": True, "job_count": counts[tid]}
+        {
+            "id": tid,
+            "geometry": grid.geojson(tid),
+            "center": list(grid.centers[tid]),
+            "is_job": True,
+            "job_count": counts[tid],
+        }
         for tid in sorted(job_ids)
     ]
     for tid in neighbor_tiles(grid, job_ids):
-        tiles.append({"id": tid, "geometry": grid.geojson(tid),
-                      "center": list(grid.centers[tid]), "is_job": False, "job_count": 0})
+        tiles.append(
+            {
+                "id": tid,
+                "geometry": grid.geojson(tid),
+                "center": list(grid.centers[tid]),
+                "is_job": False,
+                "job_count": 0,
+            }
+        )
 
     msg = "" if job_ids else "No MGRS tile matched the job location(s)."
     return {"grid_ok": True, "grid_msg": msg, "tiles": tiles}
@@ -273,7 +297,9 @@ _OMM_RETRIES = 2
 _OMM_RETRY_BACKOFF_S = 1.0
 
 
-def _fetch_one_omm(nid: int, cfg: SatellitesConfig, sess: requests.Session) -> dict | None:
+def _fetch_one_omm(
+    nid: int, cfg: SatellitesConfig, sess: requests.Session
+) -> dict | None:
     url = cfg.omm_url.format(catnr=nid)
     for attempt in range(_OMM_RETRIES + 1):
         try:
@@ -286,8 +312,12 @@ def _fetch_one_omm(nid: int, cfg: SatellitesConfig, sess: requests.Session) -> d
             if attempt < _OMM_RETRIES:
                 time.sleep(_OMM_RETRY_BACKOFF_S * (attempt + 1))
                 continue
-            log.error("Failed to fetch OMM for %d after %d attempts: %s",
-                      nid, _OMM_RETRIES + 1, exc)
+            log.error(
+                "Failed to fetch OMM for %d after %d attempts: %s",
+                nid,
+                _OMM_RETRIES + 1,
+                exc,
+            )
             return None
         if not isinstance(data, list) or not data:
             log.warning("CelesTrak returned no element set for NORAD %d", nid)
@@ -356,13 +386,15 @@ def compute_overpasses(
                 alt, _az, _dist = (sat - observer).at(ti).altaz()
                 if alt.degrees < min_elev_deg:
                     continue
-                results.append(Overpass(
-                    norad_id=nid,
-                    name=name,
-                    tile_id=tile_id,
-                    peak_utc=ti.utc_datetime(),
-                    max_elev_deg=round(alt.degrees, 1),
-                ))
+                results.append(
+                    Overpass(
+                        norad_id=nid,
+                        name=name,
+                        tile_id=tile_id,
+                        peak_utc=ti.utc_datetime(),
+                        max_elev_deg=round(alt.degrees, 1),
+                    )
+                )
 
     results.sort(key=lambda o: o.peak_utc)
     return results
@@ -390,31 +422,45 @@ def overpasses_for_points(
     grid = load_grid(cfg.grid_file)
     if grid is None:
         return OverpassResult(
-            tile_ids=[], overpasses=[], grid_ok=False,
+            tile_ids=[],
+            overpasses=[],
+            grid_ok=False,
             grid_msg=f"Sentinel-2 grid file not found: {cfg.grid_file}",
         )
 
     tile_centers = tiles_for_points(points_latlon, grid)
     if not tile_centers:
         return OverpassResult(
-            tile_ids=[], overpasses=[], grid_ok=True,
+            tile_ids=[],
+            overpasses=[],
+            grid_ok=True,
             grid_msg="No MGRS tile matched the job location(s).",
         )
     tile_geojson = {tid: grid.geojson(tid) for tid in tile_centers}
     if not enabled:
         return OverpassResult(
-            tile_ids=sorted(tile_centers), overpasses=[], grid_ok=True,
+            tile_ids=sorted(tile_centers),
+            overpasses=[],
+            grid_ok=True,
             grid_msg="No tracked satellites enabled.",
-            tile_centers=tile_centers, tile_geojson=tile_geojson,
+            tile_centers=tile_centers,
+            tile_geojson=tile_geojson,
         )
 
     names_by_id = {s.norad_id: s.name for s in enabled}
     omm_by_id = fetch_omm([s.norad_id for s in enabled], cfg, cache_dir, session)
     overpasses = compute_overpasses(
-        tile_centers, omm_by_id, names_by_id,
-        days_ahead=cfg.days_ahead, min_elev_deg=cfg.min_elevation_deg, start=start,
+        tile_centers,
+        omm_by_id,
+        names_by_id,
+        days_ahead=cfg.days_ahead,
+        min_elev_deg=cfg.min_elevation_deg,
+        start=start,
     )
     return OverpassResult(
-        tile_ids=sorted(tile_centers), overpasses=overpasses, grid_ok=True,
-        tile_centers=tile_centers, tile_geojson=tile_geojson,
+        tile_ids=sorted(tile_centers),
+        overpasses=overpasses,
+        grid_ok=True,
+        tile_centers=tile_centers,
+        tile_geojson=tile_geojson,
     )

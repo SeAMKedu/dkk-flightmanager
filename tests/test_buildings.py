@@ -23,6 +23,7 @@ from flightmanager.config import HomeSafetyConfig
 # Fixture features (EPSG:3067 coords, Finnish range)
 # ---------------------------------------------------------------------------
 
+
 def _make_feature(
     mtk_id: int,
     kohdeluokka: int,
@@ -42,19 +43,23 @@ def _make_feature(
         "properties": props,
         "geometry": {
             "type": "Polygon",
-            "coordinates": [[
-                [300000, 6900000], [300050, 6900000],
-                [300050, 6900050], [300000, 6900050],
-                [300000, 6900000],
-            ]],
+            "coordinates": [
+                [
+                    [300000, 6900000],
+                    [300050, 6900000],
+                    [300050, 6900050],
+                    [300000, 6900050],
+                    [300000, 6900000],
+                ]
+            ],
         },
     }
 
 
-FEAT_RESIDENTIAL   = _make_feature(1001, 42211, 1)   # asuinrakennus
-FEAT_COMMERCIAL    = _make_feature(1002, 42221, 2)   # liike-/julkinen
-FEAT_HOLIDAY       = _make_feature(1003, 42231, 3)   # lomarakennus
-FEAT_AGRICULTURAL  = _make_feature(1004, 42261, 6)   # maatalous/varasto
+FEAT_RESIDENTIAL = _make_feature(1001, 42211, 1)  # asuinrakennus
+FEAT_COMMERCIAL = _make_feature(1002, 42221, 2)  # liike-/julkinen
+FEAT_HOLIDAY = _make_feature(1003, 42231, 3)  # lomarakennus
+FEAT_AGRICULTURAL = _make_feature(1004, 42261, 6)  # maatalous/varasto
 
 
 def _mock_response(features: list[dict]) -> MagicMock:
@@ -99,7 +104,10 @@ class TestToBuilding:
         assert 6_500_000 < bounds[1] < 7_800_000
 
     def test_invalid_geometry_returns_none(self):
-        bad = {**FEAT_RESIDENTIAL, "geometry": {"type": "Polygon", "coordinates": [[[22.6, 62.5]]]}}
+        bad = {
+            **FEAT_RESIDENTIAL,
+            "geometry": {"type": "Polygon", "coordinates": [[[22.6, 62.5]]]},
+        }
         # 4326 coords → CRSError → returns None
         b = _to_building(bad)
         assert b is None
@@ -134,7 +142,13 @@ class TestGeoJSONRoundTrip:
 class TestFilterBuildings:
     def _make_buildings(self) -> list[Building]:
         return [
-            b for f in [FEAT_RESIDENTIAL, FEAT_COMMERCIAL, FEAT_HOLIDAY, FEAT_AGRICULTURAL]
+            b
+            for f in [
+                FEAT_RESIDENTIAL,
+                FEAT_COMMERCIAL,
+                FEAT_HOLIDAY,
+                FEAT_AGRICULTURAL,
+            ]
             if (b := _to_building(f)) is not None
         ]
 
@@ -228,7 +242,9 @@ class TestTileFetcher:
 
         fetcher = tile_fetcher("test-api-key", session=sess)
         dest = tmp_path / "tile.geojson"
-        fetcher("E300000_N6900000", (300_000.0, 6_900_000.0, 301_000.0, 6_901_000.0), dest)
+        fetcher(
+            "E300000_N6900000", (300_000.0, 6_900_000.0, 301_000.0, 6_901_000.0), dest
+        )
 
         params = sess.get.call_args[1]["params"]
         assert "bbox-crs" in params
@@ -254,12 +270,16 @@ class TestTileFetcher:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Hits live MML API — run with -m integration and set MML_API_KEY")
+@pytest.mark.skip(
+    reason="Hits live MML API — run with -m integration and set MML_API_KEY"
+)
 def test_live_fetch_tile():
     import os
+
     api_key = os.environ["MML_API_KEY"]
     fetcher = tile_fetcher(api_key)
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".geojson", delete=False) as f:
         dest = Path(f.name)
     # Small 1km tile near Seinäjoki known to have buildings
@@ -268,4 +288,5 @@ def test_live_fetch_tile():
     assert len(buildings) >= 0  # area may be sparse; just confirm no crash
     for b in buildings:
         from flightmanager.crs import assert_crs
+
         assert_crs(b.geometry, 3067)

@@ -39,7 +39,9 @@ def test_lru_eviction_past_cap():
     assert len(st.preview_results) == st.PREVIEW_RESULTS_CAP
     # Oldest evicted, newest kept.
     assert st.get_preview("s0") is None
-    assert st.get_preview(f"s{st.PREVIEW_RESULTS_CAP + 4}") == {"n": st.PREVIEW_RESULTS_CAP + 4}
+    assert st.get_preview(f"s{st.PREVIEW_RESULTS_CAP + 4}") == {
+        "n": st.PREVIEW_RESULTS_CAP + 4
+    }
 
 
 def test_restore_keeps_recent_session_warm():

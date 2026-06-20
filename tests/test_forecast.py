@@ -19,8 +19,15 @@ NOW = datetime(2026, 6, 15, tzinfo=timezone.utc)
 def _fake_overpass_result():
     return OverpassResult(
         tile_ids=["34VEQ"],
-        overpasses=[Overpass(39084, "Landsat 8", "34VEQ",
-                             datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc), 70.0)],
+        overpasses=[
+            Overpass(
+                39084,
+                "Landsat 8",
+                "34VEQ",
+                datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc),
+                70.0,
+            )
+        ],
         grid_ok=True,
     )
 
@@ -39,8 +46,8 @@ def _fake_weather():
 
 def test_fingerprint_stable_and_sensitive():
     a = fc._fingerprint(PTS, "2026-06-15")
-    assert a == fc._fingerprint(PTS, "2026-06-15")            # stable
-    assert a != fc._fingerprint(PTS, "2026-06-16")            # date matters
+    assert a == fc._fingerprint(PTS, "2026-06-15")  # stable
+    assert a != fc._fingerprint(PTS, "2026-06-16")  # date matters
     assert a != fc._fingerprint([(60.0, 24.0)], "2026-06-15")  # points matter
     # Order-independent.
     two = [(62.79, 22.84), (60.0, 24.0)]
@@ -56,6 +63,7 @@ def test_cache_roundtrip_and_mismatch(tmp_path):
     # Expired TTL → miss.
     import os
     import time
+
     old = time.time() - 4 * 3600
     os.utime(p, (old, old))
     assert fc._read_cache(p, "fp1", 3) is None
@@ -73,14 +81,19 @@ def test_build_forecast_empty_centroids(tmp_path):
 
 
 def test_build_forecast_composes_and_caches(tmp_path, monkeypatch):
-    monkeypatch.setattr(sat, "overpasses_for_points",
-                        lambda *a, **k: _fake_overpass_result())
+    monkeypatch.setattr(
+        sat, "overpasses_for_points", lambda *a, **k: _fake_overpass_result()
+    )
     monkeypatch.setattr(sat, "load_grid", lambda *a, **k: None)
     monkeypatch.setattr(wx, "fetch_forecast", lambda *a, **k: _fake_weather())
 
     res = fc.build_forecast(
-        PTS, SatellitesConfig(), WeatherConfig(), tmp_path,
-        folder_dir=tmp_path, now=NOW,
+        PTS,
+        SatellitesConfig(),
+        WeatherConfig(),
+        tmp_path,
+        folder_dir=tmp_path,
+        now=NOW,
     )
     assert res["tile_ids"] == ["34VEQ"]
     assert res["grid_ok"] is True
@@ -131,7 +144,11 @@ def test_build_forecast_cache_short_circuits(tmp_path, monkeypatch):
     monkeypatch.setattr(wx, "fetch_forecast", _boom)
 
     res = fc.build_forecast(
-        PTS, SatellitesConfig(), WeatherConfig(), tmp_path,
-        folder_dir=tmp_path, now=NOW,
+        PTS,
+        SatellitesConfig(),
+        WeatherConfig(),
+        tmp_path,
+        folder_dir=tmp_path,
+        now=NOW,
     )
     assert res["tile_ids"] == ["CACHED"]

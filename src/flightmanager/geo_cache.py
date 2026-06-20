@@ -39,7 +39,7 @@ class ParcelRecord:
     lpis_year: int
     tunnus: int
     area_ha: float
-    geometry_wkt: str    # WKT in EPSG:3067
+    geometry_wkt: str  # WKT in EPSG:3067
     fetch_timestamp: str  # ISO 8601 UTC
 
 
@@ -60,8 +60,12 @@ def get_parcel_cache(
     if row is None:
         return None
     record = ParcelRecord(
-        parcel_id=row[0], lpis_year=row[1], tunnus=row[2],
-        area_ha=row[3], geometry_wkt=row[4], fetch_timestamp=row[5],
+        parcel_id=row[0],
+        lpis_year=row[1],
+        tunnus=row[2],
+        area_ha=row[3],
+        geometry_wkt=row[4],
+        fetch_timestamp=row[5],
     )
     if _is_ts_expired(record.fetch_timestamp, cache_config.parcels_ttl_days):
         return None
@@ -98,8 +102,8 @@ def put_parcel_cache(
 
 @dataclass
 class PropertyRecord:
-    property_id: str   # 14-digit numeric kiinteistötunnus
-    display_id: str    # dash form e.g. "399-891-1-1"
+    property_id: str  # 14-digit numeric kiinteistötunnus
+    display_id: str  # dash form e.g. "399-891-1-1"
     area_ha: float
     geometry_wkt: str  # WKT in EPSG:3067 (unioned if multiple palstat)
     fetch_timestamp: str
@@ -121,8 +125,11 @@ def get_property_cache(
     if row is None:
         return None
     record = PropertyRecord(
-        property_id=row[0], display_id=row[1], area_ha=row[2],
-        geometry_wkt=row[3], fetch_timestamp=row[4],
+        property_id=row[0],
+        display_id=row[1],
+        area_ha=row[2],
+        geometry_wkt=row[3],
+        fetch_timestamp=row[4],
     )
     if _is_ts_expired(record.fetch_timestamp, cache_config.properties_ttl_days):
         return None

@@ -53,15 +53,17 @@ OVERHEAD_KOHDELUOKKA = 22312
 class PowerLine:
     mtk_id: int
     kohdeluokka: int
-    is_overhead: bool        # True = overhead (22312 or pylon-corrected 22311); False = underground
-    geometry: BaseGeometry   # Shapely LineString, EPSG:3067
+    is_overhead: (
+        bool  # True = overhead (22312 or pylon-corrected 22311); False = underground
+    )
+    geometry: BaseGeometry  # Shapely LineString, EPSG:3067
     alkupvm: str | None
 
 
 @dataclass
 class Pylon:
     mtk_id: int
-    geometry: BaseGeometry   # Shapely Point, EPSG:3067
+    geometry: BaseGeometry  # Shapely Point, EPSG:3067
 
 
 def tile_fetcher(
@@ -74,7 +76,9 @@ def tile_fetcher(
 
     def _fetch(tile_id: str, tile_bbox: tuple, dest: Path) -> tuple[str, str | None]:
         xmin, ymin, xmax, ymax = tile_bbox
-        features = _fetch_tile_features(xmin, ymin, xmax, ymax, api_key, sess, timeout_s)
+        features = _fetch_tile_features(
+            xmin, ymin, xmax, ymax, api_key, sess, timeout_s
+        )
         log.info("Power lines tile %s: %d feature(s)", tile_id, len(features))
         _write_geojson(features, dest)
         return (_ITEMS_URL, None)
@@ -115,8 +119,9 @@ def pylon_tile_fetcher(
 
     def _fetch(tile_id: str, tile_bbox: tuple, dest: Path) -> tuple[str, str | None]:
         xmin, ymin, xmax, ymax = tile_bbox
-        features = _fetch_tile_features(xmin, ymin, xmax, ymax, api_key, sess, timeout_s,
-                                        url=_PYLONS_URL)
+        features = _fetch_tile_features(
+            xmin, ymin, xmax, ymax, api_key, sess, timeout_s, url=_PYLONS_URL
+        )
         log.info("Pylons tile %s: %d feature(s)", tile_id, len(features))
         _write_geojson(features, dest)
         return (_PYLONS_URL, None)
@@ -177,7 +182,7 @@ def correct_overhead_from_pylons(
                 start, end = Point(coords[0][:2]), Point(coords[-1][:2])
             elif geom.geom_type == "MultiLineString":
                 first = list(geom.geoms[0].coords)
-                last  = list(geom.geoms[-1].coords)
+                last = list(geom.geoms[-1].coords)
                 start, end = Point(first[0][:2]), Point(last[-1][:2])
             else:
                 corrected.append(pl)
@@ -201,7 +206,10 @@ def correct_overhead_from_pylons(
 
 
 def _fetch_tile_features(
-    xmin: float, ymin: float, xmax: float, ymax: float,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
     api_key: str,
     sess: requests.Session,
     timeout_s: int,

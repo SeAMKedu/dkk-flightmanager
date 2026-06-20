@@ -6,6 +6,7 @@ All geometry in EPSG:3067.
 
 No file I/O, no server dependencies — pure Shapely math.
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,15 +21,18 @@ log = logging.getLogger(__name__)
 @dataclass
 class RouteResult:
     """Output of compute_route()."""
+
     strip_count: int
     photo_count: int
-    strip_dist_m: float            # sum of strip traverse lengths
-    turn_dist_m: float             # inter-strip transition distances
-    angle_deg: float               # the angle that was used
-    strips_3067: list[tuple]       # (x1,y1,x2,y2) per strip in EPSG:3067
-    transit_segs_3067: list[list[tuple[float, float]]]  # each transit: ordered (x,y) waypoints
-    first_wp_3067: tuple | None    # (x,y) start of first strip
-    last_wp_3067: tuple | None     # (x,y) end of last strip
+    strip_dist_m: float  # sum of strip traverse lengths
+    turn_dist_m: float  # inter-strip transition distances
+    angle_deg: float  # the angle that was used
+    strips_3067: list[tuple]  # (x1,y1,x2,y2) per strip in EPSG:3067
+    transit_segs_3067: list[
+        list[tuple[float, float]]
+    ]  # each transit: ordered (x,y) waypoints
+    first_wp_3067: tuple | None  # (x,y) start of first strip
+    last_wp_3067: tuple | None  # (x,y) end of last strip
 
     @property
     def total_route_dist_m(self) -> float:
@@ -43,7 +47,9 @@ def compute_auto_angle(polygon_3067) -> float:
     mbr = polygon_3067.minimum_rotated_rectangle
     coords = list(mbr.exterior.coords)
     edges = [(coords[i], coords[i + 1]) for i in range(4)]
-    long_edge = max(edges, key=lambda e: math.hypot(e[1][0]-e[0][0], e[1][1]-e[0][1]))
+    long_edge = max(
+        edges, key=lambda e: math.hypot(e[1][0] - e[0][0], e[1][1] - e[0][1])
+    )
     dx = long_edge[1][0] - long_edge[0][0]
     dy = long_edge[1][1] - long_edge[0][1]
     return math.degrees(math.atan2(dx, dy)) % 180
@@ -67,17 +73,21 @@ def _ring_route(
             bx, by = ring[(i + 1) % n]
             dx, dy = bx - ax, by - ay
             l2 = dx * dx + dy * dy
-            t = max(0.0, min(1.0, ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / l2)) if l2 > 1e-10 else 0.0
+            t = (
+                max(0.0, min(1.0, ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / l2))
+                if l2 > 1e-10
+                else 0.0
+            )
             d = math.hypot(pt[0] - (ax + t * dx), pt[1] - (ay + t * dy))
             if d < best_d:
                 best_d, best = d, i
         return best
 
     i1, i2 = seg_idx(p1), seg_idx(p2)
-    steps_cw  = (i2 - i1) % n
+    steps_cw = (i2 - i1) % n
     steps_ccw = (i1 - i2) % n
-    path_cw  = [p1] + [ring[(i1 + 1 + k) % n] for k in range(steps_cw)]  + [p2]
-    path_ccw = [p1] + [ring[(i1 - k) % n]     for k in range(steps_ccw)] + [p2]
+    path_cw = [p1] + [ring[(i1 + 1 + k) % n] for k in range(steps_cw)] + [p2]
+    path_ccw = [p1] + [ring[(i1 - k) % n] for k in range(steps_ccw)] + [p2]
 
     def plen(pts: list) -> float:
         return sum(
@@ -170,8 +180,10 @@ def _greedy_nn_order(
 
     def _nearest_ep_dist(i: int, pos: tuple[float, float]) -> float:
         e1, e2 = _rot_ep(i)
-        return min(math.hypot(e1[0] - pos[0], e1[1] - pos[1]),
-                   math.hypot(e2[0] - pos[0], e2[1] - pos[1]))
+        return min(
+            math.hypot(e1[0] - pos[0], e1[1] - pos[1]),
+            math.hypot(e2[0] - pos[0], e2[1] - pos[1]),
+        )
 
     cur_rot: tuple[float, float] = (home_rot_x, home_rot_y)
     cur_strip = min(range(n_strips), key=lambda i: _nearest_ep_dist(i, cur_rot))
@@ -241,10 +253,15 @@ def compute_route(
 
     if not raw_segs:
         return RouteResult(
-            strip_count=0, photo_count=0, strip_dist_m=0.0,
-            turn_dist_m=0.0, angle_deg=angle_deg,
-            strips_3067=[], transit_segs_3067=[],  # type: ignore[arg-type]
-            first_wp_3067=None, last_wp_3067=None,
+            strip_count=0,
+            photo_count=0,
+            strip_dist_m=0.0,
+            turn_dist_m=0.0,
+            angle_deg=angle_deg,
+            strips_3067=[],
+            transit_segs_3067=[],  # type: ignore[arg-type]
+            first_wp_3067=None,
+            last_wp_3067=None,
         )
 
     # Home position in rotated space (absolute coordinates, same frame as raw_segs).
@@ -276,7 +293,7 @@ def compute_route(
     strip_dist_m = sum(math.hypot(x2 - x1, y2 - y1) for x1, y1, x2, y2 in strips_3067)
 
     photo_count = sum(
-        max(1, math.ceil(math.hypot(x2-x1, y2-y1) / photo_spacing_m) + 1)
+        max(1, math.ceil(math.hypot(x2 - x1, y2 - y1) / photo_spacing_m) + 1)
         for x1, y1, x2, y2 in strips_3067
     )
 
@@ -288,7 +305,7 @@ def compute_route(
         if home_3067 is not None:
             transit_segs.append([home_3067, (strips_3067[0][0], strips_3067[0][1])])
         for i in range(len(strips_3067) - 1):
-            p1 = (strips_3067[i][2],    strips_3067[i][3])
+            p1 = (strips_3067[i][2], strips_3067[i][3])
             p2 = (strips_3067[i + 1][0], strips_3067[i + 1][1])
             path = _boundary_route(polygon_3067, p1, p2)
             transit_segs.append(path)
@@ -333,17 +350,18 @@ def estimate_flight_time(
 
     home_transit_s = 0.0
     if home_3067 and route.first_wp_3067:
-        d = math.hypot(route.first_wp_3067[0] - home_3067[0],
-                       route.first_wp_3067[1] - home_3067[1])
+        d = math.hypot(
+            route.first_wp_3067[0] - home_3067[0], route.first_wp_3067[1] - home_3067[1]
+        )
         home_transit_s = d / transit_speed_ms
 
-    survey_s = (route.strip_dist_m / auto_speed_ms
-                + route.turn_dist_m / transit_speed_ms)
+    survey_s = route.strip_dist_m / auto_speed_ms + route.turn_dist_m / transit_speed_ms
 
     return_s = 0.0
     if home_3067 and route.last_wp_3067:
-        d = math.hypot(route.last_wp_3067[0] - home_3067[0],
-                       route.last_wp_3067[1] - home_3067[1])
+        d = math.hypot(
+            route.last_wp_3067[0] - home_3067[0], route.last_wp_3067[1] - home_3067[1]
+        )
         return_s = d / transit_speed_ms
 
     descent_s = climb_m / VERT_SPEED
@@ -359,6 +377,7 @@ def estimate_flight_time(
 @dataclass
 class PlannedRoute:
     """Output of :func:`plan_route` — the route plus its altitude/waypoint profile."""
+
     route: RouteResult
     altitude_profile: list[float]
     strip_waypoints: list | None
@@ -406,13 +425,19 @@ def plan_route(
     """
     if angle_deg is None:
         angle_deg = compute_auto_angle(polygon_3067)
-    strip_m, photo_m = footprint_spacings(drone, height_m, overlap_front_pct, overlap_side_pct)
+    strip_m, photo_m = footprint_spacings(
+        drone, height_m, overlap_front_pct, overlap_side_pct
+    )
 
     if advanced:
         try:
             from flightmanager.adaptive_route import compute_adaptive_route
+
             route, altitude_profile, strip_wps, transit_wps = compute_adaptive_route(
-                polygon_3067, angle_deg, buildings or [], power_lines or [],
+                polygon_3067,
+                angle_deg,
+                buildings or [],
+                power_lines or [],
                 drone=drone,
                 H_max=adv_max_height_m or height_m,
                 H_min=adv_min_height_m,
@@ -423,11 +448,17 @@ def plan_route(
                 min_dip_m=adv_min_dip_m,
                 home_3067=home_3067,
             )
-            return PlannedRoute(route, altitude_profile, strip_wps, transit_wps, angle_deg)
+            return PlannedRoute(
+                route, altitude_profile, strip_wps, transit_wps, angle_deg
+            )
         except Exception as exc:
-            log.warning("Adaptive route failed — %s; falling back to flat altitude", exc)
+            log.warning(
+                "Adaptive route failed — %s; falling back to flat altitude", exc
+            )
 
-    route = compute_route(polygon_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
+    route = compute_route(
+        polygon_3067, angle_deg, strip_m, photo_m, home_3067=home_3067
+    )
     altitude_profile = [height_m] * len(route.strips_3067)
     return PlannedRoute(route, altitude_profile, None, None, angle_deg)
 
@@ -453,17 +484,27 @@ def route_result_to_geojson(
     from flightmanager.geometry import reproject_to_4326
 
     def _seg_feat(i, x1, y1, x2, y2, alt, speed):
-        wps = strip_waypoints[i] if strip_waypoints and i < len(strip_waypoints) else None
+        wps = (
+            strip_waypoints[i] if strip_waypoints and i < len(strip_waypoints) else None
+        )
         if wps and len(wps) > 2:
-            line       = reproject_to_4326(LineString([(wp[0], wp[1]) for wp in wps]))
-            wpt_alts   = [round(wp[2], 1) for wp in wps]
+            line = reproject_to_4326(LineString([(wp[0], wp[1]) for wp in wps]))
+            wpt_alts = [round(wp[2], 1) for wp in wps]
             wpt_speeds = [round(wp[3], 2) for wp in wps]
-            props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2),
-                     "wpt_alts": wpt_alts, "wpt_speeds": wpt_speeds}
+            props = {
+                "altitude_m": round(alt, 1),
+                "speed_ms": round(speed, 2),
+                "wpt_alts": wpt_alts,
+                "wpt_speeds": wpt_speeds,
+            }
         else:
-            line  = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
+            line = reproject_to_4326(LineString([(x1, y1), (x2, y2)]))
             props = {"altitude_m": round(alt, 1), "speed_ms": round(speed, 2)}
-        return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": props}
+        return {
+            "type": "Feature",
+            "geometry": dict(_mapping(line)),
+            "properties": props,
+        }
 
     # transit_waypoints covers only inter-strip transits (N-1 entries).
     # When home_3067 was set, transit_segs_3067 has N+1 entries:
@@ -485,7 +526,12 @@ def route_result_to_geojson(
         line = reproject_to_4326(LineString(pts))
         props: dict = {}
         tw_i = _tw_idx(seg_idx) if seg_idx is not None else None
-        if tw_i is not None and transit_waypoints and tw_i < len(transit_waypoints) and transit_waypoints[tw_i]:
+        if (
+            tw_i is not None
+            and transit_waypoints
+            and tw_i < len(transit_waypoints)
+            and transit_waypoints[tw_i]
+        ):
             tw_min = min(tw[2] for tw in transit_waypoints[tw_i])
             if adv_min_height_m is not None and altitude_profile:
                 H_max_est = max(altitude_profile)
@@ -495,15 +541,23 @@ def route_result_to_geojson(
                     props["altitude_m"] = round(tw_min, 1)
             else:
                 props["altitude_m"] = round(tw_min, 1)
-        return {"type": "Feature", "geometry": dict(_mapping(line)), "properties": props}
+        return {
+            "type": "Feature",
+            "geometry": dict(_mapping(line)),
+            "properties": props,
+        }
 
     strips = [
-        _seg_feat(i, *s, alt=altitude_profile[i],
-                  speed=drone.auto_speed(altitude_profile[i], overlap_front_pct))
+        _seg_feat(
+            i,
+            *s,
+            alt=altitude_profile[i],
+            speed=drone.auto_speed(altitude_profile[i], overlap_front_pct),
+        )
         for i, s in enumerate(route.strips_3067)
     ]
     transits = [_path_feat(seg, i) for i, seg in enumerate(route.transit_segs_3067)]
     return {
-        "strips_geojson":   {"type": "FeatureCollection", "features": strips},
+        "strips_geojson": {"type": "FeatureCollection", "features": strips},
         "transits_geojson": {"type": "FeatureCollection", "features": transits},
     }

@@ -49,6 +49,7 @@ TileBbox = tuple[float, float, float, float]  # xmin, ymin, xmax, ymax
 # to dest_path and return (source_url, dataset_version_or_None).
 FetcherFn = Callable[[str, TileBbox, Path], tuple[str, str | None]]
 
+
 # Per-tile threading locks — prevents two threads fetching the same tile
 # simultaneously. Held in a WeakValueDictionary so a tile's lock lives only
 # while a thread is actually using it (via the `with` in get_tiles) and is
@@ -108,8 +109,10 @@ def covering_tiles(bbox: TileBbox, tile_size_m: int) -> list[tuple[str, TileBbox
         while y < ymax:
             tile_id = f"E{x}_N{y}"
             tile_bbox: TileBbox = (
-                float(x), float(y),
-                float(x + tile_size_m), float(y + tile_size_m),
+                float(x),
+                float(y),
+                float(x + tile_size_m),
+                float(y + tile_size_m),
             )
             tiles.append((tile_id, tile_bbox))
             y += tile_size_m
@@ -126,12 +129,12 @@ def covering_tiles(bbox: TileBbox, tile_size_m: int) -> list[tuple[str, TileBbox
 class TileRecord:
     tile_id: str
     dataset: str
-    bbox: TileBbox          # EPSG:3067 xmin, ymin, xmax, ymax
+    bbox: TileBbox  # EPSG:3067 xmin, ymin, xmax, ymax
     path: Path
     source_url: str | None
-    fetch_timestamp: str    # ISO 8601 UTC — use this for CC-BY "retrieved <date>"
+    fetch_timestamp: str  # ISO 8601 UTC — use this for CC-BY "retrieved <date>"
     dataset_version: str | None
-    checksum: str           # SHA-256 hex
+    checksum: str  # SHA-256 hex
     byte_size: int
 
 
@@ -195,7 +198,9 @@ def _init_db(db: Path) -> None:
         conn.commit()
 
 
-def _lookup(db: Path, dataset: str, tile_id: str, *, touch: bool = False) -> TileRecord | None:
+def _lookup(
+    db: Path, dataset: str, tile_id: str, *, touch: bool = False
+) -> TileRecord | None:
     now = datetime.now(timezone.utc).isoformat()
     with closing(sqlite3.connect(db)) as conn, conn:
         row = conn.execute(
@@ -212,11 +217,15 @@ def _lookup(db: Path, dataset: str, tile_id: str, *, touch: bool = False) -> Til
     if row is None:
         return None
     return TileRecord(
-        tile_id=row[0], dataset=row[1],
+        tile_id=row[0],
+        dataset=row[1],
         bbox=(row[2], row[3], row[4], row[5]),
-        source_url=row[6], fetch_timestamp=row[7],
-        dataset_version=row[8], path=Path(row[9]),
-        checksum=row[10], byte_size=row[11],
+        source_url=row[6],
+        fetch_timestamp=row[7],
+        dataset_version=row[8],
+        path=Path(row[9]),
+        checksum=row[10],
+        byte_size=row[11],
     )
 
 
@@ -228,10 +237,21 @@ def _register(db: Path, record: TileRecord) -> None:
                (dataset, tile_id, xmin, ymin, xmax, ymax, source_url,
                 fetch_timestamp, dataset_version, file_path, checksum, byte_size, last_used)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (record.dataset, record.tile_id,
-             record.bbox[0], record.bbox[1], record.bbox[2], record.bbox[3],
-             record.source_url, record.fetch_timestamp, record.dataset_version,
-             str(record.path), record.checksum, record.byte_size, now),
+            (
+                record.dataset,
+                record.tile_id,
+                record.bbox[0],
+                record.bbox[1],
+                record.bbox[2],
+                record.bbox[3],
+                record.source_url,
+                record.fetch_timestamp,
+                record.dataset_version,
+                str(record.path),
+                record.checksum,
+                record.byte_size,
+                now,
+            ),
         )
         conn.commit()
 
@@ -264,9 +284,11 @@ def _evict_lru(db: Path, max_bytes: int) -> None:
         log.debug("LRU evicted %s/%s (%d bytes)", dataset, tile_id, byte_size or 0)
 
     if evicted:
-        log.info("LRU eviction freed %d bytes (%d tile(s))", evicted, len([
-            c for c in candidates if c[3] and evicted >= c[3]
-        ]))
+        log.info(
+            "LRU eviction freed %d bytes (%d tile(s))",
+            evicted,
+            len([c for c in candidates if c[3] and evicted >= c[3]]),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -343,14 +365,23 @@ def _fetch_and_register(
     fetch_ts = datetime.now(timezone.utc).isoformat()
 
     record = TileRecord(
-        tile_id=tile_id, dataset=dataset, bbox=tile_bbox,
-        path=dest, source_url=source_url, fetch_timestamp=fetch_ts,
-        dataset_version=dataset_version, checksum=checksum, byte_size=byte_size,
+        tile_id=tile_id,
+        dataset=dataset,
+        bbox=tile_bbox,
+        path=dest,
+        source_url=source_url,
+        fetch_timestamp=fetch_ts,
+        dataset_version=dataset_version,
+        checksum=checksum,
+        byte_size=byte_size,
     )
     _register(db, record)
     log.debug(
         "Cached %s tile %s (%d bytes, sha256=%s…)",
-        dataset, tile_id, byte_size, checksum[:8],
+        dataset,
+        tile_id,
+        byte_size,
+        checksum[:8],
     )
     return record
 
@@ -381,7 +412,9 @@ def get_tiles(
     ``tile_provenance()`` to extract CC-BY attribution dates.
     """
     if dataset not in _DATASET_EXT:
-        raise ValueError(f"Unknown dataset '{dataset}'; expected one of {list(_DATASET_EXT)}")
+        raise ValueError(
+            f"Unknown dataset '{dataset}'; expected one of {list(_DATASET_EXT)}"
+        )
 
     ttl_map = {
         "dem": config.dem_ttl_days,
@@ -444,7 +477,9 @@ def tile_provenance(records: list[TileRecord]) -> dict:
         "fetch_date_min": dates[0],
         "fetch_date_max": dates[-1],
         "source_urls": list({r.source_url for r in records if r.source_url}),
-        "dataset_versions": list({r.dataset_version for r in records if r.dataset_version}),
+        "dataset_versions": list(
+            {r.dataset_version for r in records if r.dataset_version}
+        ),
     }
 
 

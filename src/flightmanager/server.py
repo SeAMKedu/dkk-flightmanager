@@ -30,6 +30,7 @@ _WATCHER_TRIGGERS = frozenset({"job_params.json", "manifest.json", ".dkk-folder"
 def broadcast_event(event: dict) -> None:
     """Send an event dict to all connected SSE clients (fire-and-forget)."""
     import json
+
     data = json.dumps(event)
     for q in list(_st.event_queues):
         try:
@@ -41,6 +42,7 @@ def broadcast_event(event: dict) -> None:
 async def _watch_output_dir(output_dir: Path) -> None:
     """Background task: watch output_dir for job store changes and broadcast."""
     from watchfiles import awatch
+
     try:
         async for changes in awatch(output_dir):
             modified_paths: set[str] = set()
@@ -58,17 +60,21 @@ async def _watch_output_dir(output_dir: Path) -> None:
                 except ValueError:
                     pass
             if modified_paths:
-                broadcast_event({"type": "jobs_changed", "paths": sorted(modified_paths)})
+                broadcast_event(
+                    {"type": "jobs_changed", "paths": sorted(modified_paths)}
+                )
     except asyncio.CancelledError:
         pass
     except Exception as e:
         log.warning("Job watcher stopped unexpectedly: %s", e)
+
 
 log = logging.getLogger(__name__)
 
 
 def _load_ui() -> str:
     import jinja2
+
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(_TEMPLATES_DIR),
         autoescape=False,
@@ -97,6 +103,7 @@ async def _app_lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     from flightmanager.net_stats import print_summary as _print_net_stats
+
     _print_net_stats(_st.config.cache.cache_dir)
 
 
@@ -108,6 +115,7 @@ def _compute_default_speed() -> float:
     The actual KMZ value is re-computed at export time.
     """
     from flightmanager.wpml import resolve_strip_speed
+
     drone = _st.config.active_drone()
     H = drone.height_from_gsd(_st.config.flight.target_gsd_cm)
     return resolve_strip_speed(_st.config.flight, drone, H)
@@ -117,7 +125,9 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     _st.config = config
     _st.config_path = config_path
 
-    app = FastAPI(title="dkk-flightmanager", docs_url=None, redoc_url=None, lifespan=_app_lifespan)
+    app = FastAPI(
+        title="dkk-flightmanager", docs_url=None, redoc_url=None, lifespan=_app_lifespan
+    )
 
     @app.middleware("http")
     async def _timing(request, call_next):
@@ -131,6 +141,7 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
         """
         import os
         import time
+
         path = request.url.path
         if path.startswith(("/api/progress", "/api/events")):
             return await call_next(request)
@@ -143,8 +154,14 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
             slow_ms = 500.0
         if slow_ms > 0:
             level = logging.WARNING if dt_ms >= slow_ms else logging.DEBUG
-            log.log(level, "%s %s -> %d %.0fms",
-                    request.method, path, response.status_code, dt_ms)
+            log.log(
+                level,
+                "%s %s -> %d %.0fms",
+                request.method,
+                path,
+                response.status_code,
+                dt_ms,
+            )
         return response
 
     @app.get("/", response_class=HTMLResponse)
@@ -155,13 +172,13 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     async def get_drones():
         return [
             {
-                "name":            d.name,
-                "label":           d.label,
+                "name": d.name,
+                "label": d.label,
                 "focal_length_mm": d.focal_length_mm,
-                "pixel_pitch_um":  d.pixel_pitch_um,
-                "image_width_px":  d.image_width_px,
+                "pixel_pitch_um": d.pixel_pitch_um,
+                "image_width_px": d.image_width_px,
                 "image_height_px": d.image_height_px,
-                "battery_minutes":       d.battery_minutes,
+                "battery_minutes": d.battery_minutes,
                 "min_capture_interval_s": d.min_capture_interval_s,
             }
             for d in _st.config.drones
@@ -170,12 +187,14 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     @app.get("/api/version")
     async def get_version():
         from flightmanager import __version__
+
         return {"name": "dkk-flightmanager", "version": __version__}
 
     @app.get("/api/stats")
     async def get_stats():
         from flightmanager.net_stats import get as _get_stats
         from flightmanager.cache import query_disk_size
+
         data = _get_stats()
         data["cache_disk_bytes"] = query_disk_size(_st.config.cache.cache_dir)
         return data
@@ -183,29 +202,31 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     @app.get("/api/config")
     async def get_config():
         import os
+
         drone = _st.config.active_drone()
         return {
             "default_drone": _st.config.default_drone,
-            "output_dir":    str(Path(_st.config.output.output_dir).resolve()),
-            "subcategory":   _st.config.home_safety.operating_subcategory,
-            "height_m":      int(drone.height_from_gsd(_st.config.flight.target_gsd_cm)),
-            "offset_m":      _st.config.polygon.survey_offset_m,
+            "output_dir": str(Path(_st.config.output.output_dir).resolve()),
+            "subcategory": _st.config.home_safety.operating_subcategory,
+            "height_m": int(drone.height_from_gsd(_st.config.flight.target_gsd_cm)),
+            "offset_m": _st.config.polygon.survey_offset_m,
             "simplify": (
-                "auto" if _st.config.polygon.simplify_mode == "auto"
+                "auto"
+                if _st.config.polygon.simplify_mode == "auto"
                 else str(_st.config.polygon.simplify_tolerance_m)
             ),
-            "keepout":     _st.config.home_safety.offset_enabled,
+            "keepout": _st.config.home_safety.offset_enabled,
             "vlos_range_m": _st.config.home_safety.vlos_range_m,
             "mml_api_key": os.environ.get("MML_API_KEY", ""),
             "overlap_front_pct": _st.config.flight.overlap_front_pct,
-            "overlap_side_pct":  _st.config.flight.overlap_side_pct,
+            "overlap_side_pct": _st.config.flight.overlap_side_pct,
             "auto_flight_speed_ms": _compute_default_speed(),
             "takeoff_security_height_m": _st.config.flight.takeoff_security_height_m,
-            "rth_height_m":            _st.config.flight.rth_height_m,
-            "finish_action":           _st.config.flight.finish_action,
-            "rc_lost_action":          _st.config.flight.rc_lost_action,
-            "adv_slope_f":             _st.config.flight.adv_slope_f,
-            "adv_min_dip_m":           _st.config.flight.adv_min_dip_m,
+            "rth_height_m": _st.config.flight.rth_height_m,
+            "finish_action": _st.config.flight.finish_action,
+            "rc_lost_action": _st.config.flight.rc_lost_action,
+            "adv_slope_f": _st.config.flight.adv_slope_f,
+            "adv_min_dip_m": _st.config.flight.adv_min_dip_m,
             "color_palette": _st.config.output.color_palette,
             "max_area_loss_pct": _st.config.home_safety.max_area_loss_pct,
         }
@@ -217,6 +238,7 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=_TEMPLATES_DIR), name="static")
 
     from flightmanager.mcp_server import mcp as _mcp
+
     app.mount("/mcp", _mcp.sse_app())
 
     return app

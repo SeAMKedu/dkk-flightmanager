@@ -47,10 +47,15 @@ def _tiny_grid(tmp_path: Path) -> str:
                 "properties": {"Name": "34VEQ"},
                 "geometry": {
                     "type": "Polygon",
-                    "coordinates": [[
-                        [22.0, 62.5], [23.0, 62.5],
-                        [23.0, 63.0], [22.0, 63.0], [22.0, 62.5],
-                    ]],
+                    "coordinates": [
+                        [
+                            [22.0, 62.5],
+                            [23.0, 62.5],
+                            [23.0, 63.0],
+                            [22.0, 63.0],
+                            [22.0, 62.5],
+                        ]
+                    ],
                 },
             },
             {
@@ -58,10 +63,15 @@ def _tiny_grid(tmp_path: Path) -> str:
                 "properties": {"Name": "35VML"},
                 "geometry": {
                     "type": "Polygon",
-                    "coordinates": [[
-                        [24.0, 60.0], [25.0, 60.0],
-                        [25.0, 60.5], [24.0, 60.5], [24.0, 60.0],
-                    ]],
+                    "coordinates": [
+                        [
+                            [24.0, 60.0],
+                            [25.0, 60.0],
+                            [25.0, 60.5],
+                            [24.0, 60.5],
+                            [24.0, 60.0],
+                        ]
+                    ],
                 },
             },
         ],
@@ -103,14 +113,34 @@ def test_load_grid_missing_file_returns_none(tmp_path):
 
 def _adjacent_grid(tmp_path: Path) -> str:
     """A 2×2 block of overlapping tiles (like the real overlapping MGRS grid)."""
+
     def sq(name, x0, y0):
-        return {"type": "Feature", "properties": {"Name": name},
-                "geometry": {"type": "Polygon", "coordinates": [[
-                    [x0, y0], [x0 + 1.1, y0], [x0 + 1.1, y0 + 1.1],
-                    [x0, y0 + 1.1], [x0, y0]]]}}  # +0.1 overlap with the next cell
-    fc = {"type": "FeatureCollection", "features": [
-        sq("CENTER", 22.0, 62.0), sq("EAST", 23.0, 62.0),
-        sq("NORTH", 22.0, 63.0), sq("FAR", 30.0, 62.0)]}
+        return {
+            "type": "Feature",
+            "properties": {"Name": name},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [x0, y0],
+                        [x0 + 1.1, y0],
+                        [x0 + 1.1, y0 + 1.1],
+                        [x0, y0 + 1.1],
+                        [x0, y0],
+                    ]
+                ],
+            },
+        }  # +0.1 overlap with the next cell
+
+    fc = {
+        "type": "FeatureCollection",
+        "features": [
+            sq("CENTER", 22.0, 62.0),
+            sq("EAST", 23.0, 62.0),
+            sq("NORTH", 22.0, 63.0),
+            sq("FAR", 30.0, 62.0),
+        ],
+    }
     p = tmp_path / "adj.geojson"
     p.write_text(json.dumps(fc), encoding="utf-8")
     sat._GRID_CACHE.clear()
@@ -120,9 +150,9 @@ def _adjacent_grid(tmp_path: Path) -> str:
 def test_neighbor_tiles(tmp_path):
     grid = sat.load_grid(_adjacent_grid(tmp_path))
     nb = sat.neighbor_tiles(grid, {"CENTER"})
-    assert "EAST" in nb and "NORTH" in nb   # overlapping neighbours
-    assert "FAR" not in nb                  # disjoint
-    assert "CENTER" not in nb               # self excluded
+    assert "EAST" in nb and "NORTH" in nb  # overlapping neighbours
+    assert "FAR" not in nb  # disjoint
+    assert "CENTER" not in nb  # self excluded
 
 
 def test_tiles_with_neighbors(tmp_path):
@@ -188,12 +218,20 @@ def test_compute_overpasses_deterministic():
 def test_compute_overpasses_threshold_excludes_low_passes():
     start = datetime(2026, 6, 15, tzinfo=timezone.utc)
     high = sat.compute_overpasses(
-        {"34VEQ": SEINAJOKI}, {39084: LANDSAT8_OMM}, {39084: "L8"},
-        days_ahead=7, min_elev_deg=85.0, start=start,
+        {"34VEQ": SEINAJOKI},
+        {39084: LANDSAT8_OMM},
+        {39084: "L8"},
+        days_ahead=7,
+        min_elev_deg=85.0,
+        start=start,
     )
     low = sat.compute_overpasses(
-        {"34VEQ": SEINAJOKI}, {39084: LANDSAT8_OMM}, {39084: "L8"},
-        days_ahead=7, min_elev_deg=30.0, start=start,
+        {"34VEQ": SEINAJOKI},
+        {39084: LANDSAT8_OMM},
+        {39084: "L8"},
+        days_ahead=7,
+        min_elev_deg=30.0,
+        start=start,
     )
     assert len(low) >= len(high)
     assert all(o.max_elev_deg >= 85.0 for o in high)
@@ -271,6 +309,6 @@ def test_overpasses_for_points_live(tmp_path):
         pytest.skip(f"grid file not present: {cfg.grid_file}")
     res = sat.overpasses_for_points([SEINAJOKI], cfg, tmp_path)
     assert res.grid_ok is True
-    assert res.tile_ids                      # a Finnish field maps to a tile
-    assert res.overpasses                    # at least one pass in the window
+    assert res.tile_ids  # a Finnish field maps to a tile
+    assert res.overpasses  # at least one pass in the window
     assert all(o.max_elev_deg >= cfg.min_elevation_deg for o in res.overpasses)

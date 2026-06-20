@@ -48,9 +48,9 @@ class PropertyNotFoundError(KeyError):
 
 @dataclass
 class Property:
-    property_id: str        # kiinteistötunnus, 14-digit numeric form
-    display_id: str         # kiinteistötunnuksenEsitysmuoto, dash form e.g. "399-891-1-1"
-    area_ha: float          # computed from geometry (no area field in API response)
+    property_id: str  # kiinteistötunnus, 14-digit numeric form
+    display_id: str  # kiinteistötunnuksenEsitysmuoto, dash form e.g. "399-891-1-1"
+    area_ha: float  # computed from geometry (no area field in API response)
     geometry: BaseGeometry  # Shapely, EPSG:3067; unioned if multiple palstat
 
 
@@ -103,7 +103,8 @@ def fetch_properties(
     if missing:
         log.info(
             "Fetching %d/%d kiinteistö(t) from MML OGC API (not cached)",
-            len(missing), len(normalised),
+            len(missing),
+            len(normalised),
         )
     else:
         log.info("All %d kiinteistö(t) served from cache", len(normalised))
@@ -119,12 +120,17 @@ def fetch_properties(
             results[numeric_id] = prop
             log.debug(
                 "  %s → %s  %.2f ha",
-                prop.display_id, prop.property_id, prop.area_ha,
+                prop.display_id,
+                prop.property_id,
+                prop.area_ha,
             )
             if cache_config is not None:
                 put_property_cache(
-                    cache_config, prop.property_id, prop.display_id,
-                    prop.area_ha, wkt_dumps(prop.geometry),
+                    cache_config,
+                    prop.property_id,
+                    prop.display_id,
+                    prop.area_ha,
+                    wkt_dumps(prop.geometry),
                 )
     finally:
         if owns_session:

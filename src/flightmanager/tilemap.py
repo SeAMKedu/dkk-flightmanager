@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import requests
 from PIL import Image
 
-_TILE = 256          # standard slippy-map tile size (px)
+_TILE = 256  # standard slippy-map tile size (px)
 _TIMEOUT = 20
 _UA = "dkk-flightmanager/1.0 (+https://maanmittauslaitos.fi)"
 
@@ -32,7 +32,9 @@ _TILE_CACHE_MAX = 1500
 _SESSION = requests.Session()
 
 
-def _get_tile(provider: "Provider", z: int, x: int, y: int, *, mml_key, session) -> "Image.Image | None":
+def _get_tile(
+    provider: "Provider", z: int, x: int, y: int, *, mml_key, session
+) -> "Image.Image | None":
     key = (provider.name, z, x, y)
     cached = _TILE_CACHE.get(key)
     if cached is not None:
@@ -92,6 +94,7 @@ def get_provider(name: str, *, mml_key: str | None) -> Provider:
 
 # ── Bounding-box helpers ──────────────────────────────────────────────────────
 
+
 def _merc_y(lat: float) -> float:
     return math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
 
@@ -100,7 +103,9 @@ def _inv_merc_y(y: float) -> float:
     return math.degrees(2 * math.atan(math.exp(y)) - math.pi / 2)
 
 
-def pad_bbox(bbox: tuple[float, float, float, float], frac: float = 0.12) -> tuple[float, float, float, float]:
+def pad_bbox(
+    bbox: tuple[float, float, float, float], frac: float = 0.12
+) -> tuple[float, float, float, float]:
     """Grow a bbox outward by *frac* of its span on every side (min span enforced)."""
     minlon, minlat, maxlon, maxlat = bbox
     dx = max(maxlon - minlon, 1e-4) * frac
@@ -108,7 +113,9 @@ def pad_bbox(bbox: tuple[float, float, float, float], frac: float = 0.12) -> tup
     return (minlon - dx, minlat - dy, maxlon + dx, maxlat + dy)
 
 
-def fit_bbox(bbox: tuple[float, float, float, float], aspect: float) -> tuple[float, float, float, float]:
+def fit_bbox(
+    bbox: tuple[float, float, float, float], aspect: float
+) -> tuple[float, float, float, float]:
     """Expand a bbox to a target ``width/height`` *aspect* (in Web-Mercator) so a
     basemap fills the page box without distortion. Only ever grows the bbox.
 
@@ -118,7 +125,7 @@ def fit_bbox(bbox: tuple[float, float, float, float], aspect: float) -> tuple[fl
     """
     minlon, minlat, maxlon, maxlat = bbox
     cx = (minlon + maxlon) / 2
-    wx = math.radians(maxlon - minlon)            # mercator-x span
+    wx = math.radians(maxlon - minlon)  # mercator-x span
     y0, y1 = _merc_y(minlat), _merc_y(maxlat)
     cym, hy = (y0 + y1) / 2, (y1 - y0)
     if hy <= 0 or wx <= 0:
@@ -128,21 +135,29 @@ def fit_bbox(bbox: tuple[float, float, float, float], aspect: float) -> tuple[fl
     else:
         hy = wx / aspect
     half_lon = math.degrees(wx) / 2
-    return (cx - half_lon, _inv_merc_y(cym - hy / 2), cx + half_lon, _inv_merc_y(cym + hy / 2))
+    return (
+        cx - half_lon,
+        _inv_merc_y(cym - hy / 2),
+        cx + half_lon,
+        _inv_merc_y(cym + hy / 2),
+    )
 
 
 # ── Web-Mercator math ─────────────────────────────────────────────────────────
 
+
 def _lonlat_to_world_px(lon: float, lat: float, z: int) -> tuple[float, float]:
     """Global pixel coords at zoom *z* (world is ``256·2^z`` px square)."""
-    n = _TILE * (2 ** z)
+    n = _TILE * (2**z)
     x = (lon + 180.0) / 360.0 * n
     s = math.sin(math.radians(lat))
     y = (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
     return x, y
 
 
-def _choose_zoom(bbox: tuple[float, float, float, float], target_px: int, max_zoom: int) -> int:
+def _choose_zoom(
+    bbox: tuple[float, float, float, float], target_px: int, max_zoom: int
+) -> int:
     """Largest zoom at which the bbox width stays within ~target_px (clamped)."""
     minlon, _, maxlon, _ = bbox
     for z in range(max_zoom, -1, -1):
@@ -159,7 +174,7 @@ class Basemap:
 
     image: Image.Image
     attribution: str
-    _ox: float          # crop origin in global px
+    _ox: float  # crop origin in global px
     _oy: float
     _z: int
 
@@ -191,16 +206,18 @@ def fetch_basemap(
     sess = session or _SESSION
 
     # Box corners in global pixels (note: y grows southward).
-    x0, y0 = _lonlat_to_world_px(minlon, maxlat, z)   # top-left
-    x1, y1 = _lonlat_to_world_px(maxlon, minlat, z)   # bottom-right
+    x0, y0 = _lonlat_to_world_px(minlon, maxlat, z)  # top-left
+    x1, y1 = _lonlat_to_world_px(maxlon, minlat, z)  # bottom-right
     left, right = min(x0, x1), max(x0, x1)
     top, bottom = min(y0, y1), max(y0, y1)
 
     tx0, ty0 = int(left // _TILE), int(top // _TILE)
     tx1, ty1 = int(right // _TILE), int(bottom // _TILE)
-    n = 2 ** z
+    n = 2**z
 
-    canvas = Image.new("RGB", ((tx1 - tx0 + 1) * _TILE, (ty1 - ty0 + 1) * _TILE), (235, 235, 235))
+    canvas = Image.new(
+        "RGB", ((tx1 - tx0 + 1) * _TILE, (ty1 - ty0 + 1) * _TILE), (235, 235, 235)
+    )
     for tx in range(tx0, tx1 + 1):
         for ty in range(ty0, ty1 + 1):
             if not (0 <= tx < n and 0 <= ty < n):
@@ -213,4 +230,6 @@ def fetch_basemap(
     cox, coy = tx0 * _TILE, ty0 * _TILE
     crop = (int(left - cox), int(top - coy), int(right - cox), int(bottom - coy))
     cropped = canvas.crop(crop)
-    return Basemap(image=cropped, attribution=provider.attribution, _ox=left, _oy=top, _z=z)
+    return Basemap(
+        image=cropped, attribution=provider.attribution, _ox=left, _oy=top, _z=z
+    )

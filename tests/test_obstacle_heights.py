@@ -93,10 +93,16 @@ class TestAltitudeProfileWithHeights:
     def test_no_buildings_returns_flight_height(self):
         route = _MockRoute([(300000, 6900200, 300100, 6900200)])
         result = compute_altitude_profile(
-            route, [], [],
-            flight_height_m=74.5, min_h=30.0,
-            powerline_clearance_m=70.0, overlap_front_pct=80.0,
-            overlap_side_pct=70.0, slope_f=0.20, drone=_MockDrone(),
+            route,
+            [],
+            [],
+            flight_height_m=74.5,
+            min_h=30.0,
+            powerline_clearance_m=70.0,
+            overlap_front_pct=80.0,
+            overlap_side_pct=70.0,
+            slope_f=0.20,
+            drone=_MockDrone(),
         )
         assert result == [pytest.approx(74.5)]
 
@@ -106,16 +112,25 @@ class TestAltitudeProfileWithHeights:
         # Horizontal distance ≈ 200 m; building height = 7 m (kohdeluokka 42211)
         # d_eff ≈ 207 → clamped to flight_height_m=200 if flight_height_m=200
         building = Building(
-            mtk_id=1, kohdeluokka=42211, kayttotarkoitus=None,
+            mtk_id=1,
+            kohdeluokka=42211,
+            kayttotarkoitus=None,
             geometry=box(300075, 6899975, 300125, 6900025),
-            alkupvm=None, kerrosluku=None,
+            alkupvm=None,
+            kerrosluku=None,
         )
         route = _MockRoute([(300050, 6900200, 300150, 6900200)])
         result = compute_altitude_profile(
-            route, [building], [],
-            flight_height_m=250.0, min_h=30.0,
-            powerline_clearance_m=70.0, overlap_front_pct=80.0,
-            overlap_side_pct=70.0, slope_f=0.20, drone=_MockDrone(),
+            route,
+            [building],
+            [],
+            flight_height_m=250.0,
+            min_h=30.0,
+            powerline_clearance_m=70.0,
+            overlap_front_pct=80.0,
+            overlap_side_pct=70.0,
+            slope_f=0.20,
+            drone=_MockDrone(),
         )
         # d ≈ 175 m (from midpoint to building edge), bh = 7 → d_eff ≈ 182 → h ≈ 182
         assert result[0] > 30.0
@@ -124,29 +139,51 @@ class TestAltitudeProfileWithHeights:
     def test_tall_building_requires_more_altitude_than_short(self):
         # Same horizontal distance, compare industrial (15 m) vs residential (7 m)
         mid_y = 6900300.0
-        bldg_geom = box(300075, 6900075, 300125, 6900125)  # centred ~175 m south of strip
+        bldg_geom = box(
+            300075, 6900075, 300125, 6900125
+        )  # centred ~175 m south of strip
 
         residential = Building(
-            mtk_id=1, kohdeluokka=42211, kayttotarkoitus=None,
-            geometry=bldg_geom, alkupvm=None, kerrosluku=None,
+            mtk_id=1,
+            kohdeluokka=42211,
+            kayttotarkoitus=None,
+            geometry=bldg_geom,
+            alkupvm=None,
+            kerrosluku=None,
         )
         industrial = Building(
-            mtk_id=2, kohdeluokka=42241, kayttotarkoitus=None,
-            geometry=bldg_geom, alkupvm=None, kerrosluku=None,
+            mtk_id=2,
+            kohdeluokka=42241,
+            kayttotarkoitus=None,
+            geometry=bldg_geom,
+            alkupvm=None,
+            kerrosluku=None,
         )
         route = _MockRoute([(300050, mid_y, 300150, mid_y)])
 
         h_res = compute_altitude_profile(
-            route, [residential], [],
-            flight_height_m=300.0, min_h=10.0,
-            powerline_clearance_m=70.0, overlap_front_pct=80.0,
-            overlap_side_pct=70.0, slope_f=0.20, drone=_MockDrone(),
+            route,
+            [residential],
+            [],
+            flight_height_m=300.0,
+            min_h=10.0,
+            powerline_clearance_m=70.0,
+            overlap_front_pct=80.0,
+            overlap_side_pct=70.0,
+            slope_f=0.20,
+            drone=_MockDrone(),
         )[0]
         h_ind = compute_altitude_profile(
-            route, [industrial], [],
-            flight_height_m=300.0, min_h=10.0,
-            powerline_clearance_m=70.0, overlap_front_pct=80.0,
-            overlap_side_pct=70.0, slope_f=0.20, drone=_MockDrone(),
+            route,
+            [industrial],
+            [],
+            flight_height_m=300.0,
+            min_h=10.0,
+            powerline_clearance_m=70.0,
+            overlap_front_pct=80.0,
+            overlap_side_pct=70.0,
+            slope_f=0.20,
+            drone=_MockDrone(),
         )[0]
 
         assert h_ind > h_res  # industrial building → higher required altitude
@@ -154,24 +191,48 @@ class TestAltitudeProfileWithHeights:
     def test_kerrosluku_raises_altitude_vs_heuristic(self):
         # 5-storey building (5×3=15 m) should require higher altitude than 1-storey heuristic (7 m)
         bldg_geom = box(300075, 6899975, 300125, 6900025)
-        b_few = Building(mtk_id=1, kohdeluokka=42211, kayttotarkoitus=None,
-                         geometry=bldg_geom, alkupvm=None, kerrosluku=1)
-        b_many = Building(mtk_id=2, kohdeluokka=42211, kayttotarkoitus=None,
-                          geometry=bldg_geom, alkupvm=None, kerrosluku=5)
+        b_few = Building(
+            mtk_id=1,
+            kohdeluokka=42211,
+            kayttotarkoitus=None,
+            geometry=bldg_geom,
+            alkupvm=None,
+            kerrosluku=1,
+        )
+        b_many = Building(
+            mtk_id=2,
+            kohdeluokka=42211,
+            kayttotarkoitus=None,
+            geometry=bldg_geom,
+            alkupvm=None,
+            kerrosluku=5,
+        )
 
         route = _MockRoute([(300050, 6900200, 300150, 6900200)])
 
         h_few = compute_altitude_profile(
-            route, [b_few], [],
-            flight_height_m=300.0, min_h=10.0,
-            powerline_clearance_m=70.0, overlap_front_pct=80.0,
-            overlap_side_pct=70.0, slope_f=0.20, drone=_MockDrone(),
+            route,
+            [b_few],
+            [],
+            flight_height_m=300.0,
+            min_h=10.0,
+            powerline_clearance_m=70.0,
+            overlap_front_pct=80.0,
+            overlap_side_pct=70.0,
+            slope_f=0.20,
+            drone=_MockDrone(),
         )[0]
         h_many = compute_altitude_profile(
-            route, [b_many], [],
-            flight_height_m=300.0, min_h=10.0,
-            powerline_clearance_m=70.0, overlap_front_pct=80.0,
-            overlap_side_pct=70.0, slope_f=0.20, drone=_MockDrone(),
+            route,
+            [b_many],
+            [],
+            flight_height_m=300.0,
+            min_h=10.0,
+            powerline_clearance_m=70.0,
+            overlap_front_pct=80.0,
+            overlap_side_pct=70.0,
+            slope_f=0.20,
+            drone=_MockDrone(),
         )[0]
 
         assert h_many > h_few  # taller building → higher altitude required

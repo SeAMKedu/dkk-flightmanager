@@ -33,7 +33,9 @@ def _parse_area_inputs(
     parcels: str | None,
     properties: str | None,
     bbox: str | None,
-) -> tuple[list[str] | None, list[str] | None, tuple[float, float, float, float] | None]:
+) -> tuple[
+    list[str] | None, list[str] | None, tuple[float, float, float, float] | None
+]:
     """Parse and validate the three mutually-exclusive area input flags.
 
     Returns (parcel_ids, property_ids, bbox_3067). Raises typer.Exit(1) on invalid input.
@@ -53,7 +55,9 @@ def _parse_area_inputs(
                 raise ValueError
             bbox_3067 = (parts[0], parts[1], parts[2], parts[3])
         except ValueError:
-            typer.echo("Error: --bbox must be 'xmin,ymin,xmax,ymax' (four floats).", err=True)
+            typer.echo(
+                "Error: --bbox must be 'xmin,ymin,xmax,ymax' (four floats).", err=True
+            )
             raise typer.Exit(1)
 
     return parcel_ids, property_ids, bbox_3067
@@ -137,7 +141,10 @@ def _apply_run_overrides(  # noqa: C901
                 cfg.polygon.simplify_tolerance_m = tol
                 typer.echo(f"Simplify override: {tol:.1f} m tolerance")
             except ValueError:
-                typer.echo("Error: --simplify must be 'auto' or a non-negative number.", err=True)
+                typer.echo(
+                    "Error: --simplify must be 'auto' or a non-negative number.",
+                    err=True,
+                )
                 raise typer.Exit(1)
 
     if offset is not None:
@@ -172,13 +179,16 @@ def _collect_batch_ids(
     return raw_ids
 
 
-def _detect_id_type(raw_ids: list[str], parcels: str | None, properties: str | None) -> str:
+def _detect_id_type(
+    raw_ids: list[str], parcels: str | None, properties: str | None
+) -> str:
     """Return 'parcels' or 'properties'. Uses flag presence first, regex fallback."""
     if parcels is not None:
         return "parcels"
     if properties is not None:
         return "properties"
     import re
+
     id_type = "parcels" if re.match(r"^\d{8,}$", raw_ids[0]) else "properties"
     typer.echo(f"Auto-detected ID type: {id_type}")
     return id_type
@@ -219,12 +229,14 @@ def list_drones(
     typer.echo("-" * 80)
     for d in cfg.drones:
         marker = " *" if d.name == default else "  "
-        gsd50  = d.gsd_from_height(50)
+        gsd50 = d.gsd_from_height(50)
         gsd100 = d.gsd_from_height(100)
         typer.echo(
             f"{d.name + marker:<18} {gsd50:>7.2f} cm {gsd100:>8.2f} cm  {d.label}"
         )
-    typer.echo("\n  * = default drone (override with --drone or default_drone in config.toml)\n")
+    typer.echo(
+        "\n  * = default drone (override with --drone or default_drone in config.toml)\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -234,13 +246,19 @@ def list_drones(
 
 @app.command("run")
 def run_job_cmd(
-    name: str = typer.Option(..., "--name", "-n", help="Job name (used as output subdirectory)."),
+    name: str = typer.Option(
+        ..., "--name", "-n", help="Job name (used as output subdirectory)."
+    ),
     parcels: Optional[str] = typer.Option(
-        None, "--parcels", "-p",
+        None,
+        "--parcels",
+        "-p",
         help="Comma-separated peruslohkotunnus IDs.",
     ),
     properties: Optional[str] = typer.Option(
-        None, "--properties", "-k",
+        None,
+        "--properties",
+        "-k",
         help=(
             "Comma-separated kiinteistötunnus values. "
             "Accepts dash form (399-891-1-1) or 14-digit numeric (39989100010001). "
@@ -248,15 +266,19 @@ def run_job_cmd(
         ),
     ),
     bbox: Optional[str] = typer.Option(
-        None, "--bbox",
+        None,
+        "--bbox",
         help="Bounding box as 'xmin,ymin,xmax,ymax' in EPSG:3067 metres.",
     ),
     config_path: str = typer.Option(
-        "config.toml", "--config", "-c",
+        "config.toml",
+        "--config",
+        "-c",
         help="Path to config.toml.",
     ),
     drone: Optional[str] = typer.Option(
-        None, "--drone",
+        None,
+        "--drone",
         help=(
             "Drone + payload profile name (e.g. 'm3m', 'm300-p1-24'). "
             "Must match a name in the [[drones]] list in config.toml. "
@@ -264,15 +286,18 @@ def run_job_cmd(
         ),
     ),
     height: Optional[float] = typer.Option(
-        None, "--height",
+        None,
+        "--height",
         help="Override flight height in metres AGL (back-calculates GSD from the active drone's camera constants).",
     ),
     subcategory: Optional[str] = typer.Option(
-        None, "--subcategory",
+        None,
+        "--subcategory",
         help="Override operating subcategory: A2 or A3 (default from config).",
     ),
     buffer: Optional[float] = typer.Option(
-        None, "--buffer",
+        None,
+        "--buffer",
         help=(
             "Override home keep-out buffer in metres. "
             "For A2 defaults to derived flight height (≈ flight height from people). "
@@ -280,7 +305,8 @@ def run_job_cmd(
         ),
     ),
     homes_distance: Optional[float] = typer.Option(
-        None, "--homes-distance",
+        None,
+        "--homes-distance",
         help=(
             "Maximum distance (m) from the survey polygon to include a building in the "
             "homes KML, measured to the nearest point on the polygon boundary. "
@@ -288,7 +314,8 @@ def run_job_cmd(
         ),
     ),
     preview_radius: Optional[float] = typer.Option(
-        None, "--preview-radius",
+        None,
+        "--preview-radius",
         help=(
             "Radius (m) of the yellow informational circle drawn around each building "
             "in the HTML map preview. Defaults to 3× flight height (the 3:1 horizontal rule). "
@@ -296,7 +323,8 @@ def run_job_cmd(
         ),
     ),
     simplify: Optional[str] = typer.Option(
-        None, "--simplify",
+        None,
+        "--simplify",
         help=(
             "Polygon simplification: 'auto' to target ≤50 vertices (good for RC touch screen), "
             "a tolerance in metres (e.g. '5'), or '0' to disable. "
@@ -304,7 +332,8 @@ def run_job_cmd(
         ),
     ),
     offset: Optional[float] = typer.Option(
-        None, "--offset",
+        None,
+        "--offset",
         help=(
             "Expand (+) or contract (−) the survey polygon by this many metres relative to the "
             "parcel/property boundary. Applied after gap-fill and before keep-out subtraction. "
@@ -314,7 +343,8 @@ def run_job_cmd(
         ),
     ),
     no_keepout: bool = typer.Option(
-        False, "--no-keepout",
+        False,
+        "--no-keepout",
         help=(
             "Disable automatic keep-out subtraction around buildings. "
             "The survey polygon will not be cut back from buildings, reducing polygon complexity "
@@ -326,19 +356,23 @@ def run_job_cmd(
         ),
     ),
     open_map: bool = typer.Option(
-        False, "--open",
+        False,
+        "--open",
         help="Reveal the job output folder in the system file manager after the job completes.",
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run",
+        False,
+        "--dry-run",
         help="Fetch and validate only — skip writing output files.",
     ),
     offline: bool = typer.Option(
-        False, "--offline",
+        False,
+        "--offline",
         help="Cache-only mode — fail cleanly on any cache miss.",
     ),
     refresh: bool = typer.Option(
-        False, "--refresh",
+        False,
+        "--refresh",
         help="Force re-fetch of all touched cache tiles.",
     ),
 ) -> None:
@@ -372,16 +406,23 @@ def run_job_cmd(
 
     _apply_run_overrides(
         cfg,
-        drone=drone, height=height, subcategory=subcategory,
-        buffer=buffer, homes_distance=homes_distance,
-        preview_radius=preview_radius, simplify=simplify,
-        offset=offset, no_keepout=no_keepout, offline=offline,
+        drone=drone,
+        height=height,
+        subcategory=subcategory,
+        buffer=buffer,
+        homes_distance=homes_distance,
+        preview_radius=preview_radius,
+        simplify=simplify,
+        offset=offset,
+        no_keepout=no_keepout,
+        offline=offline,
     )
 
     typer.echo(f"Starting job '{name}' …")
     try:
         manifest, _route_geojson = export_job(
-            name, cfg,
+            name,
+            cfg,
             parcel_ids=parcel_ids,
             property_ids=property_ids,
             bbox_3067=bbox_3067,
@@ -397,14 +438,18 @@ def run_job_cmd(
     if open_map and not dry_run:
         import subprocess
         import sys
+
         job_dir = Path(cfg.output.output_dir) / name
         if job_dir.is_dir():
-            opener = {"darwin": "open", "win32": "explorer"}.get(sys.platform, "xdg-open")
+            opener = {"darwin": "open", "win32": "explorer"}.get(
+                sys.platform, "xdg-open"
+            )
             subprocess.Popen([opener, str(job_dir)])
         else:
             typer.echo(f"Warning: job folder not found at {job_dir}", err=True)
 
     from flightmanager.net_stats import print_summary as _print_net_stats
+
     _print_net_stats(cfg.cache.cache_dir)
 
     if manifest.get("needs_review") or not manifest.get("flight_ready"):
@@ -419,11 +464,14 @@ def run_job_cmd(
 @cache_app.command("warm")
 def cache_warm(
     bbox: str = typer.Option(
-        ..., "--bbox",
+        ...,
+        "--bbox",
         help="Bounding box as 'xmin,ymin,xmax,ymax' in EPSG:3067 metres.",
     ),
     config_path: str = typer.Option("config.toml", "--config", "-c"),
-    refresh: bool = typer.Option(False, "--refresh", help="Force re-fetch of all tiles."),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Force re-fetch of all tiles."
+    ),
 ) -> None:
     """Pre-fetch DEM and building tiles for an area ahead of a field day."""
     from flightmanager.buildings import tile_fetcher as b_fetcher
@@ -434,7 +482,9 @@ def cache_warm(
         parts = [float(x) for x in bbox.split(",")]
         bbox_3067 = (parts[0], parts[1], parts[2], parts[3])
     except (ValueError, IndexError):
-        typer.echo("Error: --bbox must be 'xmin,ymin,xmax,ymax' (four floats).", err=True)
+        typer.echo(
+            "Error: --bbox must be 'xmin,ymin,xmax,ymax' (four floats).", err=True
+        )
         raise typer.Exit(1)
 
     cfg = _load_cfg(config_path)
@@ -443,14 +493,19 @@ def cache_warm(
     n_tiles = len(covering_tiles(bbox_3067, cfg.cache.tile_size_m))
     typer.echo(f"Warming {n_tiles} tile(s) for bbox {bbox_3067} …")
 
-    dem_records = get_tiles("dem", bbox_3067, d_fetcher(api_key), cfg.cache, refresh=refresh)
+    dem_records = get_tiles(
+        "dem", bbox_3067, d_fetcher(api_key), cfg.cache, refresh=refresh
+    )
     typer.echo(f"  DEM:       {len(dem_records)} tile(s) cached.")
 
-    bldg_records = get_tiles("buildings", bbox_3067, b_fetcher(api_key), cfg.cache, refresh=refresh)
+    bldg_records = get_tiles(
+        "buildings", bbox_3067, b_fetcher(api_key), cfg.cache, refresh=refresh
+    )
     typer.echo(f"  Buildings: {len(bldg_records)} tile(s) cached.")
 
     typer.echo("Cache warm complete.")
     from flightmanager.net_stats import print_summary as _print_net_stats
+
     _print_net_stats(cfg.cache.cache_dir)
 
 
@@ -482,19 +537,27 @@ def cache_status(
             GROUP BY dataset
             ORDER BY dataset
         """).fetchall()
-        grand_total = conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()[0] or 0
+        grand_total = (
+            conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()[0] or 0
+        )
 
     if not rows:
         typer.echo("Cache index exists but is empty.")
         return
 
     max_mb = cfg.cache.max_cache_size_mb
-    limit_str = f" / {_human_size(max_mb * 1024 * 1024)}" if max_mb > 0 else " (unlimited)"
-    pct_str = f"  ({100 * grand_total // (max_mb * 1024 * 1024)}% full)" if max_mb > 0 else ""
+    limit_str = (
+        f" / {_human_size(max_mb * 1024 * 1024)}" if max_mb > 0 else " (unlimited)"
+    )
+    pct_str = (
+        f"  ({100 * grand_total // (max_mb * 1024 * 1024)}% full)" if max_mb > 0 else ""
+    )
 
     typer.echo(f"\nCache: {db_path}")
     typer.echo(f"Total: {_human_size(grand_total)}{limit_str}{pct_str}\n")
-    typer.echo(f"{'Dataset':<12} {'Tiles':>6} {'Size':>10}  {'Oldest fetch':<26} {'Newest fetch'}")
+    typer.echo(
+        f"{'Dataset':<12} {'Tiles':>6} {'Size':>10}  {'Oldest fetch':<26} {'Newest fetch'}"
+    )
     typer.echo("-" * 80)
     for dataset, tiles, total_bytes, oldest, newest in rows:
         size_str = _human_size(total_bytes or 0)
@@ -513,7 +576,8 @@ def cache_status(
 @cache_app.command("refresh")
 def cache_refresh(
     older_than: Optional[int] = typer.Option(
-        None, "--older-than",
+        None,
+        "--older-than",
         help="Re-fetch tiles older than N days. Defaults to each dataset's configured TTL.",
     ),
     config_path: str = typer.Option("config.toml", "--config", "-c"),
@@ -532,11 +596,15 @@ def cache_refresh(
         typer.echo("Cache is empty — nothing to refresh.")
         return
 
-    cutoff_days = older_than  # None means use per-dataset TTL (handled by get_tiles refresh flag)
+    cutoff_days = (
+        older_than  # None means use per-dataset TTL (handled by get_tiles refresh flag)
+    )
 
     with closing(sqlite3.connect(db)) as conn, conn:
         if cutoff_days is not None:
-            cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).isoformat()
+            cutoff_ts = (
+                datetime.now(timezone.utc) - timedelta(days=cutoff_days)
+            ).isoformat()
             rows = conn.execute(
                 "SELECT dataset, tile_id, xmin, ymin, xmax, ymax "
                 "FROM tiles WHERE fetch_timestamp < ?",
@@ -554,7 +622,7 @@ def cache_refresh(
     typer.echo(f"Re-fetching {len(rows)} stale tile(s) …")
 
     fetchers = {
-        "dem":       d_fetcher(api_key),
+        "dem": d_fetcher(api_key),
         "buildings": b_fetcher(api_key),
     }
 
@@ -568,7 +636,9 @@ def cache_refresh(
             get_tiles(dataset, tile_bbox, fetcher, cfg.cache, refresh=True)
             refreshed += 1
         except Exception as e:
-            typer.echo(f"  Warning: failed to refresh {dataset}/{tile_id}: {e}", err=True)
+            typer.echo(
+                f"  Warning: failed to refresh {dataset}/{tile_id}: {e}", err=True
+            )
 
     typer.echo(f"Refreshed {refreshed}/{len(rows)} tile(s).")
 
@@ -580,6 +650,7 @@ def cache_refresh(
 
 def _load_cfg(config_path: str):
     from flightmanager.config import load_config
+
     try:
         return load_config(config_path)
     except FileNotFoundError as e:
@@ -620,24 +691,32 @@ def _print_job_summary(manifest: dict, dry_run: bool) -> None:
 
     typer.echo()
     typer.echo(f"{prefix}Job '{manifest['job_name']}' complete")
-    typer.echo(f"  Area:        {g.get('original_area_ha', 0):.2f} ha → "
-               f"{g.get('final_area_ha', 0):.2f} ha "
-               f"({g.get('area_lost_pct', 0):.1f}% lost to keep-out)")
+    typer.echo(
+        f"  Area:        {g.get('original_area_ha', 0):.2f} ha → "
+        f"{g.get('final_area_ha', 0):.2f} ha "
+        f"({g.get('area_lost_pct', 0):.1f}% lost to keep-out)"
+    )
     vc = g.get("survey_vertex_count")
     if vc is not None:
         typer.echo(f"  Vertices:    {vc}")
     typer.echo(f"  Drone:       {f.get('drone_label', f.get('drone', ''))}")
-    typer.echo(f"  Height:      {f.get('derived_height_m', 0):.1f} m AGL  "
-               f"GSD {f.get('target_gsd_cm', 0):.1f} cm/px")
+    typer.echo(
+        f"  Height:      {f.get('derived_height_m', 0):.1f} m AGL  "
+        f"GSD {f.get('target_gsd_cm', 0):.1f} cm/px"
+    )
 
     if isinstance(b, dict) and "estimated_flight_time_min" in b:
         battery_warn = " ⚠ EXCEEDS ONE BATTERY" if b.get("over_one_battery") else ""
-        typer.echo(f"  Flight time: ~{b.get('estimated_flight_time_min', 0):.0f} min  "
-                   f"~{b.get('estimated_photo_count', 0)} photos{battery_warn}")
+        typer.echo(
+            f"  Flight time: ~{b.get('estimated_flight_time_min', 0):.0f} min  "
+            f"~{b.get('estimated_photo_count', 0)} photos{battery_warn}"
+        )
 
     zone_hits = z.get("intersecting_zones", [])
     if zone_hits:
-        typer.echo(f"  Zones:       {len(zone_hits)} restricted zone(s) intersect survey area!")
+        typer.echo(
+            f"  Zones:       {len(zone_hits)} restricted zone(s) intersect survey area!"
+        )
     elif not z.get("checked"):
         typer.echo("  Zones:       check skipped (no zone data configured)")
     else:
@@ -651,7 +730,8 @@ def _print_job_summary(manifest: dict, dry_run: bool) -> None:
             typer.echo(f"    - {r}")
 
     status = (
-        "✓ FLIGHT READY" if manifest.get("flight_ready")
+        "✓ FLIGHT READY"
+        if manifest.get("flight_ready")
         else "✗ NOT FLIGHT READY — review required"
     )
     typer.echo(f"\n  Status: {status}")
@@ -661,7 +741,9 @@ def _print_job_summary(manifest: dict, dry_run: bool) -> None:
 @app.command("batch")
 def batch_cmd(
     parcels: Optional[str] = typer.Option(
-        None, "--parcels", "-p",
+        None,
+        "--parcels",
+        "-p",
         help=(
             "Comma-separated peruslohkotunnus IDs, or omit the value to use --parcels "
             "as a type selector with --file (e.g. --parcels --file ids.txt). "
@@ -669,23 +751,34 @@ def batch_cmd(
         ),
     ),
     properties: Optional[str] = typer.Option(
-        None, "--properties", "-k",
+        None,
+        "--properties",
+        "-k",
         help=(
             "Comma-separated kiinteistötunnus values, or bare flag with --file. "
             "Cannot be combined with --parcels."
         ),
     ),
     file: Optional[Path] = typer.Option(
-        None, "--file", "-f",
+        None,
+        "--file",
+        "-f",
         help="Text file with one ID per line. # lines and blank lines are skipped.",
-        exists=True, file_okay=True, dir_okay=False,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
     ),
     folder: Optional[str] = typer.Option(
-        None, "--folder",
+        None,
+        "--folder",
         help="Output subfolder to group the batch jobs under.",
     ),
-    drone: Optional[str] = typer.Option(None, "--drone", help="Drone profile override."),
-    height: Optional[float] = typer.Option(None, "--height", help="Flight height (m AGL)."),
+    drone: Optional[str] = typer.Option(
+        None, "--drone", help="Drone profile override."
+    ),
+    height: Optional[float] = typer.Option(
+        None, "--height", help="Flight height (m AGL)."
+    ),
     subcategory: Optional[str] = typer.Option(None, "--subcategory", help="A2 or A3."),
     config_path: str = typer.Option("config.toml", "--config", "-c"),
 ) -> None:
@@ -709,7 +802,10 @@ def batch_cmd(
 
     raw_ids = _collect_batch_ids(parcels, properties, file)
     if not raw_ids:
-        typer.echo("Error: no IDs provided (use --parcels, --properties, and/or --file).", err=True)
+        typer.echo(
+            "Error: no IDs provided (use --parcels, --properties, and/or --file).",
+            err=True,
+        )
         raise typer.Exit(1)
 
     id_type = _detect_id_type(raw_ids, parcels, properties)
@@ -721,6 +817,7 @@ def batch_cmd(
             raise typer.Exit(1)
 
     import copy
+
     cfg = copy.deepcopy(cfg)
     if drone:
         cfg.default_drone = drone
@@ -735,7 +832,9 @@ def batch_cmd(
         "height_m": height,
         "subcategory": subcategory or cfg.home_safety.operating_subcategory,
         "offset_m": cfg.polygon.survey_offset_m,
-        "simplify": "auto" if cfg.polygon.simplify_mode == "auto" else str(cfg.polygon.simplify_tolerance_m),
+        "simplify": "auto"
+        if cfg.polygon.simplify_mode == "auto"
+        else str(cfg.polygon.simplify_tolerance_m),
         "keepout": cfg.home_safety.offset_enabled,
         "preview_radius_m": None,
     }
@@ -747,18 +846,26 @@ def batch_cmd(
     typer.echo()
 
     results = create_skeleton_jobs(
-        raw_ids, id_type, output_dir, folder, params,
-        progress_cb=None, config=cfg,
+        raw_ids,
+        id_type,
+        output_dir,
+        folder,
+        params,
+        progress_cb=None,
+        config=cfg,
     )
 
     failed = _print_batch_results(results)
     from flightmanager.net_stats import print_summary as _print_net_stats
+
     _print_net_stats(cfg.cache.cache_dir)
     if failed:
         raise typer.Exit(1)
 
 
-def _collect_job_centroids(out_dir: Path, folder: str | None) -> list[tuple[float, float]]:
+def _collect_job_centroids(
+    out_dir: Path, folder: str | None
+) -> list[tuple[float, float]]:
     """Return (lat, lon) centroids of all job polygons in *out_dir* (or one folder)."""
     from shapely.geometry import shape
 
@@ -779,7 +886,9 @@ def _collect_job_centroids(out_dir: Path, folder: str | None) -> list[tuple[floa
     return points
 
 
-def _collect_stale_paths(output_dir: Path, cache_config, folder: Optional[str]) -> list[str]:
+def _collect_stale_paths(
+    output_dir: Path, cache_config, folder: Optional[str]
+) -> list[str]:
     """Return job paths flagged stale (skipping untouched skeletons), optionally one folder."""
     import json
 
@@ -801,7 +910,9 @@ def _collect_stale_paths(output_dir: Path, cache_config, folder: Optional[str]) 
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if refresh_status(manifest, cache_config, PIPELINE_VERSION)["needs_refresh"]:
+            if refresh_status(manifest, cache_config, PIPELINE_VERSION)[
+                "needs_refresh"
+            ]:
                 targets.append(card["path"])
     return targets
 
@@ -812,7 +923,9 @@ def refresh_cmd(
         default=None, help="Job paths (folder/name or name) to refresh."
     ),
     all_stale: bool = typer.Option(
-        False, "--all-stale", help="Refresh every job flagged stale (pipeline / source data)."
+        False,
+        "--all-stale",
+        help="Refresh every job flagged stale (pipeline / source data).",
     ),
     folder: Optional[str] = typer.Option(
         None, "--folder", help="Limit --all-stale to one group folder."
@@ -838,7 +951,8 @@ def refresh_cmd(
 
     targets = (
         _collect_stale_paths(output_dir, cfg.cache, folder)
-        if (all_stale or folder) else list(paths or [])
+        if (all_stale or folder)
+        else list(paths or [])
     )
 
     if not targets:
@@ -865,16 +979,25 @@ def refresh_cmd(
                     failed += 1
                     typer.echo(f"    ERROR: {e}", err=True)
     except Timeout:
-        typer.echo("Pipeline busy — another process holds the lock. Try again shortly.", err=True)
+        typer.echo(
+            "Pipeline busy — another process holds the lock. Try again shortly.",
+            err=True,
+        )
         raise typer.Exit(1)
 
-    typer.echo(f"Done — {ok} recomputed, {flips} with flag changes, {skipped} skipped, {failed} failed.")
+    typer.echo(
+        f"Done — {ok} recomputed, {flips} with flag changes, {skipped} skipped, {failed} failed."
+    )
 
 
 @app.command("satellites")
 def satellites_cmd(
-    folder: Optional[str] = typer.Option(None, "--folder", help="Only consider jobs in this output subfolder."),
-    point: Optional[str] = typer.Option(None, "--point", help="Check a single 'lat,lon' point instead of jobs."),
+    folder: Optional[str] = typer.Option(
+        None, "--folder", help="Only consider jobs in this output subfolder."
+    ),
+    point: Optional[str] = typer.Option(
+        None, "--point", help="Check a single 'lat,lon' point instead of jobs."
+    ),
     config_path: str = typer.Option("config.toml", "--config", "-c"),
 ) -> None:
     """List upcoming satellite overpasses for the job grid square(s).
@@ -902,7 +1025,9 @@ def satellites_cmd(
     else:
         points = _collect_job_centroids(Path(cfg.output.output_dir), folder)
         if not points:
-            typer.echo("No job polygons found. Use --point to test a coordinate.", err=True)
+            typer.echo(
+                "No job polygons found. Use --point to test a coordinate.", err=True
+            )
             raise typer.Exit(1)
 
     typer.echo(f"Checking {len(points)} location(s)…")
@@ -927,7 +1052,9 @@ def satellites_cmd(
         typer.echo(day)
         for op in by_day[day]:
             t = op.peak_utc.strftime("%H:%M UTC")
-            typer.echo(f"  {t}  {op.name:<14} {op.tile_id:<6} peak {op.max_elev_deg:.0f}°")
+            typer.echo(
+                f"  {t}  {op.name:<14} {op.tile_id:<6} peak {op.max_elev_deg:.0f}°"
+            )
     typer.echo("")
     typer.echo(result.attribution)
 
@@ -952,6 +1079,7 @@ def mcp_cmd(
       # Claude Code:    claude mcp add flightmanager -- flightmanager mcp
     """
     from flightmanager.mcp_server import mcp, set_config_path
+
     set_config_path(config_path)
     mcp.run(transport="stdio")
 
@@ -960,7 +1088,9 @@ def mcp_cmd(
 def serve_cmd(
     port: int = typer.Option(8765, "--port", help="Port to listen on."),
     config_path: str = typer.Option("config.toml", "--config", "-c"),
-    no_open: bool = typer.Option(False, "--no-open", help="Do not open browser automatically."),
+    no_open: bool = typer.Option(
+        False, "--no-open", help="Do not open browser automatically."
+    ),
 ) -> None:
     """Start the browser UI server."""
     import threading
@@ -1012,14 +1142,20 @@ def report_cmd(
         None, "--folder", help="Report every job in this group folder."
     ),
     packet: bool = typer.Option(
-        False, "--packet", help="Mission packet (cover + overview + launch sites + cards)."
+        False,
+        "--packet",
+        help="Mission packet (cover + overview + launch sites + cards).",
     ),
-    basemap: str = typer.Option("mml", "--basemap", help="Basemap: 'mml' (orthophoto) or 'osm'."),
+    basemap: str = typer.Option(
+        "mml", "--basemap", help="Basemap: 'mml' (orthophoto) or 'osm'."
+    ),
     no_cards: bool = typer.Option(
         False, "--no-cards", help="Packet without the per-job detail cards."
     ),
     out: Optional[str] = typer.Option(None, "--out", "-o", help="Output PDF path."),
-    open_pdf: bool = typer.Option(False, "--open", help="Open the PDF after generating."),
+    open_pdf: bool = typer.Option(
+        False, "--open", help="Open the PDF after generating."
+    ),
     config_path: str = typer.Option("config.toml", "--config", "-c"),
 ) -> None:
     """Generate a PDF flight card (single job) or mission packet (multiple jobs).
@@ -1052,10 +1188,13 @@ def report_cmd(
         raise typer.Exit(1)
 
     as_packet = packet or folder or len(entries) > 1
-    typer.echo(f"Rendering {'packet' if as_packet else 'card'} for {len(entries)} job(s) …")
+    typer.echo(
+        f"Rendering {'packet' if as_packet else 'card'} for {len(entries)} job(s) …"
+    )
     if as_packet:
-        pdf = report.render_packet(cfg, entries, folder=folder,
-                                   basemap=basemap, include_job_cards=not no_cards)
+        pdf = report.render_packet(
+            cfg, entries, folder=folder, basemap=basemap, include_job_cards=not no_cards
+        )
         default_name = f"dkk-{folder or 'packet'}.pdf"
     else:
         e = entries[0]

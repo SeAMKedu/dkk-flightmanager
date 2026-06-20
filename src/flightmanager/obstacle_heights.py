@@ -20,7 +20,9 @@ if TYPE_CHECKING:
     from flightmanager.config import DroneConfig
     from flightmanager.route import RouteResult
 
-_MAX_CLIMB_MS = 3.0  # conservative max vertical speed (m/s) for M3M/M3E in waypoint mode
+_MAX_CLIMB_MS = (
+    3.0  # conservative max vertical speed (m/s) for M3M/M3E in waypoint mode
+)
 
 _FLOOR_HEIGHT_M = 3.0  # metres per storey (kerrosluku)
 
@@ -28,11 +30,21 @@ _FLOOR_HEIGHT_M = 3.0  # metres per storey (kerrosluku)
 # Applied as d_effective = horizontal_distance + building_height so that the
 # 1:1 proximity metric is relative to the rooftop rather than the ground.
 _KOHDELUOKKA_HEIGHT_M: dict[int, float] = {
-    42210: 7.0, 42211: 7.0, 42212: 10.0,  # asuinrakennus (residential; 42212 = 3+ floors)
-    42220: 7.0, 42221: 7.0, 42222: 7.0,   # liike-/julkinen (commercial/public)
-    42230: 4.0, 42231: 4.0, 42232: 4.0,   # lomarakennus (holiday/cabin)
-    42240: 15.0, 42241: 15.0, 42242: 15.0, # teollinen (industrial/silo)
-    42260: 10.0, 42261: 10.0, 42262: 10.0, # maatalous/varasto (agricultural/storage)
+    42210: 7.0,
+    42211: 7.0,
+    42212: 10.0,  # asuinrakennus (residential; 42212 = 3+ floors)
+    42220: 7.0,
+    42221: 7.0,
+    42222: 7.0,  # liike-/julkinen (commercial/public)
+    42230: 4.0,
+    42231: 4.0,
+    42232: 4.0,  # lomarakennus (holiday/cabin)
+    42240: 15.0,
+    42241: 15.0,
+    42242: 15.0,  # teollinen (industrial/silo)
+    42260: 10.0,
+    42261: 10.0,
+    42262: 10.0,  # maatalous/varasto (agricultural/storage)
 }
 _DEFAULT_HEIGHT_M = 7.0
 
@@ -50,8 +62,8 @@ def building_height_m(b: Building) -> float:
 
 def compute_altitude_profile(
     route: RouteResult,
-    buildings: list,        # list[Building]
-    power_lines: list,      # list[PowerLine]
+    buildings: list,  # list[Building]
+    power_lines: list,  # list[PowerLine]
     *,
     flight_height_m: float,
     min_h: float,
@@ -78,7 +90,9 @@ def compute_altitude_profile(
     # Max altitude change per strip spacing (m/m)
     speed_ms = max(0.5, drone.auto_speed(flight_height_m, overlap_front_pct))
     slope_across = min(
-        slope_f * drone.focal_length_mm / (drone.sensor_w_mm * (1.0 - overlap_side_pct / 100.0)),
+        slope_f
+        * drone.focal_length_mm
+        / (drone.sensor_w_mm * (1.0 - overlap_side_pct / 100.0)),
         _MAX_CLIMB_MS / speed_ms,
     )
 
@@ -95,8 +109,7 @@ def compute_altitude_profile(
             # 1:1 proximity rule from the rooftop rather than the ground.
             # The building with the smallest d_eff is the binding constraint.
             best_d_eff = min(
-                mid.distance(b.geometry) + building_height_m(b)
-                for b in buildings
+                mid.distance(b.geometry) + building_height_m(b) for b in buildings
             )
             h = float(min(max(best_d_eff, min_h), flight_height_m))
         else:

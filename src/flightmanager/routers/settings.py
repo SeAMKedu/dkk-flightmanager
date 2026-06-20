@@ -27,40 +27,49 @@ router = APIRouter()
 _FIELD_META: dict[str, dict[str, Any]] = {
     # ── Flight ────────────────────────────────────────────────────────────────
     "flight.target_gsd_cm": {
-        "label": "Target GSD", "unit": "cm/px",
+        "label": "Target GSD",
+        "unit": "cm/px",
         "description": "Ground sampling distance target. Flight height is derived from this and the selected drone's camera specs.",
     },
     "flight.max_height_agl_m": {
-        "label": "Max flight height", "unit": "m AGL",
+        "label": "Max flight height",
+        "unit": "m AGL",
         "description": "Hard ceiling on flight height. DJI Pilot 2 caps the route at this value.",
     },
     "flight.agl_safety_margin_m": {
-        "label": "Terrain clearance margin", "unit": "m",
+        "label": "Terrain clearance margin",
+        "unit": "m",
         "description": "Extra altitude above the DSM terrain model to protect against DEM errors and standing crops.",
     },
     "flight.takeoff_security_height_m": {
-        "label": "Takeoff safety height", "unit": "m",
+        "label": "Takeoff safety height",
+        "unit": "m",
         "description": "Initial climb height before the drone begins moving toward the survey area.",
     },
     "flight.transitional_speed_ms": {
-        "label": "Transit speed", "unit": "m/s",
+        "label": "Transit speed",
+        "unit": "m/s",
         "description": "Speed when flying between the takeoff point and the survey polygon.",
     },
     "flight.overlap_front_pct": {
-        "label": "Front overlap", "unit": "%",
+        "label": "Front overlap",
+        "unit": "%",
         "description": "Forward overlap between consecutive photos along each strip.",
     },
     "flight.overlap_side_pct": {
-        "label": "Side overlap", "unit": "%",
+        "label": "Side overlap",
+        "unit": "%",
         "description": "Lateral overlap between adjacent flight strips.",
     },
     "flight.auto_flight_speed_ms": {
-        "label": "Strip flight speed override", "unit": "m/s",
+        "label": "Strip flight speed override",
+        "unit": "m/s",
         "description": "Speed along mapping strips. Leave blank for auto mode (calculated per flight from altitude, overlap, and drone capture interval). Set a fixed value only to override — e.g. to slow down in strong winds.",
         "nullable": True,
     },
     "flight.dsm_margin_m": {
-        "label": "DSM margin", "unit": "m",
+        "label": "DSM margin",
+        "unit": "m",
         "description": "Extra margin around the survey polygon in the embedded terrain model. Covers the RTH path and takeoff area.",
     },
     "flight.finish_action": {
@@ -81,19 +90,23 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "description": "EU UAS Regulation category. A2: keep-out = flight height from residential buildings. A3: fixed 150 m from populated areas.",
     },
     "home_safety.home_buffer_m": {
-        "label": "Keep-out buffer", "unit": "m",
+        "label": "Keep-out buffer",
+        "unit": "m",
         "description": "Distance the survey polygon is contracted away from residential buildings. Auto-derived from flight height in A2 mode.",
     },
     "home_safety.home_include_buffer_m": {
-        "label": "Buildings inclusion buffer", "unit": "m",
+        "label": "Buildings inclusion buffer",
+        "unit": "m",
         "description": "Buildings within this distance of the polygon boundary are included in the Homes KML. Leave empty to use 2× keep-out buffer.",
     },
     "home_safety.preview_radius_m": {
-        "label": "Preview radius", "unit": "m",
+        "label": "Preview radius",
+        "unit": "m",
         "description": "Radius of the informational circle drawn around each building in the map preview. Leave empty for 3× flight height.",
     },
     "home_safety.vlos_range_m": {
-        "label": "VLOS range", "unit": "m",
+        "label": "VLOS range",
+        "unit": "m",
         "description": "Visual line-of-sight range shown as a dashed circle around the takeoff point in the UI.",
     },
     "home_safety.offset_enabled": {
@@ -101,20 +114,24 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "description": "When disabled, the survey polygon is not contracted away from buildings.",
     },
     "home_safety.max_area_loss_pct": {
-        "label": "Max area loss threshold", "unit": "%",
+        "label": "Max area loss threshold",
+        "unit": "%",
         "description": "If the keep-out buffer removes more than this percentage of the survey area, the job is flagged for review.",
     },
     # ── Polygon ───────────────────────────────────────────────────────────────
     "polygon.edge_buffer_m": {
-        "label": "Edge buffer", "unit": "m",
+        "label": "Edge buffer",
+        "unit": "m",
         "description": "Inward contraction of the survey polygon boundary. Use to leave a margin inside the cadastral line.",
     },
     "polygon.gap_fill_m": {
-        "label": "Gap fill distance", "unit": "m",
+        "label": "Gap fill distance",
+        "unit": "m",
         "description": "Morphological closing distance to bridge gaps between adjacent parcels. Gaps up to 2× this width are merged.",
     },
     "polygon.survey_offset_m": {
-        "label": "Survey offset", "unit": "m",
+        "label": "Survey offset",
+        "unit": "m",
         "description": "Push (+) or pull (–) the survey boundary relative to the parcel/cadastral line. Applied after gap-fill.",
     },
     "polygon.simplify_mode": {
@@ -122,7 +139,8 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "description": "fixed: apply a fixed Douglas-Peucker tolerance. auto: find the largest tolerance that keeps vertex count ≤ max vertices.",
     },
     "polygon.simplify_tolerance_m": {
-        "label": "Simplify tolerance", "unit": "m",
+        "label": "Simplify tolerance",
+        "unit": "m",
         "description": "Douglas-Peucker tolerance used in fixed simplify mode.",
     },
     "polygon.auto_simplify_max_vertices": {
@@ -139,11 +157,13 @@ _FIELD_META: dict[str, dict[str, Any]] = {
     },
     # ── Zones ─────────────────────────────────────────────────────────────────
     "zones.max_age_days": {
-        "label": "Zone cache TTL", "unit": "days",
+        "label": "Zone cache TTL",
+        "unit": "days",
         "description": "Re-fetch the Traficom UAS zone dump if the cached copy is older than this many days.",
     },
     "zones.check_buffer_m": {
-        "label": "Zone check buffer", "unit": "m",
+        "label": "Zone check buffer",
+        "unit": "m",
         "description": "Expand the survey polygon by this distance before checking for UAS zone intersections, so nearby zones are also reported.",
     },
     "zones.zones_file": {
@@ -152,19 +172,23 @@ _FIELD_META: dict[str, dict[str, Any]] = {
     },
     # ── Cache ─────────────────────────────────────────────────────────────────
     "cache.dem_ttl_days": {
-        "label": "DEM cache TTL", "unit": "days",
+        "label": "DEM cache TTL",
+        "unit": "days",
         "description": "How long to keep downloaded elevation tiles before re-fetching from MML.",
     },
     "cache.buildings_ttl_days": {
-        "label": "Buildings cache TTL", "unit": "days",
+        "label": "Buildings cache TTL",
+        "unit": "days",
         "description": "How long to keep downloaded building tiles before re-fetching from MML Maastotietokanta.",
     },
     "cache.parcels_ttl_days": {
-        "label": "Parcels cache TTL", "unit": "days",
+        "label": "Parcels cache TTL",
+        "unit": "days",
         "description": "How long to keep cached parcel geometry before re-fetching from Ruokavirasto.",
     },
     "cache.properties_ttl_days": {
-        "label": "Properties cache TTL", "unit": "days",
+        "label": "Properties cache TTL",
+        "unit": "days",
         "description": "How long to keep cached property geometry before re-fetching from MML.",
     },
     "cache.offline": {
@@ -186,7 +210,8 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "description": "Number of features per WFS request page to Ruokavirasto (server cap: 1000).",
     },
     "parcels.timeout_s": {
-        "label": "Request timeout", "unit": "s",
+        "label": "Request timeout",
+        "unit": "s",
         "description": "HTTP timeout for Ruokavirasto WFS requests.",
     },
     # ── Properties ────────────────────────────────────────────────────────────
@@ -195,7 +220,8 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "description": "Number of features per OGC API Features page for MML property (kiinteistö) requests.",
     },
     "properties.timeout_s": {
-        "label": "Request timeout", "unit": "s",
+        "label": "Request timeout",
+        "unit": "s",
         "description": "HTTP timeout for MML property (kiinteistö) requests.",
     },
     # ── Power Lines ───────────────────────────────────────────────────────────
@@ -204,7 +230,8 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "description": "Fetch overhead high-voltage lines from MML Maastotietokanta and show them on the map. Overhead lines are kept out of the survey area by the safe distance below.",
     },
     "powerlines.overhead_buffer_m": {
-        "label": "Power line safe distance", "unit": "m",
+        "label": "Power line safe distance",
+        "unit": "m",
         "description": "Keep-out buffer around each overhead high-voltage line (110 kV+). The survey polygon is contracted away from lines by this distance. Finnish aviation guidance recommends staying well clear of high-voltage lines.",
     },
     # ── Top-level ─────────────────────────────────────────────────────────────
@@ -214,86 +241,105 @@ _FIELD_META: dict[str, dict[str, Any]] = {
     },
     # ── Satellites ────────────────────────────────────────────────────────────
     "satellites.grid_file": {
-        "label": "MGRS grid file", "unit": "",
+        "label": "MGRS grid file",
+        "unit": "",
         "description": "Path to the Sentinel-2 tiling-grid GeoJSON (~20 MB, not bundled). Download from zenodo.org/records/10998972.",
     },
     "satellites.min_elevation_deg": {
-        "label": "Min overpass elevation", "unit": "°",
+        "label": "Min overpass elevation",
+        "unit": "°",
         "description": "Only count near-nadir passes whose peak elevation exceeds this. Higher = stricter (more directly overhead).",
     },
     "satellites.days_ahead": {
-        "label": "Overpass search window", "unit": "days",
+        "label": "Overpass search window",
+        "unit": "days",
         "description": "How many days ahead to compute satellite overpasses.",
     },
     "satellites.omm_max_age_days": {
-        "label": "Orbit data max age", "unit": "days",
+        "label": "Orbit data max age",
+        "unit": "days",
         "description": "Re-fetch orbital elements from CelesTrak when the cached copy is older than this.",
     },
     "satellites.timeout_s": {
-        "label": "CelesTrak timeout", "unit": "s",
+        "label": "CelesTrak timeout",
+        "unit": "s",
         "description": "Request timeout when fetching orbital elements.",
     },
     # ── Weather ───────────────────────────────────────────────────────────────
     "weather.provider": {
-        "label": "Weather provider", "unit": "",
+        "label": "Weather provider",
+        "unit": "",
         "description": "Source for the forecast bar. Open-Meteo is recommended; FMI is not implemented yet (selecting it shows no weather).",
     },
     "weather.forecast_days": {
-        "label": "Forecast days", "unit": "days",
+        "label": "Forecast days",
+        "unit": "days",
         "description": "How many days of weather to request (Open-Meteo serves up to 16).",
     },
     "weather.cache_max_age_hours": {
-        "label": "Forecast cache age", "unit": "h",
+        "label": "Forecast cache age",
+        "unit": "h",
         "description": "Re-fetch a cached forecast when it is older than this.",
     },
     "weather.daytime_start_h": {
-        "label": "Daytime start", "unit": "h",
+        "label": "Daytime start",
+        "unit": "h",
         "description": "Local hour the daytime window starts. Weather is averaged over the daytime window only.",
     },
     "weather.daytime_end_h": {
-        "label": "Daytime end", "unit": "h",
+        "label": "Daytime end",
+        "unit": "h",
         "description": "Local hour the daytime window ends.",
     },
     "weather.clear_sky_max_cloud_pct": {
-        "label": "Clear-sky cloud limit", "unit": "%",
+        "label": "Clear-sky cloud limit",
+        "unit": "%",
         "description": "A daytime pass under cloud at or below this (at its overpass time) is flagged a clear-sky imaging window.",
     },
     "weather.drone_wind_limit_ms": {
-        "label": "Max flying wind", "unit": "m/s", "nullable": True,
+        "label": "Max flying wind",
+        "unit": "m/s",
+        "nullable": True,
         "description": "A day is a 'golden' match (highlighted) when daytime wind is at or below this AND a clear-sky pass falls that day. Blank disables golden highlighting.",
     },
     "weather.timeout_s": {
-        "label": "Weather API timeout", "unit": "s",
+        "label": "Weather API timeout",
+        "unit": "s",
         "description": "Request timeout when fetching the forecast.",
     },
 }
 
 # Ordered sections — (section_id, label)
 _SECTIONS_DEF: list[tuple[str, str]] = [
-    ("flight",      "Flight"),
+    ("flight", "Flight"),
     ("home_safety", "Safety"),
-    ("polygon",     "Polygon"),
-    ("powerlines",  "Power Lines"),
-    ("zones",       "UAS Zones"),
-    ("cache",       "Cache"),
-    ("output",      "Output"),
-    ("parcels",     "Parcels"),
-    ("properties",  "Properties"),
-    ("satellites",  "Satellites"),
-    ("weather",     "Weather"),
+    ("polygon", "Polygon"),
+    ("powerlines", "Power Lines"),
+    ("zones", "UAS Zones"),
+    ("cache", "Cache"),
+    ("output", "Output"),
+    ("parcels", "Parcels"),
+    ("properties", "Properties"),
+    ("satellites", "Satellites"),
+    ("weather", "Weather"),
 ]
 
 # Fields to hide per section (internal / dangerous to edit via UI)
 _SKIP_FIELDS: dict[str, set[str]] = {
     "home_safety": {"residential_kohdeluokka", "a3_additional_kohdeluokka"},
-    "zones":       {"api_url"},
-    "cache":       {"tile_size_m", "cache_dir"},
-    "output":      {"color_palette"},
+    "zones": {"api_url"},
+    "cache": {"tile_size_m", "cache_dir"},
+    "output": {"color_palette"},
     # Advanced mode params are per-job, configured via the Template Settings modal
-    "flight":      {"advanced_mode", "adv_min_height_m", "adv_powerline_clearance_m", "adv_slope_f"},
+    "flight": {
+        "advanced_mode",
+        "adv_min_height_m",
+        "adv_powerline_clearance_m",
+        "adv_slope_f",
+    },
     # URLs and the tracked-satellite list are managed in config.toml directly.
-    "satellites":  {"omm_url", "tracked"},
-    "weather":     {"open_meteo_url", "fmi_wfs_url"},
+    "satellites": {"omm_url", "tracked"},
+    "weather": {"open_meteo_url", "fmi_wfs_url"},
 }
 
 
@@ -330,9 +376,9 @@ def _extract_type_info(fschema: dict) -> dict:
 
     # Numeric constraints
     for src, dst in [
-        ("minimum",          "min"),
+        ("minimum", "min"),
         ("exclusiveMinimum", "min"),
-        ("maximum",          "max"),
+        ("maximum", "max"),
         ("exclusiveMaximum", "max"),
     ]:
         if src in schema:
@@ -343,40 +389,53 @@ def _extract_type_info(fschema: dict) -> dict:
 
 def _build_sections(config: Any) -> list[dict]:
     from flightmanager.config import (
-        CacheConfig, FlightConfig, HomeSafetyConfig, OutputConfig,
-        ParcelsConfig, PolygonConfig, PowerLinesConfig, PropertiesConfig,
-        SatellitesConfig, WeatherConfig, ZonesConfig,
+        CacheConfig,
+        FlightConfig,
+        HomeSafetyConfig,
+        OutputConfig,
+        ParcelsConfig,
+        PolygonConfig,
+        PowerLinesConfig,
+        PropertiesConfig,
+        SatellitesConfig,
+        WeatherConfig,
+        ZonesConfig,
     )
+
     model_map: dict[str, type] = {
-        "flight":      FlightConfig,
+        "flight": FlightConfig,
         "home_safety": HomeSafetyConfig,
-        "polygon":     PolygonConfig,
-        "powerlines":  PowerLinesConfig,
-        "zones":       ZonesConfig,
-        "cache":       CacheConfig,
-        "output":      OutputConfig,
-        "parcels":     ParcelsConfig,
-        "properties":  PropertiesConfig,
-        "satellites":  SatellitesConfig,
-        "weather":     WeatherConfig,
+        "polygon": PolygonConfig,
+        "powerlines": PowerLinesConfig,
+        "zones": ZonesConfig,
+        "cache": CacheConfig,
+        "output": OutputConfig,
+        "parcels": ParcelsConfig,
+        "properties": PropertiesConfig,
+        "satellites": SatellitesConfig,
+        "weather": WeatherConfig,
     }
 
     # ── Drone section (top-level field + enum from loaded drone list) ──────────
-    sections: list[dict] = [{
-        "id":    "drone",
-        "label": "Drone",
-        "fields": [{
-            "key":          "default_drone",
-            "label":        _FIELD_META["default_drone"]["label"],
-            "description":  _FIELD_META["default_drone"]["description"],
-            "unit":         "",
-            "type":         "enum",
-            "options":      [d.name for d in config.drones],
-            "option_labels": {d.name: d.label for d in config.drones},
-            "nullable":     False,
-            "value":        config.default_drone,
-        }],
-    }]
+    sections: list[dict] = [
+        {
+            "id": "drone",
+            "label": "Drone",
+            "fields": [
+                {
+                    "key": "default_drone",
+                    "label": _FIELD_META["default_drone"]["label"],
+                    "description": _FIELD_META["default_drone"]["description"],
+                    "unit": "",
+                    "type": "enum",
+                    "options": [d.name for d in config.drones],
+                    "option_labels": {d.name: d.label for d in config.drones},
+                    "nullable": False,
+                    "value": config.default_drone,
+                }
+            ],
+        }
+    ]
 
     for section_id, section_label in _SECTIONS_DEF:
         model_cls = model_map[section_id]
@@ -393,21 +452,33 @@ def _build_sections(config: Any) -> list[dict]:
             type_info = _extract_type_info(fschema)
 
             # _FIELD_META can override any type attribute
-            for attr in ("type", "options", "option_labels", "nullable", "step", "min", "max"):
+            for attr in (
+                "type",
+                "options",
+                "option_labels",
+                "nullable",
+                "step",
+                "min",
+                "max",
+            ):
                 if attr in meta:
                     type_info[attr] = meta[attr]
 
             if type_info.get("type") == "array":
                 continue  # skip complex list fields for now
 
-            fields.append({
-                "key":         key,
-                "label":       meta.get("label", fname.replace("_", " ").title()),
-                "description": meta.get("description", fschema.get("description", "")),
-                "unit":        meta.get("unit", ""),
-                **type_info,
-                "value": getattr(section_obj, fname),
-            })
+            fields.append(
+                {
+                    "key": key,
+                    "label": meta.get("label", fname.replace("_", " ").title()),
+                    "description": meta.get(
+                        "description", fschema.get("description", "")
+                    ),
+                    "unit": meta.get("unit", ""),
+                    **type_info,
+                    "value": getattr(section_obj, fname),
+                }
+            )
 
         sections.append({"id": section_id, "label": section_label, "fields": fields})
 
@@ -452,6 +523,7 @@ async def update_settings(changes: dict):
     if _st.config_path:
         from flightmanager.config import save_config
         import logging
+
         try:
             save_config(new_config, Path(_st.config_path))
         except Exception as exc:

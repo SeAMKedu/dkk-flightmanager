@@ -27,11 +27,15 @@ _FEATURE_A = {
     },
     "geometry": {
         "type": "Polygon",
-        "coordinates": [[
-            [300000, 6900000], [301000, 6900000],
-            [301000, 6901000], [300000, 6901000],
-            [300000, 6900000],
-        ]],
+        "coordinates": [
+            [
+                [300000, 6900000],
+                [301000, 6900000],
+                [301000, 6901000],
+                [300000, 6901000],
+                [300000, 6900000],
+            ]
+        ],
     },
 }
 
@@ -45,16 +49,22 @@ _FEATURE_B = {
     },
     "geometry": {
         "type": "Polygon",
-        "coordinates": [[
-            [302000, 6900000], [303000, 6900000],
-            [303000, 6901000], [302000, 6901000],
-            [302000, 6900000],
-        ]],
+        "coordinates": [
+            [
+                [302000, 6900000],
+                [303000, 6900000],
+                [303000, 6901000],
+                [302000, 6901000],
+                [302000, 6900000],
+            ]
+        ],
     },
 }
 
 
-def _mock_response(features: list[dict], number_matched: int | None = None) -> MagicMock:
+def _mock_response(
+    features: list[dict], number_matched: int | None = None
+) -> MagicMock:
     resp = MagicMock()
     resp.raise_for_status = MagicMock()
     payload = {
@@ -90,10 +100,22 @@ class TestToParcel:
 
     def test_geometry_outside_3067_raises(self):
         from flightmanager.crs import CRSError
-        bad_feature = {**_FEATURE_A, "geometry": {
-            "type": "Polygon",
-            "coordinates": [[[22.6, 62.5], [22.7, 62.5], [22.7, 62.6], [22.6, 62.6], [22.6, 62.5]]],
-        }}
+
+        bad_feature = {
+            **_FEATURE_A,
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [22.6, 62.5],
+                        [22.7, 62.5],
+                        [22.7, 62.6],
+                        [22.6, 62.6],
+                        [22.6, 62.5],
+                    ]
+                ],
+            },
+        }
         with pytest.raises(CRSError):
             _to_parcel(bad_feature)
 
@@ -124,9 +146,7 @@ class TestFetchByIds:
         sess = MagicMock()
         sess.get.return_value = _mock_response([_FEATURE_A])
 
-        parcels = fetch_parcels(
-            parcel_ids=["0040003911"], config=cfg, session=sess
-        )
+        parcels = fetch_parcels(parcel_ids=["0040003911"], config=cfg, session=sess)
 
         assert len(parcels) == 1
         assert parcels[0].parcel_id == "0040003911"
@@ -136,12 +156,14 @@ class TestFetchByIds:
         sess = MagicMock()
         sess.get.return_value = _mock_response([_FEATURE_A, _FEATURE_B])
 
-        fetch_parcels(
-            parcel_ids=["0040003911", "0040003912"], config=cfg, session=sess
-        )
+        fetch_parcels(parcel_ids=["0040003911", "0040003912"], config=cfg, session=sess)
 
         call_kwargs = sess.get.call_args
-        params = call_kwargs[1]["params"] if "params" in call_kwargs[1] else call_kwargs[0][1]
+        params = (
+            call_kwargs[1]["params"]
+            if "params" in call_kwargs[1]
+            else call_kwargs[0][1]
+        )
         assert "CQL_FILTER" in params
         assert "0040003911" in params["CQL_FILTER"]
         assert "0040003912" in params["CQL_FILTER"]
@@ -170,6 +192,7 @@ class TestFetchByIds:
 
     def test_default_year_is_current_minus_one(self):
         import datetime
+
         cfg = ParcelsConfig()
         assert cfg.lpis_year == datetime.date.today().year - 1
 
@@ -272,10 +295,13 @@ class TestPaging:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Hits live Ruokavirasto WFS — run with -m integration to enable")
+@pytest.mark.skip(
+    reason="Hits live Ruokavirasto WFS — run with -m integration to enable"
+)
 def test_live_fetch_by_id():
     """Fetch a real parcel and verify geometry is in EPSG:3067."""
     from flightmanager.crs import assert_crs
+
     parcels = fetch_parcels(parcel_ids=["0040003911"])
     assert len(parcels) == 1
     assert parcels[0].parcel_id == "0040003911"
@@ -284,7 +310,9 @@ def test_live_fetch_by_id():
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Hits live Ruokavirasto WFS — run with -m integration to enable")
+@pytest.mark.skip(
+    reason="Hits live Ruokavirasto WFS — run with -m integration to enable"
+)
 def test_live_fetch_by_bbox():
     """Fetch parcels by bbox near Seinäjoki and verify results."""
     # Small area near Seinäjoki in EPSG:3067

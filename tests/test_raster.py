@@ -35,7 +35,10 @@ def real_tile(tmp_path) -> Path:
 
 def _make_synthetic_tile(
     tmp_path: Path,
-    xmin=295_000, ymin=6_974_000, xmax=296_000, ymax=6_975_000,
+    xmin=295_000,
+    ymin=6_974_000,
+    xmax=296_000,
+    ymax=6_975_000,
     elevation=75.0,
 ) -> Path:
     p = tmp_path / "dem" / f"E{xmin}_N{ymin}.tif"
@@ -43,9 +46,16 @@ def _make_synthetic_tile(
     tr = from_bounds(xmin, ymin, xmax, ymax, 10, 10)
     data = np.full((1, 10, 10), elevation, dtype="float32")
     with rasterio.open(
-        p, "w", driver="GTiff", height=10, width=10,
-        count=1, dtype="float32", crs=CRS.from_epsg(3067),
-        transform=tr, nodata=_NODATA,
+        p,
+        "w",
+        driver="GTiff",
+        height=10,
+        width=10,
+        count=1,
+        dtype="float32",
+        crs=CRS.from_epsg(3067),
+        transform=tr,
+        nodata=_NODATA,
     ) as ds:
         ds.write(data)
     return p
@@ -63,7 +73,9 @@ class TestInputValidation:
 
     def test_missing_tile_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            build_site_dsm([tmp_path / "nonexistent.tif"], _SURVEY, tmp_path / "out.tif")
+            build_site_dsm(
+                [tmp_path / "nonexistent.tif"], _SURVEY, tmp_path / "out.tif"
+            )
 
     def test_non_4326_survey_raises(self, tmp_path, real_tile):
         survey_3067 = box(295_000, 6_974_000, 295_500, 6_974_500)
@@ -177,7 +189,9 @@ class TestMosaic:
         assert stats["crs"] == "EPSG:4326"
         # After FIN2023N2000 geoid correction, N2000 75.0 m → WGS-84 ~92-94 m
         # at this location in Finland (undulation ≈ 17.9 m).
-        assert abs(stats["elevation_min_m"] - 75.0) > 10.0, "geoid correction not applied"
+        assert abs(stats["elevation_min_m"] - 75.0) > 10.0, (
+            "geoid correction not applied"
+        )
         assert 88.0 < stats["elevation_min_m"] < 98.0
 
 
@@ -192,8 +206,16 @@ class TestStats:
         tr = from_bounds(21.0, 62.0, 22.0, 63.0, 10, 10)
         data = np.full((1, 10, 10), _NODATA, dtype="float32")
         with rasterio.open(
-            p, "w", driver="GTiff", height=10, width=10, count=1,
-            dtype="float32", crs=CRS.from_epsg(4326), transform=tr, nodata=_NODATA,
+            p,
+            "w",
+            driver="GTiff",
+            height=10,
+            width=10,
+            count=1,
+            dtype="float32",
+            crs=CRS.from_epsg(4326),
+            transform=tr,
+            nodata=_NODATA,
         ) as ds:
             ds.write(data)
         with pytest.raises(ValueError, match="no valid pixels"):
@@ -204,8 +226,16 @@ class TestStats:
         tr = from_bounds(295_000, 6_974_000, 296_000, 6_975_000, 10, 10)
         data = np.ones((1, 10, 10), dtype="float32") * 75.0
         with rasterio.open(
-            p, "w", driver="GTiff", height=10, width=10, count=1,
-            dtype="float32", crs=CRS.from_epsg(3067), transform=tr, nodata=_NODATA,
+            p,
+            "w",
+            driver="GTiff",
+            height=10,
+            width=10,
+            count=1,
+            dtype="float32",
+            crs=CRS.from_epsg(3067),
+            transform=tr,
+            nodata=_NODATA,
         ) as ds:
             ds.write(data)
         with pytest.raises(ValueError, match="EPSG:4326"):
@@ -218,7 +248,9 @@ class TestStats:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Hits live MML WCS — run with -m integration and set MML_API_KEY")
+@pytest.mark.skip(
+    reason="Hits live MML WCS — run with -m integration and set MML_API_KEY"
+)
 def test_live_build_site_dsm(tmp_path):
     import os
     from flightmanager.cache import get_tiles

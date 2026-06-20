@@ -97,11 +97,11 @@ def _auto_simplify(geom: BaseGeometry, max_vertices: int) -> BaseGeometry:
     # space.  The curve runs top-left → bottom-right; the knee is the point
     # that bulges most away from the straight line between the endpoints.
     log_tols = [math.log10(t) for t, _, _ in samples]
-    vcs      = [vc            for _, vc, _ in samples]
+    vcs = [vc for _, vc, _ in samples]
 
     x0, x1 = log_tols[0], log_tols[-1]
-    y0, y1 = vcs[0],      vcs[-1]
-    dx, dy  = x1 - x0,    y1 - y0
+    y0, y1 = vcs[0], vcs[-1]
+    dx, dy = x1 - x0, y1 - y0
     line_len = math.hypot(dx, dy)
 
     if line_len == 0:
@@ -114,14 +114,19 @@ def _auto_simplify(geom: BaseGeometry, max_vertices: int) -> BaseGeometry:
             best_dist, best_idx = d, i
 
     tol_chosen, vc_chosen, geom_chosen = samples[best_idx]
-    log.info("Auto-simplify knee at %.1f m → %d vertices (was %d)",
-             tol_chosen, vc_chosen, original_vc)
+    log.info(
+        "Auto-simplify knee at %.1f m → %d vertices (was %d)",
+        tol_chosen,
+        vc_chosen,
+        original_vc,
+    )
 
     if vc_chosen <= max_vertices:
         return geom_chosen
 
-    return _binary_search_cap(geom, start_tol=tol_chosen, knee_geom=geom_chosen,
-                              max_vertices=max_vertices)
+    return _binary_search_cap(
+        geom, start_tol=tol_chosen, knee_geom=geom_chosen, max_vertices=max_vertices
+    )
 
 
 def _binary_search_cap(
@@ -132,8 +137,11 @@ def _binary_search_cap(
     max_vertices: int,
 ) -> BaseGeometry:
     """Binary-search for the smallest tolerance that keeps vertex count ≤ max_vertices."""
-    log.info("Knee vertex count %d exceeds cap %d, falling back to binary search",
-             vertex_count(knee_geom), max_vertices)
+    log.info(
+        "Knee vertex count %d exceeds cap %d, falling back to binary search",
+        vertex_count(knee_geom),
+        max_vertices,
+    )
     lo, hi = start_tol, 500.0
     result = knee_geom
     for _ in range(20):
@@ -146,8 +154,11 @@ def _binary_search_cap(
             lo = mid
         if hi - lo < 0.1:
             break
-    log.debug("Binary-search fallback converged at %.1f m → %d vertices",
-              hi, vertex_count(result))
+    log.debug(
+        "Binary-search fallback converged at %.1f m → %d vertices",
+        hi,
+        vertex_count(result),
+    )
     return result
 
 

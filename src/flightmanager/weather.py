@@ -34,39 +34,47 @@ _CACHE_VERSION = 2
 
 # WMO weather code → (icon key, human label). Icon keys map to ic-wx-* SVG symbols.
 _WMO: dict[int, tuple[str, str]] = {
-    0:  ("clear",  "Clear"),
-    1:  ("clear",  "Mainly clear"),
-    2:  ("partly", "Partly cloudy"),
-    3:  ("cloudy", "Overcast"),
-    45: ("fog",    "Fog"),
-    48: ("fog",    "Rime fog"),
-    51: ("rain",   "Light drizzle"),
-    53: ("rain",   "Drizzle"),
-    55: ("rain",   "Dense drizzle"),
-    56: ("rain",   "Freezing drizzle"),
-    57: ("rain",   "Freezing drizzle"),
-    61: ("rain",   "Light rain"),
-    63: ("rain",   "Rain"),
-    65: ("rain",   "Heavy rain"),
-    66: ("rain",   "Freezing rain"),
-    67: ("rain",   "Freezing rain"),
-    71: ("snow",   "Light snow"),
-    73: ("snow",   "Snow"),
-    75: ("snow",   "Heavy snow"),
-    77: ("snow",   "Snow grains"),
-    80: ("rain",   "Rain showers"),
-    81: ("rain",   "Rain showers"),
-    82: ("rain",   "Violent rain showers"),
-    85: ("snow",   "Snow showers"),
-    86: ("snow",   "Heavy snow showers"),
-    95: ("storm",  "Thunderstorm"),
-    96: ("storm",  "Thunderstorm with hail"),
-    99: ("storm",  "Thunderstorm with hail"),
+    0: ("clear", "Clear"),
+    1: ("clear", "Mainly clear"),
+    2: ("partly", "Partly cloudy"),
+    3: ("cloudy", "Overcast"),
+    45: ("fog", "Fog"),
+    48: ("fog", "Rime fog"),
+    51: ("rain", "Light drizzle"),
+    53: ("rain", "Drizzle"),
+    55: ("rain", "Dense drizzle"),
+    56: ("rain", "Freezing drizzle"),
+    57: ("rain", "Freezing drizzle"),
+    61: ("rain", "Light rain"),
+    63: ("rain", "Rain"),
+    65: ("rain", "Heavy rain"),
+    66: ("rain", "Freezing rain"),
+    67: ("rain", "Freezing rain"),
+    71: ("snow", "Light snow"),
+    73: ("snow", "Snow"),
+    75: ("snow", "Heavy snow"),
+    77: ("snow", "Snow grains"),
+    80: ("rain", "Rain showers"),
+    81: ("rain", "Rain showers"),
+    82: ("rain", "Violent rain showers"),
+    85: ("snow", "Snow showers"),
+    86: ("snow", "Heavy snow showers"),
+    95: ("storm", "Thunderstorm"),
+    96: ("storm", "Thunderstorm with hail"),
+    99: ("storm", "Thunderstorm with hail"),
 }
 
 # Icon severity for picking a representative daytime code (worst conditions win).
-_SEVERITY = {"storm": 6, "snow": 5, "rain": 4, "fog": 3, "cloudy": 2,
-             "partly": 1, "clear": 0, "unknown": -1}
+_SEVERITY = {
+    "storm": 6,
+    "snow": 5,
+    "rain": 4,
+    "fog": 3,
+    "cloudy": 2,
+    "partly": 1,
+    "clear": 0,
+    "unknown": -1,
+}
 
 
 def code_to_icon(code: int | None) -> tuple[str, str]:
@@ -78,20 +86,20 @@ def code_to_icon(code: int | None) -> tuple[str, str]:
 
 @dataclass
 class DayWeather:
-    date: str          # ISO yyyy-mm-dd (local)
+    date: str  # ISO yyyy-mm-dd (local)
     weather_code: int | None
     icon: str
     label: str
-    t_avg_c: float | None      # daytime average temperature
+    t_avg_c: float | None  # daytime average temperature
     wind_avg_ms: float | None  # daytime average wind speed
-    precip_mm: float | None    # daytime total precipitation
-    cloud_pct: float | None    # daytime average cloud cover
+    precip_mm: float | None  # daytime total precipitation
+    cloud_pct: float | None  # daytime average cloud cover
 
 
 @dataclass
 class WeatherResult:
     days: list[DayWeather] = field(default_factory=list)
-    utc_offset_s: int = 0      # local time = UTC + this many seconds
+    utc_offset_s: int = 0  # local time = UTC + this many seconds
     # Cloud cover (%) keyed by local hour "YYYY-MM-DDTHH" — lets a satellite pass be
     # qualified by the cloud forecast at its actual overpass time, not the day average.
     hourly_cloud: dict[str, float] = field(default_factory=dict)
@@ -125,7 +133,9 @@ def fetch_forecast(
     """
     # ~2 decimal places ≈ 1 km — coarse enough to share cache between nearby jobs.
     key_lat, key_lon = round(lat, 2), round(lon, 2)
-    cache_path = Path(cache_dir) / "weather" / f"{cfg.provider}_{key_lat}_{key_lon}.json"
+    cache_path = (
+        Path(cache_dir) / "weather" / f"{cfg.provider}_{key_lat}_{key_lon}.json"
+    )
 
     if _cache_fresh(cache_path, cfg.cache_max_age_hours):
         cached = _load_cache(cache_path)
@@ -147,9 +157,15 @@ def fetch_forecast(
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(
-        json.dumps({"v": _CACHE_VERSION, "days": [asdict(d) for d in result.days],
-                    "utc_offset_s": result.utc_offset_s,
-                    "hourly_cloud": result.hourly_cloud}, ensure_ascii=False),
+        json.dumps(
+            {
+                "v": _CACHE_VERSION,
+                "days": [asdict(d) for d in result.days],
+                "utc_offset_s": result.utc_offset_s,
+                "hourly_cloud": result.hourly_cloud,
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     return result
@@ -164,8 +180,11 @@ def _load_cache(path: Path) -> WeatherResult | None:
         if raw.get("v") != _CACHE_VERSION:
             return None  # old schema → treat as miss, re-fetch
         days = [DayWeather(**d) for d in raw.get("days", [])]
-        return WeatherResult(days=days, utc_offset_s=int(raw.get("utc_offset_s", 0)),
-                             hourly_cloud=raw.get("hourly_cloud", {}))
+        return WeatherResult(
+            days=days,
+            utc_offset_s=int(raw.get("utc_offset_s", 0)),
+            hourly_cloud=raw.get("hourly_cloud", {}),
+        )
     except Exception:
         return None
 
@@ -223,18 +242,21 @@ def _parse_open_meteo(data: dict, start_h: int, end_h: int) -> WeatherResult:
         b = buckets[day]
         rep_code = _representative_code(b["c"], midday)
         icon, label = code_to_icon(rep_code)
-        days.append(DayWeather(
-            date=day,
-            weather_code=rep_code,
-            icon=icon,
-            label=label,
-            t_avg_c=_avg(b["t"]),
-            wind_avg_ms=_avg(b["w"]),
-            precip_mm=round(sum(b["p"]), 1) if b["p"] else None,
-            cloud_pct=_avg(b["cl"]),
-        ))
-    return WeatherResult(days=days, utc_offset_s=offset,
-                         hourly_cloud=_hourly_cloud(hourly))
+        days.append(
+            DayWeather(
+                date=day,
+                weather_code=rep_code,
+                icon=icon,
+                label=label,
+                t_avg_c=_avg(b["t"]),
+                wind_avg_ms=_avg(b["w"]),
+                precip_mm=round(sum(b["p"]), 1) if b["p"] else None,
+                cloud_pct=_avg(b["cl"]),
+            )
+        )
+    return WeatherResult(
+        days=days, utc_offset_s=offset, hourly_cloud=_hourly_cloud(hourly)
+    )
 
 
 def _hourly_cloud(hourly: dict) -> dict[str, float]:
@@ -255,9 +277,13 @@ def _bucket_daytime_hours(hourly: dict, start_h: int, end_h: int):
     def col(name: str) -> list:
         return hourly.get(name) or [None] * len(times)
 
-    series = {"t": col("temperature_2m"), "c": col("weather_code"),
-              "w": col("wind_speed_10m"), "p": col("precipitation"),
-              "cl": col("cloud_cover")}
+    series = {
+        "t": col("temperature_2m"),
+        "c": col("weather_code"),
+        "w": col("wind_speed_10m"),
+        "p": col("precipitation"),
+        "cl": col("cloud_cover"),
+    }
     buckets: dict[str, dict[str, list]] = {}
     order: list[str] = []
     for i, t in enumerate(times):
@@ -282,7 +308,9 @@ def _avg(xs: list) -> float | None:
     return round(sum(xs) / len(xs), 1) if xs else None
 
 
-def _representative_code(hour_codes: list[tuple[int, int]], midday: float = 12) -> int | None:
+def _representative_code(
+    hour_codes: list[tuple[int, int]], midday: float = 12
+) -> int | None:
     """Pick the daytime weather icon, weighted toward solar-noon hours.
 
     *hour_codes* is a list of ``(local_hour, wmo_code)``. The representative code is
@@ -377,28 +405,39 @@ def build_day_slots(
         local = op.peak_utc.astimezone(tz)
         day = local.strftime("%Y-%m-%d")
         if day not in slots:
-            slots[day] = {"date": day, "weather": None, "satellites": [], "golden": False}
+            slots[day] = {
+                "date": day,
+                "weather": None,
+                "satellites": [],
+                "golden": False,
+            }
             order.append(day)
         daytime = daytime_start_h <= local.hour < daytime_end_h
         # Cloud at this pass's own tile and overpass hour (fall back to rep tile).
         tile_wx = weather_by_tile.get(op.tile_id, rep)
         cloud = tile_wx.cloud_at(local)
-        clear_window = bool(daytime and cloud is not None and cloud <= clear_sky_max_cloud_pct)
-        slots[day]["satellites"].append({
-            "name": op.name,
-            "norad_id": op.norad_id,
-            "tile_id": op.tile_id,
-            "peak_utc": op.peak_utc.isoformat(),
-            "peak_local": local.isoformat(),
-            "daytime": daytime,
-            "clear_window": clear_window,
-            "cloud_at_pass": round(cloud) if cloud is not None else None,
-            "max_elev_deg": op.max_elev_deg,
-        })
+        clear_window = bool(
+            daytime and cloud is not None and cloud <= clear_sky_max_cloud_pct
+        )
+        slots[day]["satellites"].append(
+            {
+                "name": op.name,
+                "norad_id": op.norad_id,
+                "tile_id": op.tile_id,
+                "peak_utc": op.peak_utc.isoformat(),
+                "peak_local": local.isoformat(),
+                "daytime": daytime,
+                "clear_window": clear_window,
+                "cloud_at_pass": round(cloud) if cloud is not None else None,
+                "max_elev_deg": op.max_elev_deg,
+            }
+        )
 
     for s in slots.values():
         s["satellites"].sort(key=lambda x: x["peak_local"])
         has_clear = any(p["clear_window"] for p in s["satellites"])
-        s["golden"] = bool(has_clear and _drone_flyable(s["weather"], drone_wind_limit_ms))
+        s["golden"] = bool(
+            has_clear and _drone_flyable(s["weather"], drone_wind_limit_ms)
+        )
 
     return [slots[d] for d in sorted(order)]

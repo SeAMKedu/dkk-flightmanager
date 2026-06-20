@@ -14,14 +14,17 @@ from pydantic import BaseModel, Field, model_validator
 # Note: the drone model is M3M, not M3E; WPML drone enum 77 is correct for both.
 # Kept as module-level constants for backward compatibility; prefer DroneConfig.
 M3E_FOCAL_LENGTH_MM = 12.3
-M3E_PIXEL_PITCH_UM  = 3.3
-M3E_IMAGE_WIDTH_PX  = 5280
+M3E_PIXEL_PITCH_UM = 3.3
+M3E_IMAGE_WIDTH_PX = 5280
 M3E_IMAGE_HEIGHT_PX = 3956
 
 
 class DroneConfig(BaseModel):
     """Camera and WPML identifiers for one drone + payload combination."""
-    name: str = Field(description="Short slug used on the CLI (e.g. 'm3m', 'm300-p1-24')")
+
+    name: str = Field(
+        description="Short slug used on the CLI (e.g. 'm3m', 'm300-p1-24')"
+    )
     label: str = Field(description="Human-readable name shown in summaries")
 
     # WPML identifiers — written into template.kml and waylines.wpml.
@@ -78,9 +81,9 @@ class DroneConfig(BaseModel):
         (min_capture_interval_s).  At lower altitudes the along-track footprint
         shrinks, so the drone must slow down to maintain the required overlap.
         """
-        sensor_h_m  = self.image_height_px * self.pixel_pitch_um * 1e-6
+        sensor_h_m = self.image_height_px * self.pixel_pitch_um * 1e-6
         footprint_m = altitude_m * sensor_h_m / (self.focal_length_mm * 1e-3)
-        trigger_m   = (1 - overlap_front_pct / 100) * footprint_m
+        trigger_m = (1 - overlap_front_pct / 100) * footprint_m
         return trigger_m / self.min_capture_interval_s
 
 
@@ -93,7 +96,9 @@ def _default_drones() -> list[DroneConfig]:
 
 
 class FlightConfig(BaseModel):
-    target_gsd_cm: float = Field(gt=0, description="Target GSD in cm/px (authoritative)")
+    target_gsd_cm: float = Field(
+        gt=0, description="Target GSD in cm/px (authoritative)"
+    )
     max_height_agl_m: float = Field(default=110.0, le=120.0)
     agl_safety_margin_m: float = Field(default=10.0, ge=0)
     takeoff_security_height_m: float = Field(default=50.0)
@@ -128,7 +133,11 @@ class FlightConfig(BaseModel):
 
         Prefer DroneConfig.height_from_gsd() when a specific drone is selected.
         """
-        return (self.target_gsd_cm / 100) * M3E_FOCAL_LENGTH_MM / (M3E_PIXEL_PITCH_UM / 1000)
+        return (
+            (self.target_gsd_cm / 100)
+            * M3E_FOCAL_LENGTH_MM
+            / (M3E_PIXEL_PITCH_UM / 1000)
+        )
 
 
 class HomeSafetyConfig(BaseModel):
@@ -140,12 +149,24 @@ class HomeSafetyConfig(BaseModel):
     home_buffer_m: float = Field(default=150.0, ge=0)
     # MML Maastotietokanta kohdeluokka codes treated as residential for keep-out.
     # Confirmed codes: 42210=asuinrakennus (point), 42211 (1-2 krs), 42212 (3+ krs).
-    residential_kohdeluokka: list[int] = Field(default_factory=lambda: [42210, 42211, 42212])
+    residential_kohdeluokka: list[int] = Field(
+        default_factory=lambda: [42210, 42211, 42212]
+    )
     # For A3 subcategory: also keep 150 m from commercial, holiday, and industrial buildings.
     # 42220-42222=liike-/julkinen, 42230-42232=lomarakennus, 42240-42242=teollinen.
     # Agricultural/storage (42260-42262) are excluded — they are part of the farm operation.
     a3_additional_kohdeluokka: list[int] = Field(
-        default_factory=lambda: [42220, 42221, 42222, 42230, 42231, 42232, 42240, 42241, 42242]
+        default_factory=lambda: [
+            42220,
+            42221,
+            42222,
+            42230,
+            42231,
+            42232,
+            42240,
+            42241,
+            42242,
+        ]
     )
     # Distance from the survey polygon boundary used to include buildings in the
     # homes KML.  None (default) means 2× home_buffer_m, which gives a visible
@@ -227,26 +248,26 @@ class CacheConfig(BaseModel):
 
 class OutputConfig(BaseModel):
     output_dir: str = "output"
-    color_palette: list[str] = Field(default=[
-        "#3b82f6",  # blue
-        "#16a34a",  # green
-        "#dc2626",  # red
-        "#d97706",  # amber
-        "#7c3aed",  # violet
-        "#0891b2",  # cyan
-        "#db2777",  # pink
-        "#65a30d",  # lime
-        "#ea580c",  # orange
-        "#475569",  # slate
-    ])
+    color_palette: list[str] = Field(
+        default=[
+            "#3b82f6",  # blue
+            "#16a34a",  # green
+            "#dc2626",  # red
+            "#d97706",  # amber
+            "#7c3aed",  # violet
+            "#0891b2",  # cyan
+            "#db2777",  # pink
+            "#65a30d",  # lime
+            "#ea580c",  # orange
+            "#475569",  # slate
+        ]
+    )
 
 
 class ZonesConfig(BaseModel):
     # Confirmed open API (no auth): Traficom UAS zones for Finland.
     # Fetched automatically and cached locally; no manual download needed.
-    api_url: str = (
-        "https://eservices.traficom.fi/Ilmatilasovellus/api/uas-reservations/json?lang=fi"
-    )
+    api_url: str = "https://eservices.traficom.fi/Ilmatilasovellus/api/uas-reservations/json?lang=fi"
     # Optional path to a local override file (offline use / custom zones).
     # If set, the API is not called and this file is used instead.
     zones_file: str = ""
@@ -293,19 +314,23 @@ class SatellitesConfig(BaseModel):
     # Earth-observation satellites whose overpasses are computed for the job grid.
     # Defaults: the optical Sentinel-2 trio + Landsat 8/9 (good for agriculture).
     # NORAD ids verified against CelesTrak 2026-06-15.
-    tracked: list[TrackedSatellite] = Field(default_factory=lambda: [
-        TrackedSatellite(norad_id=40697, name="Sentinel-2A"),
-        TrackedSatellite(norad_id=42063, name="Sentinel-2B"),
-        TrackedSatellite(norad_id=60989, name="Sentinel-2C"),
-        TrackedSatellite(norad_id=39084, name="Landsat 8"),
-        TrackedSatellite(norad_id=49260, name="Landsat 9"),
-    ])
+    tracked: list[TrackedSatellite] = Field(
+        default_factory=lambda: [
+            TrackedSatellite(norad_id=40697, name="Sentinel-2A"),
+            TrackedSatellite(norad_id=42063, name="Sentinel-2B"),
+            TrackedSatellite(norad_id=60989, name="Sentinel-2C"),
+            TrackedSatellite(norad_id=39084, name="Landsat 8"),
+            TrackedSatellite(norad_id=49260, name="Landsat 9"),
+        ]
+    )
     # Path to the Sentinel-2 MGRS tiling-grid GeoJSON (tile id in the "Name"
     # property). ~20 MB — NOT bundled. Download from https://zenodo.org/records/10998972
     # and place at the path below. If missing, overpass features degrade gracefully.
     grid_file: str = "data/sentinel2_tiling_grid_wgs84.geojson"
     # CelesTrak OMM (Orbit Mean-Elements Message) JSON endpoint. {catnr} is the NORAD id.
-    omm_url: str = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=json"
+    omm_url: str = (
+        "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=json"
+    )
     # Only count overpasses whose peak elevation exceeds this (near-nadir capture).
     min_elevation_deg: float = Field(default=60.0, ge=0, le=90)
     # How many days ahead to search for overpasses.
@@ -369,8 +394,7 @@ class AppConfig(BaseModel):
         names = [d.name for d in self.drones]
         if self.default_drone not in names:
             raise ValueError(
-                f"default_drone '{self.default_drone}' not found. "
-                f"Available: {names}"
+                f"default_drone '{self.default_drone}' not found. Available: {names}"
             )
         return self
 
@@ -397,15 +421,24 @@ def load_config(path: Path | str = "config.toml") -> AppConfig:
 # via config.toml directly (drone profiles, MML API URL, cache grid geometry).
 _SAVE_SKIP: dict[str, set[str]] = {
     "home_safety": {"residential_kohdeluokka", "a3_additional_kohdeluokka"},
-    "zones":       {"api_url"},
-    "cache":       {"tile_size_m", "cache_dir"},
-    "satellites":  {"omm_url"},
-    "weather":     {"open_meteo_url", "fmi_wfs_url"},
+    "zones": {"api_url"},
+    "cache": {"tile_size_m", "cache_dir"},
+    "satellites": {"omm_url"},
+    "weather": {"open_meteo_url", "fmi_wfs_url"},
 }
 
 _SAVE_SECTIONS = [
-    "flight", "home_safety", "polygon", "zones", "cache", "output", "parcels", "properties",
-    "powerlines", "satellites", "weather",
+    "flight",
+    "home_safety",
+    "polygon",
+    "zones",
+    "cache",
+    "output",
+    "parcels",
+    "properties",
+    "powerlines",
+    "satellites",
+    "weather",
 ]
 
 

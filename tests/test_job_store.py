@@ -143,7 +143,10 @@ class TestBestPolygon:
         job = tmp_path / "job"
         job.mkdir()
         geom = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
-        params = {"custom_polygon_4326": geom, "last_preview_geojson": {"survey": {"other": True}}}
+        params = {
+            "custom_polygon_4326": geom,
+            "last_preview_geojson": {"survey": {"other": True}},
+        }
         (job / "job_params.json").write_text(json.dumps(params), encoding="utf-8")
         result = best_polygon(job)
         assert result == geom
@@ -151,8 +154,14 @@ class TestBestPolygon:
     def test_falls_back_to_preview_geojson(self, tmp_path):
         job = tmp_path / "job"
         job.mkdir()
-        survey_geom = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
-        params = {"custom_polygon_4326": None, "last_preview_geojson": {"survey": survey_geom}}
+        survey_geom = {
+            "type": "Polygon",
+            "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]],
+        }
+        params = {
+            "custom_polygon_4326": None,
+            "last_preview_geojson": {"survey": survey_geom},
+        }
         (job / "job_params.json").write_text(json.dumps(params), encoding="utf-8")
         assert best_polygon(job) == survey_geom
 
@@ -167,7 +176,9 @@ class TestBestPolygon:
 # ---------------------------------------------------------------------------
 
 
-def _make_job(tmp_path: Path, name: str = "my-job", folder: str | None = None, **params_extra) -> Path:
+def _make_job(
+    tmp_path: Path, name: str = "my-job", folder: str | None = None, **params_extra
+) -> Path:
     base = tmp_path / folder / name if folder else tmp_path / name
     base.mkdir(parents=True, exist_ok=True)
     params = {
@@ -376,34 +387,68 @@ def _register_tile(cache_dir, dataset, tile_id, fetch_ts):
 
     db = _db_path(Path(cache_dir))
     _init_db(db)
-    _register(db, TileRecord(
-        tile_id=tile_id, dataset=dataset, bbox=(0, 0, 1000, 1000),
-        path=Path(cache_dir) / f"{tile_id}.tif", source_url=None,
-        fetch_timestamp=fetch_ts, dataset_version=None, checksum="x", byte_size=1,
-    ))
+    _register(
+        db,
+        TileRecord(
+            tile_id=tile_id,
+            dataset=dataset,
+            bbox=(0, 0, 1000, 1000),
+            path=Path(cache_dir) / f"{tile_id}.tif",
+            source_url=None,
+            fetch_timestamp=fetch_ts,
+            dataset_version=None,
+            checksum="x",
+            byte_size=1,
+        ),
+    )
 
 
 class TestBatterySummary:
     def test_single_piece(self):
         from flightmanager.job_store import _battery_summary
-        out = _battery_summary({
-            "estimated_flight_time_min": 12.3, "estimated_photo_count": 200,
+
+        out = _battery_summary(
+            {
+                "estimated_flight_time_min": 12.3,
+                "estimated_photo_count": 200,
+                "over_one_battery": False,
+            }
+        )
+        assert out == {
+            "flight_time_min": 12.3,
+            "photo_count": 200,
             "over_one_battery": False,
-        })
-        assert out == {"flight_time_min": 12.3, "photo_count": 200,
-                       "over_one_battery": False, "battery_count": 1}
+            "battery_count": 1,
+        }
 
     def test_single_piece_over_battery(self):
         from flightmanager.job_store import _battery_summary
-        out = _battery_summary({"estimated_flight_time_min": 40, "over_one_battery": True})
+
+        out = _battery_summary(
+            {"estimated_flight_time_min": 40, "over_one_battery": True}
+        )
         assert out["battery_count"] == 2 and out["over_one_battery"] is True
 
     def test_pieces_summed(self):
         from flightmanager.job_store import _battery_summary
-        out = _battery_summary({"pieces": [
-            {"estimated_flight_time_min": 10, "estimated_photo_count": 100, "over_one_battery": False},
-            {"estimated_flight_time_min": 25, "estimated_photo_count": 300, "over_one_battery": True},
-        ], "over_any_battery": True})
+
+        out = _battery_summary(
+            {
+                "pieces": [
+                    {
+                        "estimated_flight_time_min": 10,
+                        "estimated_photo_count": 100,
+                        "over_one_battery": False,
+                    },
+                    {
+                        "estimated_flight_time_min": 25,
+                        "estimated_photo_count": 300,
+                        "over_one_battery": True,
+                    },
+                ],
+                "over_any_battery": True,
+            }
+        )
         assert out["flight_time_min"] == 35
         assert out["photo_count"] == 400
         assert out["over_one_battery"] is True
@@ -411,43 +456,56 @@ class TestBatterySummary:
 
     def test_empty(self):
         from flightmanager.job_store import _battery_summary
+
         out = _battery_summary({})
-        assert out == {"flight_time_min": None, "photo_count": None,
-                       "over_one_battery": False, "battery_count": None}
+        assert out == {
+            "flight_time_min": None,
+            "photo_count": None,
+            "over_one_battery": False,
+            "battery_count": None,
+        }
 
 
 class TestRefreshStatus:
     def _cfg(self, tmp_path):
         from flightmanager.config import CacheConfig
+
         return CacheConfig(cache_dir=str(tmp_path / "cache"))
 
     def test_older_pipeline_version_flagged(self, tmp_path):
         from flightmanager.job_store import refresh_status
+
         out = refresh_status({"pipeline_version": 1}, self._cfg(tmp_path), 2)
         assert out["needs_refresh"] is True
         assert any("pipeline" in r for r in out["reasons"])
 
     def test_current_version_not_flagged(self, tmp_path):
         from flightmanager.job_store import refresh_status
+
         out = refresh_status({"pipeline_version": 2}, self._cfg(tmp_path), 2)
         assert out["needs_refresh"] is False
         assert out["reasons"] == []
 
     def test_missing_pipeline_version_treated_as_zero(self, tmp_path):
         from flightmanager.job_store import refresh_status
+
         out = refresh_status({}, self._cfg(tmp_path), 1)
         assert out["needs_refresh"] is True
 
     def test_newer_source_data_flagged(self, tmp_path):
         from flightmanager.job_store import refresh_status
+
         cfg = self._cfg(tmp_path)
         # Job used data fetched in January; cache now holds a March copy.
         _register_tile(cfg.cache_dir, "dem", "E1_N1", "2026-03-01T00:00:00+00:00")
         manifest = {
             "pipeline_version": 1,
-            "cache_provenance": {"dem": {
-                "tile_ids": ["E1_N1"], "fetch_date_max": "2026-01-01T00:00:00+00:00",
-            }},
+            "cache_provenance": {
+                "dem": {
+                    "tile_ids": ["E1_N1"],
+                    "fetch_date_max": "2026-01-01T00:00:00+00:00",
+                }
+            },
         }
         out = refresh_status(manifest, cfg, 1)
         assert out["needs_refresh"] is True
@@ -455,13 +513,17 @@ class TestRefreshStatus:
 
     def test_same_source_data_not_flagged(self, tmp_path):
         from flightmanager.job_store import refresh_status
+
         cfg = self._cfg(tmp_path)
         _register_tile(cfg.cache_dir, "dem", "E1_N1", "2026-01-01T00:00:00+00:00")
         manifest = {
             "pipeline_version": 1,
-            "cache_provenance": {"dem": {
-                "tile_ids": ["E1_N1"], "fetch_date_max": "2026-01-01T00:00:00+00:00",
-            }},
+            "cache_provenance": {
+                "dem": {
+                    "tile_ids": ["E1_N1"],
+                    "fetch_date_max": "2026-01-01T00:00:00+00:00",
+                }
+            },
         }
         assert refresh_status(manifest, cfg, 1)["needs_refresh"] is False
 
@@ -473,7 +535,9 @@ class TestRefreshStatus:
 
 _SQUARE = {
     "type": "Polygon",
-    "coordinates": [[[25.0, 62.0], [25.1, 62.0], [25.1, 62.1], [25.0, 62.1], [25.0, 62.0]]],
+    "coordinates": [
+        [[25.0, 62.0], [25.1, 62.0], [25.1, 62.1], [25.0, 62.1], [25.0, 62.0]]
+    ],
 }
 
 
@@ -493,7 +557,10 @@ class TestParamsStorage:
         legacy = {
             "job_name": "old",
             "custom_polygon_4326": None,
-            "last_preview_geojson": {"survey": _SQUARE, "strips_geojson": {"big": "blob"}},
+            "last_preview_geojson": {
+                "survey": _SQUARE,
+                "strips_geojson": {"big": "blob"},
+            },
         }
         save_params(tmp_path, legacy)
         data = load_params(tmp_path)
@@ -538,10 +605,16 @@ class TestParamsStorage:
 
         other = {"type": "Polygon", "coordinates": [[[9, 9], [9, 8], [8, 8], [9, 9]]]}
         # custom polygon wins over outline and legacy
-        assert card_polygon({"custom_polygon_4326": _SQUARE, "survey_outline": other}) == _SQUARE
+        assert (
+            card_polygon({"custom_polygon_4326": _SQUARE, "survey_outline": other})
+            == _SQUARE
+        )
         # outline wins over legacy survey
-        assert card_polygon(
-            {"survey_outline": _SQUARE, "last_preview_geojson": {"survey": other}}
-        ) == _SQUARE
+        assert (
+            card_polygon(
+                {"survey_outline": _SQUARE, "last_preview_geojson": {"survey": other}}
+            )
+            == _SQUARE
+        )
         # legacy survey is the final fallback
         assert card_polygon({"last_preview_geojson": {"survey": _SQUARE}}) == _SQUARE

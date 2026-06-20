@@ -39,7 +39,9 @@ _CACHE_VERSION = 4
 def _fingerprint(centroids: list[tuple[float, float]], day: str) -> str:
     """Stable hash of payload version + rounded centroids + date — cheap, no I/O."""
     rounded = sorted((round(lat, 3), round(lon, 3)) for lat, lon in centroids)
-    payload = json.dumps({"v": _CACHE_VERSION, "pts": rounded, "day": day}, sort_keys=True)
+    payload = json.dumps(
+        {"v": _CACHE_VERSION, "pts": rounded, "day": day}, sort_keys=True
+    )
     return hashlib.sha1(payload.encode()).hexdigest()
 
 
@@ -62,7 +64,9 @@ def _write_cache(cache_path: Path, fingerprint: str, payload: dict) -> None:
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(
-            json.dumps({"fingerprint": fingerprint, "payload": payload}, ensure_ascii=False),
+            json.dumps(
+                {"fingerprint": fingerprint, "payload": payload}, ensure_ascii=False
+            ),
             encoding="utf-8",
         )
     except Exception as exc:  # caching is best-effort
@@ -105,9 +109,11 @@ def build_forecast(
     if not centroids:
         return {
             "generated_at": now.isoformat(),
-            "tile_ids": [], "grid_ok": False,
+            "tile_ids": [],
+            "grid_ok": False,
             "grid_msg": "No jobs to forecast.",
-            "days": [], "attribution": {},
+            "days": [],
+            "attribution": {},
         }
 
     cache_path = folder_dir / _CACHE_FILENAME if folder_dir else None
@@ -119,12 +125,15 @@ def build_forecast(
             return hit
 
     # Overpasses (OMM disk-cached; grid loaded once per process).
-    op_result = sat.overpasses_for_points(centroids, sat_cfg, cache_dir, start=now, session=session)
+    op_result = sat.overpasses_for_points(
+        centroids, sat_cfg, cache_dir, start=now, session=session
+    )
 
     # Weather per MGRS tile; the representative tile (most jobs) drives the day rows,
     # while each pass's clear-window is qualified by its own tile's cloud forecast.
     rep_weather, weather_by_tile, rep_tile = _resolve_weather(
-        op_result, centroids, sat_cfg, wx_cfg, cache_dir, session)
+        op_result, centroids, sat_cfg, wx_cfg, cache_dir, session
+    )
 
     payload = {
         "generated_at": now.isoformat(),
@@ -135,12 +144,16 @@ def build_forecast(
         "daytime_window": [wx_cfg.daytime_start_h, wx_cfg.daytime_end_h],
         "weather_tile_id": rep_tile,
         "tiles": [
-            {"id": tid, "center": list(op_result.tile_centers[tid]),
-             "geometry": op_result.tile_geojson.get(tid)}
+            {
+                "id": tid,
+                "center": list(op_result.tile_centers[tid]),
+                "geometry": op_result.tile_geojson.get(tid),
+            }
             for tid in sorted(op_result.tile_centers)
         ],
         "days": wx.build_day_slots(
-            rep_weather, op_result.overpasses,
+            rep_weather,
+            op_result.overpasses,
             daytime_start_h=wx_cfg.daytime_start_h,
             daytime_end_h=wx_cfg.daytime_end_h,
             clear_sky_max_cloud_pct=wx_cfg.clear_sky_max_cloud_pct,
@@ -189,6 +202,9 @@ def _resolve_weather(op_result, centroids, sat_cfg, wx_cfg, cache_dir, session):
             tid = sat.tile_for_point(lat, lon, grid)
             if tid:
                 counts[tid] = counts.get(tid, 0) + 1
-    rep_tile = max(tile_centers, key=lambda t: counts.get(t, 0)) if counts \
+    rep_tile = (
+        max(tile_centers, key=lambda t: counts.get(t, 0))
+        if counts
         else sorted(tile_centers)[0]
+    )
     return weather_by_tile[rep_tile], weather_by_tile, rep_tile

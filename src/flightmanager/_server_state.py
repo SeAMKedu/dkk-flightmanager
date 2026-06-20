@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 if TYPE_CHECKING:
     from flightmanager.config import AppConfig
 
+
 class SSEResponse(StreamingResponse):
     """StreamingResponse that suppresses CancelledError on shutdown.
 
@@ -37,7 +38,9 @@ job_lock: threading.Lock = threading.Lock()
 active_job_id: str | None = None
 job_queues: dict[str, asyncio.Queue] = {}
 config: "AppConfig | None" = None
-config_path: str | None = None  # absolute path to config.toml; used for override persistence
+config_path: str | None = (
+    None  # absolute path to config.toml; used for override persistence
+)
 event_queues: set[asyncio.Queue] = set()  # SSE clients subscribed to /api/events
 
 # Per-session preview results, keyed by the client's session id so concurrent

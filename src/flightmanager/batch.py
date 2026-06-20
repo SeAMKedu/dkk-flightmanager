@@ -73,7 +73,12 @@ def create_skeleton_jobs(
     total = len(ids)
 
     for i, id_ in enumerate(ids):
-        _cb(progress_cb, "batch", f"[{i + 1}/{total}] Fetching {id_}…", int(i / total * 90))
+        _cb(
+            progress_cb,
+            "batch",
+            f"[{i + 1}/{total}] Fetching {id_}…",
+            int(i / total * 90),
+        )
 
         job_dir = target_dir / id_
         if job_dir.exists():
@@ -88,7 +93,8 @@ def create_skeleton_jobs(
                 poly_3067 = geoms[0].geometry if geoms else None
             else:
                 geoms = fetch_properties(
-                    [id_], api_key,
+                    [id_],
+                    api_key,
                     timeout_s=config.properties.timeout_s,
                     page_size=config.properties.page_size,
                     cache_config=config.cache,
@@ -96,7 +102,9 @@ def create_skeleton_jobs(
                 poly_3067 = geoms[0].geometry if geoms else None
 
             if poly_3067 is None:
-                results.append({"id": id_, "status": "error", "reason": "no geometry returned"})
+                results.append(
+                    {"id": id_, "status": "error", "reason": "no geometry returned"}
+                )
                 continue
 
             poly_4326 = reproject_to_4326(poly_3067)
@@ -107,18 +115,18 @@ def create_skeleton_jobs(
                 "job_name": id_,
                 "saved_at": None,
                 "inputs": {
-                    "parcel_ids":   [id_] if id_type == "parcels" else [],
+                    "parcel_ids": [id_] if id_type == "parcels" else [],
                     "property_ids": [id_] if id_type == "properties" else [],
                 },
                 "flight": {
-                    "drone":       params.get("drone"),
-                    "height_m":    params.get("height_m"),
+                    "drone": params.get("drone"),
+                    "height_m": params.get("height_m"),
                     "subcategory": params.get("subcategory", "A3"),
                 },
                 "polygon": {
                     "offset_m": params.get("offset_m", 0.0),
-                    "simplify":  params.get("simplify", "auto"),
-                    "keepout":   params.get("keepout", True),
+                    "simplify": params.get("simplify", "auto"),
+                    "keepout": params.get("keepout", True),
                 },
                 "safety": {
                     "preview_radius_m": params.get("preview_radius_m"),
@@ -128,6 +136,7 @@ def create_skeleton_jobs(
                 "color": None,
             }
             from flightmanager.job_store import save_params
+
             save_params(job_dir, job_params)
             results.append({"id": id_, "status": "ok"})
 

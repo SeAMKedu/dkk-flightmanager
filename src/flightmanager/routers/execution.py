@@ -45,7 +45,7 @@ class PreviewRequest(BaseModel):
 
 
 class RouteEstimateRequest(BaseModel):
-    polygon_4326: dict          # GeoJSON Polygon geometry
+    polygon_4326: dict  # GeoJSON Polygon geometry
     angle_deg: float | None = None
     height_m: float | None = None
     drone: str | None = None
@@ -93,7 +93,9 @@ async def start_preview(req: PreviewRequest):
     loop = asyncio.get_running_loop()
     cfg = _prepare_config(req)
 
-    print(f"[preview] job {job_id[:8]} starting — parcels={req.parcel_ids} props={req.property_ids}")
+    print(
+        f"[preview] job {job_id[:8]} starting — parcels={req.parcel_ids} props={req.property_ids}"
+    )
 
     def cb(stage: str, msg: str, pct: int) -> None:
         print(f"[preview] {pct:3d}% {stage}: {msg}")
@@ -112,7 +114,9 @@ async def start_preview(req: PreviewRequest):
             from shapely.geometry import shape as _shape
             from flightmanager.pipeline import analyse_survey
 
-            custom_poly_geom = _shape(req.custom_polygon) if req.custom_polygon else None
+            custom_poly_geom = (
+                _shape(req.custom_polygon) if req.custom_polygon else None
+            )
             result = analyse_survey(
                 cfg,
                 parcel_ids=req.parcel_ids or None,
@@ -129,6 +133,7 @@ async def start_preview(req: PreviewRequest):
             )
         except Exception as exc:
             import traceback
+
             print(f"[preview] job {job_id[:8]} FAILED: {exc}")
             traceback.print_exc()
             loop.call_soon_threadsafe(
@@ -154,6 +159,7 @@ async def start_export(req: ExportRequest):
     custom_poly = None
     if req.custom_polygon:
         from shapely.geometry import shape
+
         custom_poly = shape(req.custom_polygon)
 
     print(f"[export] job {job_id[:8]} '{req.job_name}' starting")
@@ -196,31 +202,33 @@ async def start_export(req: ExportRequest):
             output_files = {
                 k: str(p)
                 for k, p in {
-                    "kmz":          job_dir / f"{req.job_name}.kmz",
-                    "homes_kml":    job_dir / f"{req.job_name}_homes.kml",
-                    "dsm_tif":      job_dir / f"{req.job_name}_dsm.tif",
-                    "manifest":     job_dir / "manifest.json",
+                    "kmz": job_dir / f"{req.job_name}.kmz",
+                    "homes_kml": job_dir / f"{req.job_name}_homes.kml",
+                    "dsm_tif": job_dir / f"{req.job_name}_dsm.tif",
+                    "manifest": job_dir / "manifest.json",
                 }.items()
                 if p.exists()
             }
             g = manifest.get("geometry", {})
             f = manifest.get("flight", {})
             stats = {
-                "original_area_ha":   g.get("original_area_ha", 0),
-                "final_area_ha":      g.get("final_area_ha", 0),
-                "area_lost_pct":      g.get("area_lost_pct", 0),
+                "original_area_ha": g.get("original_area_ha", 0),
+                "final_area_ha": g.get("final_area_ha", 0),
+                "area_lost_pct": g.get("area_lost_pct", 0),
                 "survey_vertex_count": g.get("survey_vertex_count", 0),
-                "flight_height_m":    f.get("derived_height_m", 0),
-                "target_gsd_cm":      f.get("target_gsd_cm", 0),
-                "drone":              f.get("drone", ""),
-                "drone_label":        f.get("drone_label", ""),
-                "waypoint_mode":      f.get("waypoint_mode", False),
-                "needs_review":       manifest.get("needs_review", False),
-                "flight_ready":       manifest.get("flight_ready", False),
-                "review_reasons":     manifest.get("review_reasons", []),
-                "zones_checked":      manifest.get("zones", {}).get("checked", False),
-                "zones_clear":        not manifest.get("zones", {}).get("intersecting_zones"),
-                "zone_count":         len(manifest.get("zones", {}).get("intersecting_zones", [])),
+                "flight_height_m": f.get("derived_height_m", 0),
+                "target_gsd_cm": f.get("target_gsd_cm", 0),
+                "drone": f.get("drone", ""),
+                "drone_label": f.get("drone_label", ""),
+                "waypoint_mode": f.get("waypoint_mode", False),
+                "needs_review": manifest.get("needs_review", False),
+                "flight_ready": manifest.get("flight_ready", False),
+                "review_reasons": manifest.get("review_reasons", []),
+                "zones_checked": manifest.get("zones", {}).get("checked", False),
+                "zones_clear": not manifest.get("zones", {}).get("intersecting_zones"),
+                "zone_count": len(
+                    manifest.get("zones", {}).get("intersecting_zones", [])
+                ),
             }
             job_rel = f"{req.folder}/{req.job_name}" if req.folder else req.job_name
             print(f"[export] job {job_id[:8]} done — {output_dir}/{job_rel}")
@@ -231,15 +239,16 @@ async def start_export(req: ExportRequest):
                     "pct": 100,
                     "payload": {
                         "output_files": output_files,
-                        "stats":        stats,
-                        "output_dir":   output_dir,
-                        "job_name":     req.job_name,
-                        "folder":       req.folder,
+                        "stats": stats,
+                        "output_dir": output_dir,
+                        "job_name": req.job_name,
+                        "folder": req.folder,
                     },
                 },
             )
         except Exception as exc:
             import traceback
+
             print(f"[export] job {job_id[:8]} FAILED: {exc}")
             traceback.print_exc()
             loop.call_soon_threadsafe(
@@ -309,23 +318,36 @@ async def start_batch(req: BatchRequest):
 
     def run() -> None:
         from flightmanager.batch import create_skeleton_jobs
+
         try:
             results = create_skeleton_jobs(
-                req.ids, req.id_type, Path(output_dir),
-                req.folder, req.params, cb, _st.config,
+                req.ids,
+                req.id_type,
+                Path(output_dir),
+                req.folder,
+                req.params,
+                cb,
+                _st.config,
             )
-            ok      = sum(1 for r in results if r["status"] == "ok")
+            ok = sum(1 for r in results if r["status"] == "ok")
             skipped = sum(1 for r in results if r["status"] == "skipped")
-            failed  = sum(1 for r in results if r["status"] == "error")
+            failed = sum(1 for r in results if r["status"] == "error")
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"stage": "done", "pct": 100, "payload": {
-                    "results": results,
-                    "created": ok, "skipped": skipped, "failed": failed,
-                }},
+                {
+                    "stage": "done",
+                    "pct": 100,
+                    "payload": {
+                        "results": results,
+                        "created": ok,
+                        "skipped": skipped,
+                        "failed": failed,
+                    },
+                },
             )
         except Exception as exc:
             import traceback
+
             traceback.print_exc()
             loop.call_soon_threadsafe(
                 queue.put_nowait,
@@ -341,14 +363,17 @@ async def start_batch(req: BatchRequest):
 # ---------------------------------------------------------------------------
 
 
-def _export_request_from_params(name: str, folder: str | None, params: dict) -> ExportRequest:
+def _export_request_from_params(
+    name: str, folder: str | None, params: dict
+) -> ExportRequest:
     """Reconstruct an ExportRequest from a job's stored job_params."""
     inputs = params.get("inputs", {})
     flight = params.get("flight", {})
     poly = params.get("polygon", {})
     safety = params.get("safety", {})
     return ExportRequest(
-        job_name=name, folder=folder,
+        job_name=name,
+        folder=folder,
         parcel_ids=inputs.get("parcel_ids") or [],
         property_ids=inputs.get("property_ids") or [],
         drone=flight.get("drone"),
@@ -397,7 +422,11 @@ def _refresh_one_job(path: str, output_dir) -> dict:
     folder, name, job_dir = resolve_job_dir(output_dir, path)
     params = load_params(job_dir)
     if params is None or params.get("batch_created"):
-        return {"path": path, "status": "skipped", "reason": "no exported job to recompute"}
+        return {
+            "path": path,
+            "status": "skipped",
+            "reason": "no exported job to recompute",
+        }
 
     before: dict = {}
     manifest_path = job_dir / "manifest.json"
@@ -411,7 +440,8 @@ def _refresh_one_job(path: str, output_dir) -> dict:
     cfg = _prepare_config(ereq)
     custom_poly = shape(ereq.custom_polygon) if ereq.custom_polygon else None
     manifest, route_geojson = export_job(
-        name, cfg,
+        name,
+        cfg,
         parcel_ids=ereq.parcel_ids or None,
         property_ids=ereq.property_ids or None,
         custom_polygon_4326=custom_poly,
@@ -424,7 +454,13 @@ def _refresh_one_job(path: str, output_dir) -> dict:
         for k in ("flight_ready", "needs_review")
         if before.get(k) != after.get(k)
     ]
-    return {"path": path, "status": "ok", "before": before, "after": after, "flips": flips}
+    return {
+        "path": path,
+        "status": "ok",
+        "before": before,
+        "after": after,
+        "flips": flips,
+    }
 
 
 @router.post("/api/refresh")
@@ -465,25 +501,35 @@ async def start_refresh(req: RefreshRequest):
                     results.append(_refresh_one_job(path, output_dir))
                 except Exception as exc:
                     import traceback
+
                     traceback.print_exc()
-                    results.append({"path": path, "status": "error", "reason": str(exc)})
+                    results.append(
+                        {"path": path, "status": "error", "reason": str(exc)}
+                    )
 
             ok = sum(1 for r in results if r["status"] == "ok")
             flipped = sum(1 for r in results if r.get("flips"))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"stage": "done", "pct": 100, "payload": {
-                    "results": results, "recomputed": ok,
-                    "skipped": sum(1 for r in results if r["status"] == "skipped"),
-                    "failed": sum(1 for r in results if r["status"] == "error"),
-                    "flipped": flipped,
-                }},
+                {
+                    "stage": "done",
+                    "pct": 100,
+                    "payload": {
+                        "results": results,
+                        "recomputed": ok,
+                        "skipped": sum(1 for r in results if r["status"] == "skipped"),
+                        "failed": sum(1 for r in results if r["status"] == "error"),
+                        "flipped": flipped,
+                    },
+                },
             )
         except Exception as exc:
             import traceback
+
             traceback.print_exc()
             loop.call_soon_threadsafe(
-                queue.put_nowait, {"stage": "error", "pct": 0, "msg": str(exc)},
+                queue.put_nowait,
+                {"stage": "error", "pct": 0, "msg": str(exc)},
             )
         finally:
             lock.release()
@@ -504,14 +550,16 @@ def _load_preview_obstacles(preview: dict | None, reproject_to_3067):
     for bd in preview.get("buildings", []):
         try:
             geom_3067 = reproject_to_3067(_shape_geom(bd["geojson"]))
-            buildings.append(Building(
-                mtk_id=0,
-                kohdeluokka=bd.get("kohdeluokka", 42210),
-                kayttotarkoitus=None,
-                geometry=geom_3067,
-                alkupvm=None,
-                kerrosluku=None,
-            ))
+            buildings.append(
+                Building(
+                    mtk_id=0,
+                    kohdeluokka=bd.get("kohdeluokka", 42210),
+                    kayttotarkoitus=None,
+                    geometry=geom_3067,
+                    alkupvm=None,
+                    kerrosluku=None,
+                )
+            )
         except Exception:
             pass
 
@@ -519,13 +567,15 @@ def _load_preview_obstacles(preview: dict | None, reproject_to_3067):
     for pl in preview.get("power_lines", []):
         try:
             geom_3067 = reproject_to_3067(_shape_geom(pl["geojson"]))
-            power_lines.append(PowerLine(
-                mtk_id=0,
-                kohdeluokka=22312,
-                is_overhead=bool(pl.get("is_overhead", True)),
-                geometry=geom_3067,
-                alkupvm=None,
-            ))
+            power_lines.append(
+                PowerLine(
+                    mtk_id=0,
+                    kohdeluokka=22312,
+                    is_overhead=bool(pl.get("is_overhead", True)),
+                    geometry=geom_3067,
+                    alkupvm=None,
+                )
+            )
         except Exception:
             pass
 
@@ -540,14 +590,32 @@ async def route_estimate(req: RouteEstimateRequest):
     from flightmanager.geometry import reproject_to_3067
 
     cfg = _st.config
-    drone = next((d for d in cfg.drones if d.name == req.drone), None) if req.drone else None
+    drone = (
+        next((d for d in cfg.drones if d.name == req.drone), None)
+        if req.drone
+        else None
+    )
     if drone is None:
         drone = cfg.active_drone()
 
-    H = req.height_m if req.height_m else drone.height_from_gsd(cfg.flight.target_gsd_cm)
-    ovf = req.overlap_front_pct if req.overlap_front_pct is not None else cfg.flight.overlap_front_pct
-    ovs = req.overlap_side_pct  if req.overlap_side_pct  is not None else cfg.flight.overlap_side_pct
-    speed_ms = req.speed_ms if req.speed_ms else resolve_strip_speed(cfg.flight, drone, H)
+    H = (
+        req.height_m
+        if req.height_m
+        else drone.height_from_gsd(cfg.flight.target_gsd_cm)
+    )
+    ovf = (
+        req.overlap_front_pct
+        if req.overlap_front_pct is not None
+        else cfg.flight.overlap_front_pct
+    )
+    ovs = (
+        req.overlap_side_pct
+        if req.overlap_side_pct is not None
+        else cfg.flight.overlap_side_pct
+    )
+    speed_ms = (
+        req.speed_ms if req.speed_ms else resolve_strip_speed(cfg.flight, drone, H)
+    )
 
     poly_3067 = reproject_to_3067(_shape(req.polygon_4326))
 
@@ -559,20 +627,32 @@ async def route_estimate(req: RouteEstimateRequest):
     fl = cfg.flight
     buildings, power_lines = (
         _load_preview_obstacles(_st.get_preview(req.session_id), reproject_to_3067)
-        if req.advanced_mode else (None, None)
+        if req.advanced_mode
+        else (None, None)
     )
     pr = _route.plan_route(
-        poly_3067, drone=drone, height_m=H,
-        overlap_front_pct=ovf, overlap_side_pct=ovs,
-        angle_deg=req.angle_deg, home_3067=home_3067,
-        advanced=req.advanced_mode, buildings=buildings, power_lines=power_lines,
+        poly_3067,
+        drone=drone,
+        height_m=H,
+        overlap_front_pct=ovf,
+        overlap_side_pct=ovs,
+        angle_deg=req.angle_deg,
+        home_3067=home_3067,
+        advanced=req.advanced_mode,
+        buildings=buildings,
+        power_lines=power_lines,
         adv_min_height_m=req.adv_min_height_m or fl.adv_min_height_m,
         adv_max_height_m=req.adv_max_height_m or fl.adv_max_height_m,
-        adv_powerline_clearance_m=req.adv_powerline_clearance_m or fl.adv_powerline_clearance_m,
+        adv_powerline_clearance_m=req.adv_powerline_clearance_m
+        or fl.adv_powerline_clearance_m,
         adv_slope_f=req.adv_slope_f or fl.adv_slope_f,
-        adv_min_dip_m=req.adv_min_dip_m if req.adv_min_dip_m is not None else fl.adv_min_dip_m,
+        adv_min_dip_m=req.adv_min_dip_m
+        if req.adv_min_dip_m is not None
+        else fl.adv_min_dip_m,
     )
-    adv_min_h = (req.adv_min_height_m or fl.adv_min_height_m) if req.advanced_mode else None
+    adv_min_h = (
+        (req.adv_min_height_m or fl.adv_min_height_m) if req.advanced_mode else None
+    )
 
     flight_time = _route.estimate_flight_time(
         pr.route,
@@ -587,23 +667,27 @@ async def route_estimate(req: RouteEstimateRequest):
     # so transit features carry the 1:1-safe ``altitude_m`` (the 3D view falls back to
     # strip-end turn altitudes otherwise, dipping into building frustums).
     gj = _route.route_result_to_geojson(
-        pr.route, pr.altitude_profile, drone, ovf,
-        strip_waypoints=pr.strip_waypoints, transit_waypoints=pr.transit_waypoints,
+        pr.route,
+        pr.altitude_profile,
+        drone,
+        ovf,
+        strip_waypoints=pr.strip_waypoints,
+        transit_waypoints=pr.transit_waypoints,
         adv_min_height_m=adv_min_h,
     )
 
     return {
-        "strip_count":       pr.route.strip_count,
-        "photo_count":       pr.route.photo_count,
-        "route_dist_m":      round(pr.route.total_route_dist_m),
-        "flight_time_min":   round(flight_time, 1),
-        "angle_deg_used":    round(pr.angle_deg, 1),
-        "over_one_battery":  flight_time > drone.battery_minutes,
-        "battery_minutes":   drone.battery_minutes,
-        "strips_geojson":    gj["strips_geojson"],
-        "transits_geojson":  gj["transits_geojson"],
-        "advanced_mode":     req.advanced_mode,
-        "altitude_profile":  [round(a, 1) for a in pr.altitude_profile],
+        "strip_count": pr.route.strip_count,
+        "photo_count": pr.route.photo_count,
+        "route_dist_m": round(pr.route.total_route_dist_m),
+        "flight_time_min": round(flight_time, 1),
+        "angle_deg_used": round(pr.angle_deg, 1),
+        "over_one_battery": flight_time > drone.battery_minutes,
+        "battery_minutes": drone.battery_minutes,
+        "strips_geojson": gj["strips_geojson"],
+        "transits_geojson": gj["transits_geojson"],
+        "advanced_mode": req.advanced_mode,
+        "altitude_profile": [round(a, 1) for a in pr.altitude_profile],
     }
 
 
@@ -647,15 +731,22 @@ def _acquire_pipeline_lock(job_id: str, loop, queue, label: str):
     """
     from flightmanager._pipeline_lock import pipeline_lock
     from filelock import Timeout
+
     lock = pipeline_lock(Path(_st.config.cache.cache_dir))
     try:
         lock.acquire(timeout=0)
         return lock
     except Timeout:
-        print(f"[{label}] job {job_id[:8]} blocked — pipeline lock held by another process")
+        print(
+            f"[{label}] job {job_id[:8]} blocked — pipeline lock held by another process"
+        )
         loop.call_soon_threadsafe(
             queue.put_nowait,
-            {"stage": "error", "pct": 0, "msg": "Pipeline busy — MCP server is running a job. Try again shortly."},
+            {
+                "stage": "error",
+                "pct": 0,
+                "msg": "Pipeline busy — MCP server is running a job. Try again shortly.",
+            },
         )
         with _st.job_lock:
             _st.active_job_id = None
@@ -758,20 +849,20 @@ def _write_job_params(
         "job_name": req.job_name,
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "inputs": {
-            "parcel_ids":   req.parcel_ids,
+            "parcel_ids": req.parcel_ids,
             "property_ids": req.property_ids,
         },
         "flight": {
-            "drone":           req.drone,
-            "height_m":        req.height_m,
-            "subcategory":     req.subcategory,
+            "drone": req.drone,
+            "height_m": req.height_m,
+            "subcategory": req.subcategory,
             "route_angle_deg": req.route_angle_deg,
-            "speed_ms":        req.speed_ms,
+            "speed_ms": req.speed_ms,
         },
         "polygon": {
             "offset_m": req.offset_m,
-            "simplify":  req.simplify,
-            "keepout":   req.keepout,
+            "simplify": req.simplify,
+            "keepout": req.keepout,
         },
         "safety": {
             "preview_radius_m": req.preview_radius_m,
@@ -779,11 +870,12 @@ def _write_job_params(
         "template_settings": req.template_settings or {},
         "custom_polygon_4326": req.custom_polygon,
         "survey_outline": make_survey_outline(survey),
-        "takeoff_point_4326":  req.takeoff_point_4326,
+        "takeoff_point_4326": req.takeoff_point_4326,
         "color": req.color or None,
     }
     # Preserve existing color, sort_order, and skipped from prior save
     from flightmanager.job_store import load_params
+
     existing = load_params(job_dir)
     if existing:
         if params["color"] is None:
