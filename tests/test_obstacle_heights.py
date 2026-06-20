@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import box
 
-from flightmanager.buildings import Building
-from flightmanager.obstacle_heights import (
+from flightmanager.geo.buildings import Building
+from flightmanager.routing.obstacle_heights import (
     _DEFAULT_HEIGHT_M,
     _FLOOR_HEIGHT_M,
     _KOHDELUOKKA_HEIGHT_M,

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flightmanager.buildings import (
+from flightmanager.geo.buildings import (
     Building,
     _to_building,
     _write_geojson,
@@ -287,6 +287,6 @@ def test_live_fetch_tile():
     buildings = load_tile(dest)
     assert len(buildings) >= 0  # area may be sparse; just confirm no crash
     for b in buildings:
-        from flightmanager.crs import assert_crs
+        from flightmanager.geo.crs import assert_crs
 
         assert_crs(b.geometry, 3067)

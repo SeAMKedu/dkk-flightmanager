@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 from shapely.geometry import Polygon
 
-from flightmanager.batch import create_skeleton_jobs
+from flightmanager.storage.batch import create_skeleton_jobs
 from flightmanager.config import AppConfig, CacheConfig, FlightConfig
-from flightmanager.parcels import Parcel
+from flightmanager.geo.parcels import Parcel
 
 
 _POLY_3067 = Polygon(
@@ -44,7 +44,7 @@ def _run(tmp_path, ids, id_type="parcels", folder=None, params=None):
     cfg = _config(tmp_path)
     with (
         patch.dict(os.environ, {"MML_API_KEY": "test-key"}),
-        patch("flightmanager.batch.fetch_parcels", return_value=[_PARCEL]),
+        patch("flightmanager.storage.batch.fetch_parcels", return_value=[_PARCEL]),
     ):
         return create_skeleton_jobs(
             ids=ids,
@@ -110,7 +110,8 @@ class TestCreateSkeletonJobs:
         with (
             patch.dict(os.environ, {"MML_API_KEY": "test-key"}),
             patch(
-                "flightmanager.batch.fetch_parcels", side_effect=[[_PARCEL], [parcel_b]]
+                "flightmanager.storage.batch.fetch_parcels",
+                side_effect=[[_PARCEL], [parcel_b]],
             ),
         ):
             results = create_skeleton_jobs(
@@ -138,7 +139,7 @@ class TestCreateSkeletonJobs:
         cfg = _config(tmp_path)
         with (
             patch.dict(os.environ, {"MML_API_KEY": "test-key"}),
-            patch("flightmanager.batch.fetch_parcels", return_value=[_PARCEL]),
+            patch("flightmanager.storage.batch.fetch_parcels", return_value=[_PARCEL]),
         ):
             create_skeleton_jobs(
                 ids=["TEST001"],

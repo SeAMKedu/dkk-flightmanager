@@ -6,7 +6,7 @@ from __future__ import annotations
 from shapely.geometry import box
 
 from flightmanager.config import DroneConfig
-from flightmanager.route import (
+from flightmanager.routing.route import (
     PlannedRoute,
     footprint_spacings,
     plan_route,

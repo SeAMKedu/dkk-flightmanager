@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-import flightmanager._server_state as st
+import flightmanager.web._server_state as st
 
 
 @pytest.fixture(autouse=True)

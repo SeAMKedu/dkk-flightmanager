@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flightmanager.cache import (
+from flightmanager.storage.cache import (
     CacheMissError,
     TileBbox,
     TileRecord,
@@ -368,7 +368,7 @@ class TestTileLocks:
     growing unboundedly across the long-lived serve process."""
 
     def test_same_tile_returns_same_lock_while_held(self):
-        from flightmanager.cache import _tile_lock
+        from flightmanager.storage.cache import _tile_lock
 
         a = _tile_lock("dem", "E1_N1")
         b = _tile_lock("dem", "E1_N1")
@@ -379,7 +379,7 @@ class TestTileLocks:
     def test_unused_locks_are_garbage_collected(self):
         import gc
 
-        from flightmanager.cache import _tile_lock, _tile_locks
+        from flightmanager.storage.cache import _tile_lock, _tile_locks
 
         # Touch several distinct tiles, holding no references afterwards.
         for i in range(20):
@@ -391,7 +391,7 @@ class TestTileLocks:
     def test_held_lock_survives_collection(self):
         import gc
 
-        from flightmanager.cache import _tile_lock, _tile_locks
+        from flightmanager.storage.cache import _tile_lock, _tile_locks
 
         held = _tile_lock("buildings", "E9_N9")
         gc.collect()

@@ -29,13 +29,13 @@ from typing import Any, Callable
 
 import requests
 
-from flightmanager.buildings import (
+from flightmanager.geo.buildings import (
     Building,
     dedup_buildings,
     load_tile,
     tile_fetcher as buildings_fetcher,
 )
-from flightmanager.powerlines import (
+from flightmanager.geo.powerlines import (
     PowerLine,
     dedup_power_lines,
     load_tile as load_pl_tile,
@@ -46,12 +46,12 @@ from flightmanager.powerlines import (
     pylon_tile_fetcher,
     correct_overhead_from_pylons,
 )
-from flightmanager.cache import TileRecord, get_tiles, tile_provenance
+from flightmanager.storage.cache import TileRecord, get_tiles, tile_provenance
 from flightmanager.config import AppConfig
-from flightmanager.elevation import tile_fetcher as dem_fetcher
+from flightmanager.geo.elevation import tile_fetcher as dem_fetcher
 from shapely import make_valid
 from shapely.ops import unary_union
-from flightmanager.geometry import (
+from flightmanager.geo.geometry import (
     SurveyGeometry,
     apply_survey_offset,
     build_keepout,
@@ -62,13 +62,13 @@ from flightmanager.geometry import (
     suggest_takeoff_point,
 )
 from flightmanager.logging_setup import setup_logging
-from flightmanager.manifest import build_manifest
-from flightmanager.parcels import fetch_parcels
-from flightmanager.properties import fetch_properties
-from flightmanager.raster import build_site_dsm, build_preview_dsm_thumbnail
-from flightmanager.homes_kml import build_homes_kml
-from flightmanager.wpml import build_kmz, resolve_strip_speed
-from flightmanager.zones import ZoneHit, check_zones
+from flightmanager.storage.manifest import build_manifest
+from flightmanager.geo.parcels import fetch_parcels
+from flightmanager.geo.properties import fetch_properties
+from flightmanager.geo.raster import build_site_dsm, build_preview_dsm_thumbnail
+from flightmanager.routing.homes_kml import build_homes_kml
+from flightmanager.routing.wpml import build_kmz, resolve_strip_speed
+from flightmanager.geo.zones import ZoneHit, check_zones
 
 log = logging.getLogger(__name__)
 
@@ -318,7 +318,7 @@ def export_job(  # noqa: C901
     # Build route GeoJSON from the first KMZ result (advanced mode only).
     route_geojson: dict | None = None
     if kmz_results and kmz_results[0].route is not None:
-        from flightmanager import route as _route
+        from flightmanager.routing import route as _route
 
         route_geojson = _route.route_result_to_geojson(
             kmz_results[0].route,
@@ -443,7 +443,7 @@ def analyse_survey(  # noqa: C901
     )
 
     # Build buildings data for map display
-    from flightmanager.obstacle_heights import building_height_m as _bldg_h
+    from flightmanager.routing.obstacle_heights import building_height_m as _bldg_h
 
     buildings_data = []
     for b in inp.buildings:
@@ -911,7 +911,7 @@ def _compute_route_geojson(
     power_lines: list,
 ) -> dict:
     """Compute route and return stats + GeoJSON strips/transits for the preview payload."""
-    from flightmanager import route as _route
+    from flightmanager.routing import route as _route
 
     home_3067 = None
     if takeoff_point_4326:

@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 
 
 from flightmanager.config import SatellitesConfig, WeatherConfig
-from flightmanager import forecast as fc
-from flightmanager import satellites as sat
-from flightmanager import weather as wx
-from flightmanager.satellites import Overpass, OverpassResult
-from flightmanager.weather import DayWeather, WeatherResult
+from flightmanager.forecasting import forecast as fc
+from flightmanager.forecasting import satellites as sat
+from flightmanager.forecasting import weather as wx
+from flightmanager.forecasting.satellites import Overpass, OverpassResult
+from flightmanager.forecasting.weather import DayWeather, WeatherResult
 
 PTS = [(62.79, 22.84)]
 NOW = datetime(2026, 6, 15, tzinfo=timezone.utc)
@@ -108,7 +108,7 @@ def test_forecast_endpoint_routes_and_gathers_centroids(tmp_path, monkeypatch):
     """The /api/forecast handler resolves centroids and delegates to build_forecast."""
     from fastapi.testclient import TestClient
     from flightmanager.config import load_config
-    from flightmanager.server import create_app
+    from flightmanager.web.server import create_app
 
     cfg = load_config("config.example.toml")
     cfg.output.output_dir = str(tmp_path)  # empty → no centroids, no network
@@ -120,7 +120,7 @@ def test_forecast_endpoint_routes_and_gathers_centroids(tmp_path, monkeypatch):
         captured["folder_dir"] = kw.get("folder_dir")
         return {"grid_ok": True, "tile_ids": [], "days": []}
 
-    monkeypatch.setattr("flightmanager.forecast.build_forecast", fake_build)
+    monkeypatch.setattr("flightmanager.forecasting.forecast.build_forecast", fake_build)
 
     app = create_app(cfg)
     with TestClient(app) as client:

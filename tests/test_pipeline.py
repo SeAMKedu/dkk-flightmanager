@@ -14,8 +14,8 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 from shapely.geometry import Polygon
 
-from flightmanager.buildings import Building
-from flightmanager.cache import TileRecord
+from flightmanager.geo.buildings import Building
+from flightmanager.storage.cache import TileRecord
 from flightmanager.config import (
     AppConfig,
     CacheConfig,
@@ -25,9 +25,9 @@ from flightmanager.config import (
     PolygonConfig,
     ZonesConfig,
 )
-from flightmanager.parcels import Parcel
+from flightmanager.geo.parcels import Parcel
 from flightmanager.pipeline import export_job
-from flightmanager.zones import ZoneCheckResult
+from flightmanager.geo.zones import ZoneCheckResult
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

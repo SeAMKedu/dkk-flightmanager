@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from flightmanager.config import ParcelsConfig
-from flightmanager.parcels import (
+from flightmanager.geo.parcels import (
     ParcelNotFoundError,
     _to_parcel,
     fetch_parcels,
@@ -99,7 +99,7 @@ class TestToParcel:
         assert 6_500_000 < bounds[1] < 7_800_000
 
     def test_geometry_outside_3067_raises(self):
-        from flightmanager.crs import CRSError
+        from flightmanager.geo.crs import CRSError
 
         bad_feature = {
             **_FEATURE_A,
@@ -300,7 +300,7 @@ class TestPaging:
 )
 def test_live_fetch_by_id():
     """Fetch a real parcel and verify geometry is in EPSG:3067."""
-    from flightmanager.crs import assert_crs
+    from flightmanager.geo.crs import assert_crs
 
     parcels = fetch_parcels(parcel_ids=["0040003911"])
     assert len(parcels) == 1

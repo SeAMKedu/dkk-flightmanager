@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flightmanager import report
+from flightmanager.reporting import report
 
 
 def test_t_sanitizes_dashes_keeps_finnish():

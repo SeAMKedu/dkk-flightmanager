@@ -474,9 +474,9 @@ def cache_warm(
     ),
 ) -> None:
     """Pre-fetch DEM and building tiles for an area ahead of a field day."""
-    from flightmanager.buildings import tile_fetcher as b_fetcher
-    from flightmanager.cache import covering_tiles, get_tiles
-    from flightmanager.elevation import tile_fetcher as d_fetcher
+    from flightmanager.geo.buildings import tile_fetcher as b_fetcher
+    from flightmanager.storage.cache import covering_tiles, get_tiles
+    from flightmanager.geo.elevation import tile_fetcher as d_fetcher
 
     try:
         parts = [float(x) for x in bbox.split(",")]
@@ -584,9 +584,9 @@ def cache_refresh(
 ) -> None:
     """Re-fetch stale cache tiles."""
     import sqlite3
-    from flightmanager.buildings import tile_fetcher as b_fetcher
-    from flightmanager.cache import _db_path, get_tiles, TileBbox
-    from flightmanager.elevation import tile_fetcher as d_fetcher
+    from flightmanager.geo.buildings import tile_fetcher as b_fetcher
+    from flightmanager.storage.cache import _db_path, get_tiles, TileBbox
+    from flightmanager.geo.elevation import tile_fetcher as d_fetcher
 
     cfg = _load_cfg(config_path)
     api_key = _require_key()
@@ -791,7 +791,7 @@ def batch_cmd(
     --properties is given, the type is auto-detected from the ID format
     (all-digits → parcels; NNN-NNN-N-NN → properties).
     """
-    from flightmanager.batch import create_skeleton_jobs
+    from flightmanager.storage.batch import create_skeleton_jobs
 
     _require_key()
     cfg = _load_cfg(config_path)
@@ -869,7 +869,7 @@ def _collect_job_centroids(
     """Return (lat, lon) centroids of all job polygons in *out_dir* (or one folder)."""
     from shapely.geometry import shape
 
-    from flightmanager.job_store import best_polygon, is_job_dir
+    from flightmanager.storage.job_store import best_polygon, is_job_dir
 
     points: list[tuple[float, float]] = []
     base = out_dir / folder if folder else out_dir
@@ -892,8 +892,12 @@ def _collect_stale_paths(
     """Return job paths flagged stale (skipping untouched skeletons), optionally one folder."""
     import json
 
-    from flightmanager.job_store import refresh_status, resolve_job_dir, scan_jobs
-    from flightmanager.manifest import PIPELINE_VERSION
+    from flightmanager.storage.job_store import (
+        refresh_status,
+        resolve_job_dir,
+        scan_jobs,
+    )
+    from flightmanager.storage.manifest import PIPELINE_VERSION
 
     targets: list[str] = []
     for group in scan_jobs(output_dir):
@@ -941,9 +945,9 @@ def refresh_cmd(
     """
     from filelock import Timeout
 
-    import flightmanager._server_state as _st
+    import flightmanager.web._server_state as _st
     from flightmanager._pipeline_lock import pipeline_lock
-    from flightmanager.routers.execution import _refresh_one_job
+    from flightmanager.web.routers.execution import _refresh_one_job
 
     cfg = _load_cfg(config_path)
     _st.config = cfg  # _refresh_one_job builds per-job config from the shared state
@@ -1011,7 +1015,7 @@ def satellites_cmd(
     """
     from collections import defaultdict
 
-    from flightmanager.satellites import overpasses_for_points
+    from flightmanager.forecasting.satellites import overpasses_for_points
 
     cfg = _load_cfg(config_path)
 
@@ -1096,7 +1100,7 @@ def serve_cmd(
     import threading
     import webbrowser
     import uvicorn
-    from flightmanager.server import create_app
+    from flightmanager.web.server import create_app
 
     cfg = _load_cfg(config_path)
     web_app = create_app(cfg, config_path=str(Path(config_path).resolve()))
@@ -1164,10 +1168,10 @@ def report_cmd(
     ``--packet`` produce a mission packet: cover, overview map, per-launch-site
     flight-announcement pages, then the per-job cards.
     """
-    import flightmanager._server_state as _st
-    from flightmanager import report
-    from flightmanager.job_store import scan_jobs
-    from flightmanager.routers.management import _load_job_entry
+    import flightmanager.web._server_state as _st
+    from flightmanager.reporting import report
+    from flightmanager.storage.job_store import scan_jobs
+    from flightmanager.web.routers.management import _load_job_entry
 
     cfg = _load_cfg(config_path)
     _st.config = cfg

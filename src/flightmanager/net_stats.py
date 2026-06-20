@@ -126,7 +126,7 @@ def print_summary(cache_dir: "str | Path | None" = None) -> None:
     lines.append(f"  {'Total':12}{summary}")
 
     if cache_dir is not None:
-        from flightmanager.cache import query_disk_size
+        from flightmanager.storage.cache import query_disk_size
 
         disk_bytes = query_disk_size(cache_dir)
         if disk_bytes:

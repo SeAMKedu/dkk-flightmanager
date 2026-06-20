@@ -7,7 +7,7 @@ import math
 from shapely.geometry import MultiPolygon, Point, Polygon
 
 from flightmanager.config import PolygonConfig
-from flightmanager.simplify import (
+from flightmanager.geo.simplify import (
     _auto_simplify,
     _simplify_within,
     simplify_pieces,

@@ -6,14 +6,14 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import box
 
-from flightmanager.adaptive_route import (
+from flightmanager.routing.adaptive_route import (
     _altitude_at,
     _simplify_altitude_waypoints,
     compute_adaptive_route,
 )
-from flightmanager.buildings import Building
+from flightmanager.geo.buildings import Building
 from flightmanager.config import DroneConfig
-from flightmanager.route import RouteResult
+from flightmanager.routing.route import RouteResult
 
 # ---------------------------------------------------------------------------
 # Minimal DroneConfig for testing (M3M-like)

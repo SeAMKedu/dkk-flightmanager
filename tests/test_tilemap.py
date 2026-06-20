@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flightmanager import tilemap
+from flightmanager.reporting import tilemap
 
 
 def test_pad_bbox_grows_outward():

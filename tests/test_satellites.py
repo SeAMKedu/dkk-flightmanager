@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from flightmanager.config import SatellitesConfig, TrackedSatellite
-from flightmanager import satellites as sat
+from flightmanager.forecasting import satellites as sat
 
 # A real Landsat 8 OMM element set (CelesTrak, epoch 2026-06-15). Propagation from
 # this fixed epoch over a fixed window is deterministic regardless of wall-clock.

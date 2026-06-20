@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 from flightmanager.config import CacheConfig
-from flightmanager.geo_cache import (
+from flightmanager.storage.geo_cache import (
     get_parcel_cache,
     get_property_cache,
     put_parcel_cache,
@@ -73,7 +73,7 @@ class TestParcelCacheTTL:
         assert get_parcel_cache(cfg, "P001", 2024) is not None
 
     def test_expired_record_returns_none(self, tmp_path):
-        from flightmanager.cache import _db_path
+        from flightmanager.storage.cache import _db_path
         import sqlite3
 
         cfg = _cache_config(tmp_path, parcels_ttl_days=1)
@@ -142,7 +142,7 @@ class TestPropertyCacheRoundTrip:
 
 class TestPropertyCacheTTL:
     def test_expired_property_returns_none(self, tmp_path):
-        from flightmanager.cache import _db_path
+        from flightmanager.storage.cache import _db_path
         import sqlite3
 
         cfg = _cache_config(tmp_path, properties_ttl_days=1)

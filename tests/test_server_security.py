@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from flightmanager.config import load_config
-from flightmanager.server import create_app
+from flightmanager.web.server import create_app
 
 
 def _client(tmp_path, **output_overrides):

@@ -6,7 +6,7 @@ import pytest
 from shapely.geometry import Polygon
 from unittest.mock import MagicMock
 
-from flightmanager.properties import (
+from flightmanager.geo.properties import (
     PropertyNotFoundError,
     _normalise,
     _to_property,
@@ -168,7 +168,7 @@ class TestFetchPropertiesMocked:
 
     def test_cache_hit_skips_network(self, tmp_path):
         from flightmanager.config import CacheConfig
-        from flightmanager.geo_cache import put_property_cache
+        from flightmanager.storage.geo_cache import put_property_cache
         from shapely.wkt import dumps as wkt_dumps
 
         cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))

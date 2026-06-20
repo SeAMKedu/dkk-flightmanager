@@ -13,12 +13,12 @@ import pytest
 from lxml import etree
 from shapely.geometry import Polygon
 
-from flightmanager.buildings import Building
+from flightmanager.geo.buildings import Building
 from flightmanager.config import FlightConfig
-from flightmanager.crs import CRSError
-from flightmanager.homes_kml import build_homes_kml
-from flightmanager.waypoints import budget_estimate
-from flightmanager.wpml import KmzResult, build_kmz
+from flightmanager.geo.crs import CRSError
+from flightmanager.routing.homes_kml import build_homes_kml
+from flightmanager.routing.waypoints import budget_estimate
+from flightmanager.routing.wpml import KmzResult, build_kmz
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 REFERENCE_KMZ = FIXTURES / "reference_mission.kmz"
@@ -495,7 +495,7 @@ class TestBatteryBudget:
         assert result.over_one_battery
 
     def test_estimate_budget_returns_expected_keys(self):
-        from flightmanager.wpml import resolve_strip_speed
+        from flightmanager.routing.wpml import resolve_strip_speed
 
         _speed = resolve_strip_speed(_FLIGHT, None, _FLIGHT.derived_flight_height_m)
         budget = budget_estimate(_SURVEY, _FLIGHT, speed_ms=_speed)

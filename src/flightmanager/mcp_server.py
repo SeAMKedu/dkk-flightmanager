@@ -48,14 +48,14 @@ def set_config_path(path: str) -> None:
 
 def _is_integrated() -> bool:
     """True when this module is running inside the flightmanager serve FastAPI process."""
-    import flightmanager._server_state as _st
+    import flightmanager.web._server_state as _st
 
     return _st.config is not None
 
 
 def _config():
     """Return the active AppConfig — from server state if integrated, else load locally."""
-    import flightmanager._server_state as _st
+    import flightmanager.web._server_state as _st
 
     if _st.config is not None:
         return _st.config
@@ -82,7 +82,7 @@ def _pipeline_guard():
     instance is not disturbed.
     """
     if _is_integrated():
-        import flightmanager._server_state as _st
+        import flightmanager.web._server_state as _st
 
         with _st.job_lock:
             if _st.active_job_id is not None:
@@ -164,7 +164,7 @@ def _prepare_config(  # noqa: C901
 @mcp.resource("jobs://list")
 def jobs_list_resource() -> str:
     """All jobs grouped by folder. Use the list_jobs tool for filtering."""
-    from flightmanager.job_store import scan_jobs
+    from flightmanager.storage.job_store import scan_jobs
 
     groups = scan_jobs(_output_dir())
     return json.dumps(groups, ensure_ascii=False, indent=2)
@@ -173,7 +173,7 @@ def jobs_list_resource() -> str:
 @mcp.resource("jobs://{path}")
 def job_detail_resource(path: str) -> str:
     """Full params and manifest for one job. path = 'name' or 'folder/name'."""
-    from flightmanager.job_store import resolve_job_dir
+    from flightmanager.storage.job_store import resolve_job_dir
 
     folder, name, job_dir = resolve_job_dir(_output_dir(), path)
     if not job_dir.exists():
@@ -264,7 +264,7 @@ def list_jobs(
     strip_speed_ms, waypoint_mode, flight_ready, needs_review, untouched,
     subcategory, color, skipped, sort_order, takeoff_point_4326.
     """
-    from flightmanager.job_store import scan_jobs
+    from flightmanager.storage.job_store import scan_jobs
 
     groups = scan_jobs(_output_dir())
 
@@ -296,7 +296,7 @@ def get_job(path: str) -> str:
 
     Returns JSON with job_params, manifest, and a derived summary.
     """
-    from flightmanager.job_store import resolve_job_dir, read_job_card
+    from flightmanager.storage.job_store import resolve_job_dir, read_job_card
 
     folder, name, job_dir = resolve_job_dir(_output_dir(), path)
     if not job_dir.exists():
@@ -382,7 +382,7 @@ def job_stats(folder: str | None = None) -> str:
 
     Returns counts, total survey area, zone hit summary, and folder list.
     """
-    from flightmanager.job_store import scan_jobs
+    from flightmanager.storage.job_store import scan_jobs
 
     groups = scan_jobs(_output_dir())
 
@@ -462,7 +462,7 @@ def delete_job(path: str) -> str:
     The parent folder is removed automatically if it becomes empty after deletion.
     """
     import shutil
-    from flightmanager.job_store import resolve_job_dir
+    from flightmanager.storage.job_store import resolve_job_dir
 
     _, _, job_dir = resolve_job_dir(_output_dir(), path)
     if not job_dir.exists():
@@ -512,7 +512,7 @@ def export_existing_job(  # noqa: C901
     Returns job path, output files, flight status, and key stats.
     """
     from flightmanager.pipeline import export_job
-    from flightmanager.job_store import resolve_job_dir
+    from flightmanager.storage.job_store import resolve_job_dir
 
     folder, name, job_dir = resolve_job_dir(_output_dir(), path)
     if not job_dir.exists():
@@ -554,7 +554,7 @@ def export_existing_job(  # noqa: C901
 
     # Apply stored template settings (overlap, safety, advanced mode)
     if stored_ts:
-        from flightmanager.routers.execution import _apply_template_settings
+        from flightmanager.web.routers.execution import _apply_template_settings
 
         _apply_template_settings(cfg, stored_ts)
 
@@ -579,7 +579,7 @@ def export_existing_job(  # noqa: C901
 
     if color:
         try:
-            from flightmanager.job_store import save_params
+            from flightmanager.storage.job_store import save_params
 
             stored["color"] = color
             save_params(job_dir, stored)
@@ -756,7 +756,7 @@ def create_batch(
 
     Returns per-ID results with counts of created, skipped, and failed.
     """
-    from flightmanager.batch import create_skeleton_jobs
+    from flightmanager.storage.batch import create_skeleton_jobs
 
     if id_type not in ("parcels", "properties"):
         return json.dumps({"error": "id_type must be 'parcels' or 'properties'."})
@@ -932,7 +932,7 @@ def run_export(
         "color": color or None,
     }
     try:
-        from flightmanager.job_store import save_params
+        from flightmanager.storage.job_store import save_params
 
         save_params(job_dir, params_doc)
     except Exception:

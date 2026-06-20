@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 import pytest
 
 from flightmanager.config import WeatherConfig
-from flightmanager import weather as wx
-from flightmanager.weather import DayWeather, WeatherResult
-from flightmanager.satellites import Overpass
+from flightmanager.forecasting import weather as wx
+from flightmanager.forecasting.weather import DayWeather, WeatherResult
+from flightmanager.forecasting.satellites import Overpass
 
 # Open-Meteo hourly response (timezone=auto → local times + utc_offset_seconds).
 # Daytime window [6, 18): hour 5 and hour 18 are deliberately excluded.

@@ -11,8 +11,8 @@ import pytest
 from shapely.geometry import Polygon
 
 from flightmanager.config import ZonesConfig
-from flightmanager.crs import CRSError
-from flightmanager.zones import AltitudeLimits, check_zones
+from flightmanager.geo.crs import CRSError
+from flightmanager.geo.zones import AltitudeLimits, check_zones
 
 # ---------------------------------------------------------------------------
 # Survey polygon in EPSG:4326 — Finnish field area

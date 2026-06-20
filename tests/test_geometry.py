@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import MultiPolygon, Point, Polygon
 
-from flightmanager.buildings import Building
+from flightmanager.geo.buildings import Building
 from flightmanager.config import HomeSafetyConfig, PolygonConfig
-from flightmanager.crs import CRSError
-from flightmanager.geometry import (
+from flightmanager.geo.crs import CRSError
+from flightmanager.geo.geometry import (
     SurveyGeometry,
     _apply_edge_buffer,
     _apply_keepout,
@@ -24,7 +24,7 @@ from flightmanager.geometry import (
     suggest_takeoff_point,
     process_survey,
 )
-from flightmanager.parcels import Parcel
+from flightmanager.geo.parcels import Parcel
 
 # ---------------------------------------------------------------------------
 # Helper factories — all in EPSG:3067 (Finnish range)
@@ -470,7 +470,7 @@ class TestProcessSurvey:
     def test_survey_4326_is_valid_wgs84(self):
         parcels = [make_parcel()]
         result = process_survey(parcels, [], _DEFAULT_HOME_SAFETY, _DEFAULT_POLY_CFG)
-        from flightmanager.crs import assert_crs
+        from flightmanager.geo.crs import assert_crs
 
         assert_crs(result.survey_4326, 4326)
 

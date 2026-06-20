@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from flightmanager.launch_sites import cluster_jobs
+from flightmanager.forecasting.launch_sites import cluster_jobs
 
 # A point in central Finland; metre→degree offsets are good enough for ~hundreds of m.
 LAT0, LON0 = 62.0, 23.0

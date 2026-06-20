@@ -12,8 +12,8 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 from shapely.geometry import box
 
-from flightmanager.crs import CRSError
-from flightmanager.raster import _NODATA, _stats, build_site_dsm
+from flightmanager.geo.crs import CRSError
+from flightmanager.geo.raster import _NODATA, _stats, build_site_dsm
 
 # Real 1km DEM tile fetched during Phase 4 development
 _REAL_TILE = Path("/tmp/test_tile.tif")
@@ -253,9 +253,9 @@ class TestStats:
 )
 def test_live_build_site_dsm(tmp_path):
     import os
-    from flightmanager.cache import get_tiles
+    from flightmanager.storage.cache import get_tiles
     from flightmanager.config import CacheConfig
-    from flightmanager.elevation import tile_fetcher
+    from flightmanager.geo.elevation import tile_fetcher
 
     api_key = os.environ["MML_API_KEY"]
     cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))

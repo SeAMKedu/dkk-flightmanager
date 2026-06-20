@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from flightmanager.job_store import (
+from flightmanager.storage.job_store import (
     UnsafePathError,
     best_polygon,
     check_cache_staleness,
@@ -366,7 +366,12 @@ class TestCheckCacheStaleness:
     def test_all_tiles_present_returns_empty(self, tmp_path):
         from datetime import datetime as _dt, timezone
         from flightmanager.config import CacheConfig
-        from flightmanager.cache import TileRecord, _db_path, _init_db, _register
+        from flightmanager.storage.cache import (
+            TileRecord,
+            _db_path,
+            _init_db,
+            _register,
+        )
 
         cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))
         manifest = {
@@ -427,7 +432,7 @@ def _register_tile(cache_dir, dataset, tile_id, fetch_ts):
     """Insert a bare tile record into the cache index (file need not exist)."""
     from pathlib import Path
 
-    from flightmanager.cache import TileRecord, _db_path, _init_db, _register
+    from flightmanager.storage.cache import TileRecord, _db_path, _init_db, _register
 
     db = _db_path(Path(cache_dir))
     _init_db(db)
@@ -449,7 +454,7 @@ def _register_tile(cache_dir, dataset, tile_id, fetch_ts):
 
 class TestBatterySummary:
     def test_single_piece(self):
-        from flightmanager.job_store import _battery_summary
+        from flightmanager.storage.job_store import _battery_summary
 
         out = _battery_summary(
             {
@@ -466,7 +471,7 @@ class TestBatterySummary:
         }
 
     def test_single_piece_over_battery(self):
-        from flightmanager.job_store import _battery_summary
+        from flightmanager.storage.job_store import _battery_summary
 
         out = _battery_summary(
             {"estimated_flight_time_min": 40, "over_one_battery": True}
@@ -474,7 +479,7 @@ class TestBatterySummary:
         assert out["battery_count"] == 2 and out["over_one_battery"] is True
 
     def test_pieces_summed(self):
-        from flightmanager.job_store import _battery_summary
+        from flightmanager.storage.job_store import _battery_summary
 
         out = _battery_summary(
             {
@@ -499,7 +504,7 @@ class TestBatterySummary:
         assert out["battery_count"] == 3  # 1 + 2
 
     def test_empty(self):
-        from flightmanager.job_store import _battery_summary
+        from flightmanager.storage.job_store import _battery_summary
 
         out = _battery_summary({})
         assert out == {
@@ -517,27 +522,27 @@ class TestRefreshStatus:
         return CacheConfig(cache_dir=str(tmp_path / "cache"))
 
     def test_older_pipeline_version_flagged(self, tmp_path):
-        from flightmanager.job_store import refresh_status
+        from flightmanager.storage.job_store import refresh_status
 
         out = refresh_status({"pipeline_version": 1}, self._cfg(tmp_path), 2)
         assert out["needs_refresh"] is True
         assert any("pipeline" in r for r in out["reasons"])
 
     def test_current_version_not_flagged(self, tmp_path):
-        from flightmanager.job_store import refresh_status
+        from flightmanager.storage.job_store import refresh_status
 
         out = refresh_status({"pipeline_version": 2}, self._cfg(tmp_path), 2)
         assert out["needs_refresh"] is False
         assert out["reasons"] == []
 
     def test_missing_pipeline_version_treated_as_zero(self, tmp_path):
-        from flightmanager.job_store import refresh_status
+        from flightmanager.storage.job_store import refresh_status
 
         out = refresh_status({}, self._cfg(tmp_path), 1)
         assert out["needs_refresh"] is True
 
     def test_newer_source_data_flagged(self, tmp_path):
-        from flightmanager.job_store import refresh_status
+        from flightmanager.storage.job_store import refresh_status
 
         cfg = self._cfg(tmp_path)
         # Job used data fetched in January; cache now holds a March copy.
@@ -556,7 +561,7 @@ class TestRefreshStatus:
         assert any("dem" in r for r in out["reasons"])
 
     def test_same_source_data_not_flagged(self, tmp_path):
-        from flightmanager.job_store import refresh_status
+        from flightmanager.storage.job_store import refresh_status
 
         cfg = self._cfg(tmp_path)
         _register_tile(cfg.cache_dir, "dem", "E1_N1", "2026-01-01T00:00:00+00:00")
@@ -587,7 +592,11 @@ _SQUARE = {
 
 class TestParamsStorage:
     def test_round_trip_stamps_schema_version(self, tmp_path):
-        from flightmanager.job_store import SCHEMA_VERSION, load_params, save_params
+        from flightmanager.storage.job_store import (
+            SCHEMA_VERSION,
+            load_params,
+            save_params,
+        )
 
         save_params(tmp_path, {"job_name": "j", "custom_polygon_4326": _SQUARE})
         data = load_params(tmp_path)
@@ -596,7 +605,7 @@ class TestParamsStorage:
 
     def test_save_drops_legacy_blob_and_derives_outline(self, tmp_path):
         """Old jobs with an embedded last_preview_geojson migrate to survey_outline."""
-        from flightmanager.job_store import load_params, save_params
+        from flightmanager.storage.job_store import load_params, save_params
 
         legacy = {
             "job_name": "old",
@@ -613,24 +622,24 @@ class TestParamsStorage:
         assert data["survey_outline"]["type"] == "Polygon"
 
     def test_explicit_outline_preserved(self, tmp_path):
-        from flightmanager.job_store import load_params, save_params
+        from flightmanager.storage.job_store import load_params, save_params
 
         save_params(tmp_path, {"survey_outline": _SQUARE, "custom_polygon_4326": None})
         assert load_params(tmp_path)["survey_outline"] == _SQUARE
 
     def test_outline_from_custom_polygon_when_absent(self, tmp_path):
-        from flightmanager.job_store import load_params, save_params
+        from flightmanager.storage.job_store import load_params, save_params
 
         save_params(tmp_path, {"custom_polygon_4326": _SQUARE})
         assert load_params(tmp_path)["survey_outline"]["type"] == "Polygon"
 
     def test_load_missing_returns_none(self, tmp_path):
-        from flightmanager.job_store import load_params
+        from flightmanager.storage.job_store import load_params
 
         assert load_params(tmp_path) is None
 
     def test_write_json_atomic_no_tmp_left(self, tmp_path):
-        from flightmanager.job_store import write_json_atomic
+        from flightmanager.storage.job_store import write_json_atomic
 
         target = tmp_path / "x.json"
         write_json_atomic(target, {"a": 1})
@@ -639,13 +648,13 @@ class TestParamsStorage:
 
     def test_unknown_keys_preserved(self, tmp_path):
         """extra=allow keeps forward/unknown keys on round-trip."""
-        from flightmanager.job_store import load_params, save_params
+        from flightmanager.storage.job_store import load_params, save_params
 
         save_params(tmp_path, {"job_name": "j", "future_field": 42})
         assert load_params(tmp_path)["future_field"] == 42
 
     def test_card_polygon_priority(self):
-        from flightmanager.job_store import card_polygon
+        from flightmanager.storage.job_store import card_polygon
 
         other = {"type": "Polygon", "coordinates": [[[9, 9], [9, 8], [8, 8], [9, 9]]]}
         # custom polygon wins over outline and legacy
