@@ -99,13 +99,14 @@ def _bbox_of(geoms: list[dict], extra_points: list | None = None):
 # ── map drawing ───────────────────────────────────────────────────────────────
 
 def _draw_map(pdf: FPDF, x: float, y: float, w: float, h: float, *, bbox, overlays: dict,  # noqa: C901
-              mml_key: str | None, basemap: str = "osm") -> str:
+              mml_key: str | None, basemap: str = "osm", pad: float = 0.12) -> str:
     """Draw a basemap + vector overlays into the box (x,y,w,h). Returns attribution.
 
     *basemap* is "osm" (crisp to z19, good for navigation context) or "mml" (MML
-    orthophoto; caps at native z15 so it softens on small parcels).
+    orthophoto; caps at native z15 so it softens on small parcels). *pad* grows the
+    bbox outward (smaller = tighter zoom).
     """
-    bbox = tilemap.fit_bbox(tilemap.pad_bbox(bbox, 0.12), w / h)
+    bbox = tilemap.fit_bbox(tilemap.pad_bbox(bbox, pad), w / h)
     provider = tilemap.get_provider(basemap, mml_key=mml_key)
     bm = tilemap.fetch_basemap(bbox, target_px=int(w * 6), provider=provider, mml_key=mml_key)
     iw, ih = bm.size
@@ -115,6 +116,14 @@ def _draw_map(pdf: FPDF, x: float, y: float, w: float, h: float, *, bbox, overla
     bm.image.save(buf, format="JPEG", quality=82)
     buf.seek(0)
     pdf.image(buf, x=x, y=y, w=w, h=h)
+
+    # The MML orthophoto is dark; lay a translucent white pane over it so the
+    # vector overlays read clearly. (Per-image opacity needs an alpha raster;
+    # a low-opacity white fill via the graphics state is the lightweight path.)
+    if basemap == "mml":
+        with pdf.local_context(fill_opacity=0.32):
+            pdf.set_fill_color(255, 255, 255)
+            pdf.rect(x, y, w, h, style="F")
 
     def T(lon, lat):
         px, py = bm.lonlat_to_px(lon, lat)
@@ -281,10 +290,12 @@ def _job_overlays(rd: dict) -> dict:
     }
 
 
-def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: str | None,
-                   basemap: str = "mml"):
+def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: str | None,  # noqa: C901
+                   basemap: str = "mml", tab=None):
     """Render one job onto a fresh page."""
     pdf.add_page()
+    if tab:
+        _section_tab(pdf, **tab)
     stats = rd.get("stats", {})
     name = params.get("job_name") or manifest.get("job_name") or "job"
 
@@ -305,15 +316,15 @@ def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: s
         pdf.multi_cell(CONTENT_W, 4, _t("Review: " + "; ".join(reasons)))
         y = pdf.get_y() + 1
 
-    # Map.
-    bbox = _bbox_of([rd.get("survey"), rd.get("keepout_zone")],
-                    [rd.get("takeoff_point_4326")])
+    # Map. Frame to the survey + takeoff (tight) so the job fills the view and the
+    # takeoff marker stays visible.
+    bbox = _bbox_of([rd.get("survey")], [rd.get("takeoff_point_4326")])
     map_h = 118.0
     attribution = ""
     if bbox:
         attribution = _draw_map(pdf, MARGIN, y, CONTENT_W, map_h,
                                 bbox=bbox, overlays=_job_overlays(rd), mml_key=mml_key,
-                                basemap=basemap)
+                                basemap=basemap, pad=0.08)
     y += map_h + 5
 
     # Flight params (left) + DSM/zones (right).
@@ -322,8 +333,8 @@ def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: s
     sub = stats.get("subcategory") or _mf(manifest, "operating_subcategory")
     rows = [
         ("Drone", str(drone or "-")),
-        ("Height / GSD", f"{_fmt(stats.get('flight_height_m'),' m')}  ·  {_fmt(stats.get('target_gsd_cm'),' cm',1)}"),
         ("Subcategory", f"{sub or '-'}  ·  buffer {_fmt(stats.get('home_buffer_m'),' m')}"),
+        ("Height / GSD", f"{_fmt(stats.get('flight_height_m'),' m')}  ·  {_fmt(stats.get('target_gsd_cm'),' cm',1)}"),
         ("Strips / photos", f"{_fmt(stats.get('route_strip_count'))}  /  {_fmt(stats.get('route_photo_count'))}"),
         ("Flight time", _fmt(stats.get("route_flight_time_min") or _mf(manifest, "battery.estimated_flight_time_min"), " min", 1)),
         ("Speed", _fmt(_mf(manifest, "flight.strip_speed_ms"), " m/s", 1)),
@@ -345,8 +356,24 @@ def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: s
             pdf.set_text_color(*C_INK)
             pdf.set_xy(rx, ry)
             pdf.cell(col_w, 5.5, "Terrain (DSM)")
-            pdf.image(img, x=rx, y=ry + 6.5, w=iw, h=ih)
-            ry += 6.5 + ih + 3
+            dsm_y = ry + 6.5
+            pdf.image(img, x=rx, y=dsm_y, w=iw, h=ih)
+            # Outline the flight area on the DSM (white) so the terrain under the
+            # survey polygon is obvious. dsm_bounds = (west, south, east, north).
+            db = rd.get("dsm_bounds")
+            survey = rd.get("survey")
+            if db and survey:
+                west, south, east, north = db
+                dw = (east - west) or 1e-9
+                dh = (north - south) or 1e-9
+                pdf.set_draw_color(255, 255, 255)
+                pdf.set_line_width(0.4)
+                for ring in _rings(survey):
+                    pts = [(rx + (c[0] - west) / dw * iw, dsm_y + (north - c[1]) / dh * ih)
+                           for c in ring]
+                    if len(pts) >= 2:
+                        pdf.polygon(pts, style="D")
+            ry = dsm_y + ih + 3
             elev = f"{_fmt(stats.get('elevation_min_m') or _mf(manifest,'dsm.elevation_min_m'),' m')} - {_fmt(stats.get('elevation_max_m') or _mf(manifest,'dsm.elevation_max_m'),' m')}"
             pdf.set_font("Helvetica", "", 7.5)
             pdf.set_text_color(*C_MUTED)
@@ -510,6 +537,98 @@ def _cover(pdf: FPDF, cards: list[dict], folder: str | None):
         "Generated by dkk-flightmanager."))
 
 
+def _site_range(site) -> str:
+    so = [m["route_index"] for m in site.members if m.get("route_index") is not None]
+    if not so:
+        return ""
+    return f"#{min(so)}" + (f"-#{max(so)}" if max(so) != min(so) else "")
+
+
+def _section_tab(pdf: FPDF, label, ordinal: int, total: int):
+    """Thumb-index tab on the right page edge (in the margin), like a printed
+    manual. Shows the launch site's first route index and steps down the edge as
+    sites progress, so flipping the packet reveals which section you're in."""
+    tab_w, tab_h = 9.0, 8.0
+    top, bottom = 16.0, A4_H - 18.0
+    step = (bottom - top - tab_h) / max(total - 1, 1) if total > 1 else 0.0
+    y = top + ordinal * step
+    x = A4_W - tab_w
+    pdf.set_fill_color(*C_LAUNCH)
+    pdf.set_draw_color(255, 255, 255)
+    pdf.set_line_width(0.3)
+    pdf.set_dash_pattern()
+    pdf.rect(x, y, tab_w, tab_h, style="DF")
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_xy(x, y + tab_h / 2 - 1.7)
+    pdf.cell(tab_w - 1.0, 3.2, _t(str(label)), align="C")
+
+
+# Flight-order job table shared by the overview and launch-site pages. Columns
+# sum to CONTENT_W (186 mm). Flows across pages (header + section tab repeat),
+# and ends with a bold totals row (Σ area, Σ flight time).
+_JOB_COLS = [("#", 10.0), ("Job", 92.0), ("Area ha", 26.0), ("Time min", 26.0), ("Status", 32.0)]
+
+
+def _flow_job_table(pdf: FPDF, cards: list[dict], start_y: float, *, title=None, tab=None) -> float:  # noqa: C901
+    def _header(y):
+        if title:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(*C_INK)
+            pdf.set_xy(MARGIN, y)
+            pdf.cell(CONTENT_W, 6, _t(title))
+            y += 7
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*C_MUTED)
+        cx = MARGIN
+        for lbl, w in _JOB_COLS:
+            pdf.set_xy(cx, y)
+            pdf.cell(w, 5, _t(lbl))
+            cx += w
+        pdf.set_draw_color(*C_LINE)
+        pdf.set_line_width(0.2)
+        pdf.line(MARGIN, y + 5.2, MARGIN + CONTENT_W, y + 5.2)
+        return y + 6.2
+
+    def _row(y, vals, bold=False):
+        pdf.set_font("Helvetica", "B" if bold else "", 8.3)
+        pdf.set_text_color(*C_INK)
+        cx = MARGIN
+        for v, w in zip(vals, [c[1] for c in _JOB_COLS]):
+            pdf.set_xy(cx, y)
+            pdf.cell(w, 4.8, _t(v))
+            cx += w
+        return y + 4.9
+
+    routable = _sorted_routable(cards)
+    y = _header(start_y)
+    tot_area = tot_time = 0.0
+    for c in routable:
+        if y > A4_H - 22:
+            pdf.add_page()
+            if tab:
+                _section_tab(pdf, **tab)
+            y = _header(MARGIN + 4)
+        ri = (c.get("sort_order") + 1) if c.get("sort_order") is not None else "-"
+        status = "review" if c.get("needs_review") else ("ready" if c.get("flight_ready") else "-")
+        tot_area += c.get("final_area_ha") or 0
+        tot_time += c.get("flight_time_min") or 0
+        y = _row(y, [str(ri), c.get("name", ""), _fmt(c.get("final_area_ha"), "", 2),
+                     _fmt(c.get("flight_time_min"), "", 0), status])
+
+    if y > A4_H - 20:
+        pdf.add_page()
+        if tab:
+            _section_tab(pdf, **tab)
+        y = MARGIN + 4
+    pdf.set_draw_color(*C_INK)
+    pdf.set_line_width(0.3)
+    pdf.line(MARGIN, y + 0.5, MARGIN + CONTENT_W, y + 0.5)
+    y = _row(y + 1.5, ["", f"Total ({len(routable)} jobs)",
+                       _fmt(tot_area, "", 2), _fmt(tot_time, "", 0), ""], bold=True)
+    return y
+
+
 def _overview_map(pdf: FPDF, cards: list[dict], mml_key: str | None, basemap: str):
     sites = cluster_jobs(cards)
     geoms = [c.get("_geometry") for c in cards]
@@ -517,80 +636,34 @@ def _overview_map(pdf: FPDF, cards: list[dict], mml_key: str | None, basemap: st
     for s in sites:
         pts += _circle_extent(s.circle_center_4326, s.radius_m)
     bbox = _bbox_of(geoms, pts)
-    if not bbox:
-        return
     pdf.set_xy(MARGIN, MARGIN)
     pdf.set_font("Helvetica", "B", 13)
     pdf.set_text_color(*C_INK)
     pdf.cell(CONTENT_W, 8, _t("Overview - flight order & launch sites"))
-    overlays = {
-        "polygons": geoms,
-        "launch_circles": [{"center": s.circle_center_4326,
-                            "edge": _edge_point(s.circle_center_4326, s.radius_m)} for s in sites],
-        "legs": [s.dot_4326 for s in sites],
-        "takeoffs": [{"pt": s.dot_4326, "label": s.first_route_index} for s in sites],
-    }
-    _draw_map(pdf, MARGIN, MARGIN + 10, CONTENT_W, 150, bbox=bbox, overlays=overlays,
-              mml_key=mml_key, basemap=basemap)
-
-    # Summary table under the overview.
-    y = MARGIN + 164
-    pdf.set_xy(MARGIN, y)
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(*C_INK)
-    pdf.cell(CONTENT_W, 6, _t("Jobs in flight order"))
-    y += 7
-    headers = [("#", 10), ("Job", 86), ("Area ha", 26), ("Time min", 26), ("Status", 38)]
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.set_text_color(*C_MUTED)
-    cx = MARGIN
-    for label, ww in headers:
-        pdf.set_xy(cx, y)
-        pdf.cell(ww, 5, _t(label))
-        cx += ww
-    y += 5.5
-    for c in _sorted_routable(cards):
-        cx = MARGIN
-        ri = (c.get("sort_order") + 1) if c.get("sort_order") is not None else "-"
-        status = "review" if c.get("needs_review") else ("ready" if c.get("flight_ready") else "-")
-        vals = [(str(ri), 10), (c.get("name", ""), 86), (_fmt(c.get("final_area_ha"), "", 2), 26),
-                (_fmt(c.get("flight_time_min"), "", 0), 26), (status, 38)]
-        pdf.set_font("Helvetica", "", 8)
-        pdf.set_text_color(*C_INK)
-        for val, ww in vals:
-            pdf.set_xy(cx, y)
-            pdf.cell(ww, 4.6, _t(val))
-            cx += ww
-        y += 4.8
-        if y > A4_H - 16:
-            break
+    if bbox:
+        overlays = {
+            "polygons": geoms,
+            "launch_circles": [{"center": s.circle_center_4326,
+                                "edge": _edge_point(s.circle_center_4326, s.radius_m)} for s in sites],
+            "legs": [s.dot_4326 for s in sites],
+            "takeoffs": [{"pt": s.dot_4326, "label": s.first_route_index} for s in sites],
+        }
+        _draw_map(pdf, MARGIN, MARGIN + 10, CONTENT_W, 150, bbox=bbox, overlays=overlays,
+                  mml_key=mml_key, basemap=basemap)
+    # Flight-order list (flows across pages, totals at the end).
+    _flow_job_table(pdf, cards, MARGIN + 166, title="Jobs in flight order")
 
 
-def _launch_site_page(pdf: FPDF, site, cards: list[dict], mml_key: str | None, basemap: str):
+def _launch_site_page(pdf: FPDF, site, cards: list[dict], mml_key: str | None, basemap: str, tab=None):
     pdf.add_page()
+    if tab:
+        _section_tab(pdf, **tab)
     pdf.set_xy(MARGIN, MARGIN)
     pdf.set_font("Helvetica", "B", 15)
     pdf.set_text_color(*C_INK)
-    rng = ""
-    so = [m["route_index"] for m in site.members if m.get("route_index") is not None]
-    if so:
-        rng = f"#{min(so)}" + (f"-#{max(so)}" if max(so) != min(so) else "")
-    pdf.cell(CONTENT_W, 8, _t(f"Launch site {rng}".strip()))
+    pdf.cell(CONTENT_W, 8, _t(f"Launch site {_site_range(site)}".strip()))
 
-    # Announcement fields (the Flyk inputs).
-    c = site.circle_center_4326
-    import math as _m
-    dur = site.flight_time_min
-    rows = [
-        ("Centre (lat, lon)", f"{c[1]:.5f}, {c[0]:.5f}"),
-        ("Diameter", f"{_fmt(site.diameter_m, ' m', 0)}  (r {_fmt(site.radius_m, ' m', 0)})"),
-        ("Max altitude", _fmt(site.max_altitude_m, " m", 0)),
-        ("Duration", _fmt(_m.ceil((dur or 0) / 30) * 30, " min", 0) if dur else "-"),
-        ("Jobs", str(site.member_count)),
-    ]
-    _kv_table(pdf, MARGIN, MARGIN + 11, CONTENT_W * 0.5, rows, title="Flight announcement")
-
-    # Site map: member polygons + enclosing circle.
+    # Map first (same as the overview).
     member_paths = {m["path"] for m in site.members}
     member_cards = [cc for cc in cards if cc["path"] in member_paths]
     geoms = [cc.get("_geometry") for cc in member_cards]
@@ -605,28 +678,34 @@ def _launch_site_page(pdf: FPDF, site, cards: list[dict], mml_key: str | None, b
             "takeoffs": [{"pt": m["takeoff_4326"], "label": m.get("route_index")}
                          for m in site.members if m.get("takeoff_4326")],
         }
-        _draw_map(pdf, MARGIN, MARGIN + 56, CONTENT_W, 150, bbox=bbox, overlays=overlays,
+        _draw_map(pdf, MARGIN, MARGIN + 11, CONTENT_W, 116, bbox=bbox, overlays=overlays,
                   mml_key=mml_key, basemap=basemap)
 
-    pdf.set_y(MARGIN + 210)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_text_color(*C_INK)
-    pdf.cell(CONTENT_W, 5.5, _t("Member jobs"))
-    pdf.set_font("Helvetica", "", 8.5)
-    pdf.set_text_color(*C_MUTED)
-    pdf.set_xy(MARGIN, MARGIN + 216)
-    pdf.multi_cell(CONTENT_W, 4.4, _t(", ".join(
-        f"#{m['route_index']} {m['name']}" if m.get("route_index") else m["name"]
-        for m in site.members)))
+    # Then the flight-announcement info (the Flyk inputs).
+    import math as _m
+    c = site.circle_center_4326
+    dur = site.flight_time_min
+    rows = [
+        ("Centre (lat, lon)", f"{c[1]:.5f}, {c[0]:.5f}"),
+        ("Diameter", f"{_fmt(site.diameter_m, ' m', 0)}  (r {_fmt(site.radius_m, ' m', 0)})"),
+        ("Max altitude", _fmt(site.max_altitude_m, " m", 0)),
+        ("Duration", _fmt(_m.ceil((dur or 0) / 30) * 30, " min", 0) if dur else "-"),
+    ]
+    _kv_table(pdf, MARGIN, MARGIN + 132, CONTENT_W * 0.5, rows, title="Flight announcement")
+
+    # Then the member-job list (same style as the overview).
+    _flow_job_table(pdf, member_cards, MARGIN + 168, title="Jobs at this site", tab=tab)
 
 
-def render_packet(base_config, job_entries: list[dict], *, folder: str | None = None,
+def render_packet(base_config, job_entries: list[dict], *, folder: str | None = None,  # noqa: C901
                   basemap: str = "mml", include_job_cards: bool = True, progress_cb=None) -> bytes:
     """Render the full mission packet for the given jobs.
 
     *job_entries*: list of ``{"params": dict, "manifest": dict}`` (params should
-    carry ``path``/``job_name``/``folder``). Cover + overview + summary +
-    per-launch-site announcement pages + (optionally) per-job cards.
+    carry ``path``/``job_name``/``folder``). Layout: cover + overview, then each
+    launch site as a divider page (map + announcement + job list) immediately
+    followed by its member job cards, then any non-routable jobs. Each launch
+    site's pages carry a thumb-index tab on the page edge.
     """
     def _p(msg, pct):
         if progress_cb:
@@ -635,6 +714,7 @@ def render_packet(base_config, job_entries: list[dict], *, folder: str | None = 
     mml_key = _mml_key()
     cards = [_clip_card(e["params"], e.get("manifest") or {}) for e in job_entries]
     sites = cluster_jobs(cards)
+    entry_by_path = {(e["params"].get("path") or e["params"].get("job_name")): e for e in job_entries}
     _p("Preparing", 3)
 
     pdf = _new_pdf()
@@ -642,16 +722,33 @@ def render_packet(base_config, job_entries: list[dict], *, folder: str | None = 
     _p("Cover", 6)
     pdf.add_page()
     _overview_map(pdf, cards, mml_key, basemap)
-    _p("Overview map", 14)
+    _p("Overview map", 13)
 
+    total = max(len(sites), 1)
+    covered: set = set()
     for i, site in enumerate(sites):
-        _launch_site_page(pdf, site, cards, mml_key, basemap)
-        _p(f"Launch site {i + 1}/{len(sites)}", 14 + (i + 1) / max(len(sites), 1) * 12)
+        tab = {"label": site.first_route_index if site.first_route_index is not None else i + 1,
+               "ordinal": i, "total": len(sites)}
+        _p(f"Launch site {i + 1}/{len(sites)}", 13 + i / total * 85)
+        _launch_site_page(pdf, site, cards, mml_key, basemap, tab=tab)
+        if include_job_cards:
+            for m in site.members:
+                e = entry_by_path.get(m["path"])
+                if not e:
+                    continue
+                covered.add(m["path"])
+                try:
+                    rd = _render_data_for_job(base_config, e["params"])
+                    build_job_card(pdf, e["params"], e.get("manifest") or {}, rd, mml_key, basemap, tab=tab)
+                except Exception:
+                    continue
 
+    # Jobs not in any launch site (skipped / no takeoff) get plain cards at the end.
     if include_job_cards:
-        n = len(job_entries)
-        for i, e in enumerate(job_entries):
-            _p(f"Job card {i + 1}/{n}", 26 + i / max(n, 1) * 72)
+        for e in job_entries:
+            path = e["params"].get("path") or e["params"].get("job_name")
+            if path in covered:
+                continue
             try:
                 rd = _render_data_for_job(base_config, e["params"])
                 build_job_card(pdf, e["params"], e.get("manifest") or {}, rd, mml_key, basemap)
