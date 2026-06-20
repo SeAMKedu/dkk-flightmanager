@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 
 
+import pytest
+
 from flightmanager.job_store import (
+    UnsafePathError,
     best_polygon,
     check_cache_staleness,
     is_folder_dir,
@@ -14,7 +17,9 @@ from flightmanager.job_store import (
     make_thumbnail_svg,
     params_from_manifest,
     read_job_card,
+    resolve_folder_dir,
     resolve_job_dir,
+    safe_path_segment,
     scan_jobs,
 )
 
@@ -131,6 +136,45 @@ class TestResolveJobDir:
         folder, name, path = resolve_job_dir(tmp_path, "/my-job")
         assert folder is None
         assert name == "my-job"
+
+    @pytest.mark.parametrize(
+        "evil",
+        [
+            "../etc",
+            "../../etc/passwd",
+            "good/../../../etc",
+            "..",
+            "foo/..",
+            "a/b/c",  # only one '/' split allowed → 'b/c' is an unsafe name segment
+        ],
+    )
+    def test_traversal_rejected(self, tmp_path, evil):
+        with pytest.raises(UnsafePathError):
+            resolve_job_dir(tmp_path, evil)
+
+
+class TestSafePathSegment:
+    @pytest.mark.parametrize("good", ["my-job", "20260611-02", "walkama_yard"])
+    def test_accepts_plain_segments(self, good):
+        assert safe_path_segment(good) == good
+
+    @pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "a\\b", "a\x00b"])
+    def test_rejects_unsafe_segments(self, bad):
+        with pytest.raises(UnsafePathError):
+            safe_path_segment(bad)
+
+
+class TestResolveFolderDir:
+    def test_none_returns_root(self, tmp_path):
+        assert resolve_folder_dir(tmp_path, None) == tmp_path
+        assert resolve_folder_dir(tmp_path, "") == tmp_path
+
+    def test_valid_folder(self, tmp_path):
+        assert resolve_folder_dir(tmp_path, "grp") == tmp_path / "grp"
+
+    def test_traversal_rejected(self, tmp_path):
+        with pytest.raises(UnsafePathError):
+            resolve_folder_dir(tmp_path, "..")
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,12 @@ from flightmanager.wpml import resolve_strip_speed
 from pydantic import BaseModel
 
 import flightmanager._server_state as _st
-from flightmanager.job_store import make_survey_outline, make_thumbnail_svg, save_params
+from flightmanager.job_store import (
+    make_survey_outline,
+    make_thumbnail_svg,
+    safe_path_segment,
+    save_params,
+)
 
 router = APIRouter()
 
@@ -151,6 +156,10 @@ async def start_preview(req: PreviewRequest):
 @router.post("/api/export")
 async def start_export(req: ExportRequest):
     import asyncio
+
+    safe_path_segment(req.job_name)
+    if req.folder:
+        safe_path_segment(req.folder)
 
     job_id, queue = _begin_job()
     loop = asyncio.get_running_loop()
@@ -301,6 +310,8 @@ async def start_batch(req: BatchRequest):
         raise HTTPException(400, detail="ids list is empty")
     if req.id_type not in ("parcels", "properties"):
         raise HTTPException(400, detail="id_type must be 'parcels' or 'properties'")
+    if req.folder:
+        safe_path_segment(req.folder)
 
     job_id = str(uuid.uuid4())
     queue: asyncio.Queue = asyncio.Queue()

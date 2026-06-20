@@ -230,13 +230,68 @@ def is_folder_dir(d: Path) -> bool:
         return False
 
 
+class UnsafePathError(ValueError):
+    """A user-supplied job/folder path segment is unsafe (a traversal attempt).
+
+    The server maps this to HTTP 400 via a global exception handler, so call
+    sites can validate untrusted segments without their own try/except.
+    """
+
+
+def safe_path_segment(seg: str) -> str:
+    """Validate one untrusted path segment (a folder or job name).
+
+    Rejects empty strings, ``.``/``..``, path separators, and NUL bytes — the
+    ingredients of a directory-traversal escape. Returns *seg* unchanged when
+    safe; raises :class:`UnsafePathError` otherwise.
+    """
+    if not seg or seg in (".", "..") or "/" in seg or "\\" in seg or "\x00" in seg:
+        raise UnsafePathError(f"unsafe path segment: {seg!r}")
+    return seg
+
+
+def _require_within(base: Path, target: Path) -> None:
+    """Belt-and-braces: ensure *target* stays inside *base* after resolution."""
+    base_r = base.resolve()
+    target_r = target.resolve()
+    if target_r != base_r and not target_r.is_relative_to(base_r):
+        raise UnsafePathError(f"path escapes output directory: {target}")
+
+
+def resolve_folder_dir(output_dir: Path, folder: str | None) -> Path:
+    """Resolve a (possibly ``None``) group-folder name to a directory, safely.
+
+    ``None``/empty → *output_dir* (the root). Otherwise the single segment is
+    validated and confirmed to stay within *output_dir*.
+    """
+    if not folder:
+        return output_dir
+    safe_path_segment(folder)
+    folder_dir = output_dir / folder
+    _require_within(output_dir, folder_dir)
+    return folder_dir
+
+
 def resolve_job_dir(output_dir: Path, path: str) -> tuple[str | None, str, Path]:
-    """Split *path* (``name`` or ``folder/name``) into ``(folder, name, directory)``."""
+    """Split *path* (``name`` or ``folder/name``) into ``(folder, name, directory)``.
+
+    Every segment is validated against directory traversal (raises
+    :class:`UnsafePathError` → HTTP 400). This is the single choke point for all
+    ``{path:path}`` job routes, so hardening it covers the whole job API surface.
+    """
     parts = path.strip("/").split("/", 1)
     if len(parts) == 2:
         folder, name = parts
-        return folder, name, output_dir / folder / name
-    return None, parts[0], output_dir / parts[0]
+        safe_path_segment(folder)
+        safe_path_segment(name)
+        job_dir = output_dir / folder / name
+        _require_within(output_dir, job_dir)
+        return folder, name, job_dir
+    name = parts[0]
+    safe_path_segment(name)
+    job_dir = output_dir / name
+    _require_within(output_dir, job_dir)
+    return None, name, job_dir
 
 
 def best_polygon(job_dir: Path) -> dict | None:

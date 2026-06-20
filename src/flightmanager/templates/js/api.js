@@ -13,12 +13,19 @@ export class ApiError extends Error {
   }
 }
 
+// Optional bearer token for hosted deployments. Off by default (localhost needs
+// none). Set via setAuthToken(...) once a login flow exists; when present it is
+// attached to every JSON API call to satisfy the server's FLIGHTMANAGER_API_TOKEN gate.
+var _authToken = null;
+export function setAuthToken(token) { _authToken = token || null; }
+
 async function _request(method, url, body) {
-  var opts = {method: method};
+  var opts = {method: method, headers: {}};
   if (body !== undefined) {
-    opts.headers = {'Content-Type': 'application/json'};
+    opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
+  if (_authToken) opts.headers['Authorization'] = 'Bearer ' + _authToken;
   var r = await fetch(url, opts);
   var data = null;
   try { data = await r.json(); } catch { /* empty / non-JSON body */ }

@@ -248,6 +248,10 @@ class CacheConfig(BaseModel):
 
 class OutputConfig(BaseModel):
     output_dir: str = "output"
+    # Desktop-only filesystem actions (open file manager, export to an arbitrary
+    # local path). Safe on a single-user localhost box; set False for any
+    # multi-user / hosted deployment so those endpoints return 403.
+    allow_local_fs: bool = True
     color_palette: list[str] = Field(
         default=[
             "#3b82f6",  # blue

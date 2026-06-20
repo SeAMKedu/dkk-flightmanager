@@ -14,11 +14,12 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import flightmanager._server_state as _st
+from flightmanager import job_store
 from flightmanager.config import AppConfig
 from flightmanager.routers import execution, management, settings
 
@@ -121,13 +122,38 @@ def _compute_default_speed() -> float:
     return resolve_strip_speed(_st.config.flight, drone, H)
 
 
-def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
+def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:  # noqa: C901
     _st.config = config
     _st.config_path = config_path
 
     app = FastAPI(
         title="dkk-flightmanager", docs_url=None, redoc_url=None, lifespan=_app_lifespan
     )
+
+    @app.exception_handler(job_store.UnsafePathError)
+    async def _unsafe_path_handler(request: Request, exc: job_store.UnsafePathError):
+        """Turn a directory-traversal attempt into a clean 400 (not a 500)."""
+        return JSONResponse(status_code=400, content={"detail": "Invalid path"})
+
+    @app.middleware("http")
+    async def _auth(request, call_next):
+        """Optional bearer-token gate (groundwork for multi-user hosting).
+
+        Off by default: when FLIGHTMANAGER_API_TOKEN is unset, every request
+        passes through unchanged (today's localhost-only behavior). When set,
+        /api/* and /mcp require ``Authorization: Bearer <token>`` (constant-time
+        compare). The UI shell and /static stay public so the SPA can load and
+        inject the token itself.
+        """
+        import hmac
+        import os
+
+        token = os.environ.get("FLIGHTMANAGER_API_TOKEN", "")
+        if token and request.url.path.startswith(("/api/", "/mcp")):
+            header = request.headers.get("Authorization", "")
+            if not hmac.compare_digest(header, f"Bearer {token}"):
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        return await call_next(request)
 
     @app.middleware("http")
     async def _timing(request, call_next):

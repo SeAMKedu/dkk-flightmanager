@@ -26,7 +26,9 @@ from flightmanager.job_store import (
     params_from_manifest,
     read_job_card,
     refresh_status,
+    resolve_folder_dir,
     resolve_job_dir,
+    safe_path_segment,
     save_params,
     scan_jobs,
 )
@@ -376,7 +378,7 @@ def _resolve_centroids(folder: str | None, paths: str | None):
                 continue
             for card in group["jobs"]:
                 job_dirs.append(resolve_job_dir(output_dir, card["path"])[2])
-    folder_dir = output_dir / folder if folder else output_dir
+    folder_dir = resolve_folder_dir(output_dir, folder)
 
     centroids: list[tuple[float, float]] = []
     for jd in job_dirs:
@@ -691,6 +693,7 @@ async def update_job(path: str, body: dict):
     new_name: str = body.get("new_name", "").strip()
     if not new_name:
         raise HTTPException(400, detail="new_name is required")
+    safe_path_segment(new_name)
     if new_name == name:
         return {"path": path, "name": name, "folder": folder}
 
@@ -805,7 +808,7 @@ async def move_job(path: str, body: dict):
     if to_folder == folder:
         return {"path": path, "folder": folder}
     if to_folder:
-        dest_parent = output_dir / to_folder
+        dest_parent = resolve_folder_dir(output_dir, to_folder)
         dest_parent.mkdir(parents=True, exist_ok=True)
         marker = dest_parent / ".dkk-folder"
         if not marker.exists():
@@ -845,10 +848,12 @@ async def delete_job(path: str):
 
 @router.post("/api/jobs/{path:path}/reveal")
 async def reveal_job(path: str):
-    """Open the job folder in the system file manager."""
+    """Open the job folder in the system file manager (desktop-only)."""
     import subprocess
     import sys
 
+    if not _st.config.output.allow_local_fs:
+        raise HTTPException(403, detail="Local filesystem actions are disabled")
     output_dir = Path(_st.config.output.output_dir).resolve()
     folder, name, job_dir = resolve_job_dir(output_dir, path)
     if not job_dir.is_dir():
@@ -1057,6 +1062,7 @@ async def merge_jobs(req: MergeRequest):
     new_name = req.new_name.strip()
     if not new_name:
         raise HTTPException(400, detail="new_name is required")
+    safe_path_segment(new_name)
 
     output_dir = Path(_st.config.output.output_dir).resolve()
     all_params = _load_job_params(output_dir, req.job_paths)
@@ -1073,7 +1079,7 @@ async def merge_jobs(req: MergeRequest):
     else:
         merged_params = _merge_by_polygon(all_params, new_name)
 
-    dest_parent = (output_dir / req.folder) if req.folder else output_dir
+    dest_parent = resolve_folder_dir(output_dir, req.folder)
     dest_parent.mkdir(parents=True, exist_ok=True)
     if req.folder:
         marker = dest_parent / ".dkk-folder"
@@ -1107,7 +1113,7 @@ async def create_folder(body: dict):
     if not folder_name or "/" in folder_name or folder_name.startswith("."):
         raise HTTPException(400, detail="Invalid folder name")
     output_dir = Path(_st.config.output.output_dir).resolve()
-    folder_dir = output_dir / folder_name
+    folder_dir = resolve_folder_dir(output_dir, folder_name)
     if folder_dir.exists():
         raise HTTPException(409, detail=f"Folder '{folder_name}' already exists")
     folder_dir.mkdir(parents=True, exist_ok=True)
@@ -1136,6 +1142,8 @@ async def export_route(body: dict):
     ``folder`` scopes to a specific group folder; null exports all folders.
     homes.kml is renamed ``<job_name>_homes.kml`` to avoid collisions.
     """
+    if not _st.config.output.allow_local_fs:
+        raise HTTPException(403, detail="Local filesystem actions are disabled")
     dest_str = (body.get("dest_dir") or "").strip()
     if not dest_str:
         raise HTTPException(400, detail="dest_dir is required")
@@ -1172,7 +1180,7 @@ async def export_route(body: dict):
 @router.delete("/api/folders/{folder_name}")
 async def delete_folder(folder_name: str, force: bool = False):
     output_dir = Path(_st.config.output.output_dir).resolve()
-    folder_dir = output_dir / folder_name
+    folder_dir = resolve_folder_dir(output_dir, folder_name)
     if not folder_dir.is_dir():
         raise HTTPException(404, detail=f"Folder '{folder_name}' not found")
     if not is_folder_dir(folder_dir):
