@@ -1,7 +1,7 @@
 // ── Card menu & folder operations ─────────────────────────────────────────────
 
 import { st } from './state.js';
-import { escHtml, jobApiUrl } from './utils.js';
+import { jobApiUrl } from './utils.js';
 import { apiPost } from './api.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';

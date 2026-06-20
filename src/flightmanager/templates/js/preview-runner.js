@@ -3,11 +3,9 @@
 import { st } from './state.js';
 import { apiPost } from './api.js';
 import { xbUpdate } from './dirty-tracking.js';
-import { map } from './map-init.js';
-import { getParams, showError, clearError, updateFolderHint, getFitBoundsFlag } from './form-controls.js';
-import { _legendUserVis, resetLegend } from './legend.js';
-import { setTakeoffAuto, getTakeoffUserMoved, getTakeoffPt, _renderTakeoffMarker } from './takeoff.js';
-import { renderMap, onPreviewDone } from './map-layers.js';
+import { getParams, showError, clearError } from './form-controls.js';
+import { getTakeoffUserMoved, getTakeoffPt } from './takeoff.js';
+import { onPreviewDone } from './map-layers.js';
 import { renderStatus } from './status-panel.js';
 import { loadJobsList, setJpOpen } from './jobs-panel.js';
 import { updateRouteStats } from './route-planner.js';
@@ -73,7 +71,7 @@ async function runJob(endpoint, params, label, onDone) {
 
   st.currentSSE.onmessage = function(e) {
     var d;
-    try { d = JSON.parse(e.data); } catch(ex) { console.error('SSE parse error', e.data); return; }
+    try { d = JSON.parse(e.data); } catch { console.error('SSE parse error', e.data); return; }
     console.log('[sse]', d.stage, d.pct + '%', d.msg || '');
     if (d.stage === 'keepalive') return;
     if (d.stage === 'error') {

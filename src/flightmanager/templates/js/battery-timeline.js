@@ -65,7 +65,7 @@ function _btPanToJob(path, mvLayers) {
       if (tp) b = b.extend([tp[1], tp[0]]);   // keep the takeoff marker in view too
       m.map.fitBounds(b, {padding: [80, 80], maxZoom: 17});
     });
-  } catch(e) {}
+  } catch {}
 }
 
 function _btEnsureContainer(mvLayers) {
@@ -124,7 +124,7 @@ function _btRender(routable, groups, mvLayers) {
   out.push('<svg width="' + svgW + '" height="' + SVG_H
     + '" xmlns="http://www.w3.org/2000/svg" pointer-events="none">');
 
-  segments.forEach(function(seg, si) {
+  segments.forEach(function(seg, _si) {
     var sx = seg.x;
     var cx = sx + seg.w / 2;
 

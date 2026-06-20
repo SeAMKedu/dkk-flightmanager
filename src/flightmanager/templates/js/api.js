@@ -21,7 +21,7 @@ async function _request(method, url, body) {
   }
   var r = await fetch(url, opts);
   var data = null;
-  try { data = await r.json(); } catch (e) { /* empty / non-JSON body */ }
+  try { data = await r.json(); } catch { /* empty / non-JSON body */ }
   if (!r.ok) {
     throw new ApiError((data && data.detail) || null, r.status);
   }

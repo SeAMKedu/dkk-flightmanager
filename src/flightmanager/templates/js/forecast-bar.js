@@ -16,7 +16,7 @@ import { apiGet } from './api.js';
 var _fcContainer = null;
 var _fcLoadedKey = null;   // folder key currently rendered (undefined = not loaded)
 var _fcReqSeq = 0;         // guards against out-of-order async responses
-var _fcCollapsed = (function(){ try { return localStorage.getItem('fcCollapsed') === '1'; } catch(e){ return false; } })();
+var _fcCollapsed = (function(){ try { return localStorage.getItem('fcCollapsed') === '1'; } catch { return false; }})();
 
 // Short codes + family colours for the satellite badges.
 var _SAT_CODE = {
@@ -85,7 +85,7 @@ function _fcEnsureContainer() {
 
 function _fcToggleCollapse() {
   _fcCollapsed = !_fcCollapsed;
-  try { localStorage.setItem('fcCollapsed', _fcCollapsed ? '1' : '0'); } catch (e) {}
+  try { localStorage.setItem('fcCollapsed', _fcCollapsed ? '1' : '0'); } catch {}
   _fcContainer.classList.toggle('collapsed', _fcCollapsed);
 }
 

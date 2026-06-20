@@ -1,7 +1,5 @@
 // ── Canvas-based HSV color picker ─────────────────────────────────────────────
 
-import { st } from './state.js';
-
 var _cpH = 210, _cpS = 0.71, _cpV = 0.96; // default: #3b82f6
 var _cpDraggingSV = false, _cpDraggingHue = false;
 

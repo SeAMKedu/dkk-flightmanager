@@ -5,7 +5,7 @@ import { apiPost } from './api.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 // Circular — only called at runtime:
-import { getMvMode, getMvLayers, _mvToggleSel, mvClearSel } from './map-view.js';
+import { getMvMode, _mvToggleSel, mvClearSel } from './map-view.js';
 import { openJob } from './job-ops.js';
 
 export var _selectedJobs = new Set();

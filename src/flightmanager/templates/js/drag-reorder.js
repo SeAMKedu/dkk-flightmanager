@@ -76,13 +76,8 @@ function _greedyTSPContinue(pts, anchorLat, anchorLng) {
   return route;
 }
 
-var _routeConfirmGroup = null;
-var _routeConfirmFolderKey = null;
-
 export function closeRouteConfirmModal() {
   document.getElementById('route-confirm-modal').classList.remove('open');
-  _routeConfirmGroup = null;
-  _routeConfirmFolderKey = null;
 }
 
 export async function autoSortFolder(group, folderKey) {
@@ -96,9 +91,6 @@ export async function autoSortFolder(group, folderKey) {
     await _doReRouteAll(readyJobs, folderKey);
     return;
   }
-
-  _routeConfirmGroup = group;
-  _routeConfirmFolderKey = folderKey;
 
   var desc = document.getElementById('route-confirm-desc');
   var btns = document.getElementById('route-confirm-btns');

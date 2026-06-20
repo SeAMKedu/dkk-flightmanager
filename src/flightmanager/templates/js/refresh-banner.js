@@ -16,7 +16,7 @@ export async function checkStaleJobs() {
   var banner = document.getElementById('refresh-banner');
   if (!banner) return;
   var data;
-  try { data = await apiGet('/api/refresh/scan'); } catch (e) { return; }
+  try { data = await apiGet('/api/refresh/scan'); } catch { return; }
   var stale = data.stale || [];
   if (!stale.length) { banner.style.display = 'none'; return; }
 

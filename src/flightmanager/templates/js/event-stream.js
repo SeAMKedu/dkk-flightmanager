@@ -11,7 +11,7 @@ export function _initEventStream() {
 
   es.onmessage = function(e) {
     var evt;
-    try { evt = JSON.parse(e.data); } catch(ex) { return; }
+    try { evt = JSON.parse(e.data); } catch { return; }
     if (evt.type !== 'jobs_changed') return;
 
     if (_debounceTimer) clearTimeout(_debounceTimer);

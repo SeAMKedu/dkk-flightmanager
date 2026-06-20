@@ -382,10 +382,10 @@ export async function openAbout() {
   try {
     var d = await apiGet('/api/version');
     document.getElementById('about-version').textContent = 'v' + d.version;
-  } catch(e) {}
+  } catch {}
   try {
     _renderStats(await apiGet('/api/stats'));
-  } catch(e) {}
+  } catch {}
 }
 
 export function closeAbout() {

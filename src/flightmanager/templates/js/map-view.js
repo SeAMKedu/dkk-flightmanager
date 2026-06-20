@@ -8,8 +8,8 @@ import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 import { openDeleteModal, openMoveModal } from './modal-utils.js';
 import { clearTakeoffForMapView, _hideVlos } from './takeoff.js';
-import { getMvStatColor, getMvStatMode, statModeColorsJobs, clearMgrsLayer, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
-import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
+import { getMvStatColor, getMvStatMode, statModeColorsJobs, clearMgrsLayer, renderStatPanel } from './stat-view.js';
+import { showBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
 import { showForecastBar, destroyForecastBar, setForecastBarShifted } from './forecast-bar.js';
 import { hideCesiumView } from './cesium-view.js';
 import { clearArrowLayer } from './route-planner.js';
@@ -29,8 +29,6 @@ var _mvHoverTimer = null;
 var _mvSelected = new Set();
 var _mvAllFeatures = [];
 var _mvCurrentFolder = null;
-var _DEFAULT_COLOR = '#3b82f6';
-var _mvRouteLayer = null;
 var _mvRouteSeq = 0;
 var _mvRouteVisible = true;
 var _mvDimLayer = null;
@@ -102,7 +100,7 @@ export function closeMapView() {
   clearMgrsLayer();
   _mvClearLayers();
   _mvHideDim();
-  clearLaunchSites(map); _mvRouteLayer = null;
+  clearLaunchSites(map);
   clearArrowLayer();
   _mvSelected.forEach(function(path) {
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
@@ -131,7 +129,6 @@ async function _mvLoad(folderFilter, skipFit) {
 
 export async function _mvDrawRoute() {
   clearLaunchSites(map);          // tear down layers + detached zoom/move handlers
-  _mvRouteLayer = null;
   // Sequence guard: _mvDrawRoute is fired from several places that can overlap
   // (e.g. _mvApplyFilter + _mvLoad on open). The async fetch below means a stale
   // call could otherwise create a second, untracked layer group that leaks.
@@ -147,7 +144,7 @@ export async function _mvDrawRoute() {
     var resp = await apiGet(url);
     if (seq !== _mvRouteSeq) return;            // superseded by a newer call
     if (!_mvRouteVisible || !_mvMode) return;   // state may have changed during await
-    _mvRouteLayer = drawLaunchSites(map, resp.sites || []);
+    drawLaunchSites(map, resp.sites || []);
   } catch (e) {
     console.error('[launch-sites]', e);
   }
@@ -178,7 +175,7 @@ function _mvApplyFilter(folderFilter, skipFit) {
     if (layer) {
       _mvJobGroup.addLayer(layer);
       _mvLayers.push({path: f.properties.path, layer: layer, feature: f});
-      try { bounds.push(layer.getBounds()); } catch(e) {}
+      try { bounds.push(layer.getBounds()); } catch {}
     }
   });
   if (bounds.length && !skipFit) {
@@ -258,7 +255,7 @@ function _mvMakeLayer(feature) {
       mvOpenJob(p.path);
     });
     return layer;
-  } catch(e) { return null; }
+  } catch { return null; }
 }
 
 function _mvDash(p) {
@@ -336,7 +333,7 @@ export async function mvToggleSkip(path, currentSkipped) {
     try {
       _mvAllFeatures = (await apiGet('/api/jobs/geojson')).features || [];
       _mvApplyFilter(_mvCurrentFolder, true);
-    } catch(e) { /* geojson refresh best-effort */ }
+    } catch { /* geojson refresh best-effort */ }
     loadJobsList();
   } catch(e) { showError(e.detail || ('Failed: ' + e.message)); }
 }
@@ -497,12 +494,12 @@ export function mvBulkDelete() {
 export function _mvStatJobClickInternal(path) {
   var item = _mvLayers.find(function(i) { return i.path === path; });
   if (!item) return;
-  try { map.fitBounds(item.layer.getBounds(), {padding: [60, 60], maxZoom: 16}); } catch(e) {}
+  try { map.fitBounds(item.layer.getBounds(), {padding: [60, 60], maxZoom: 16}); } catch {}
   if (!_mvSelected.has(path)) _mvToggleSel(path);
 }
 
 // Called by stat-view.js when stat mode changes
-export function _onStatModeChangeInternal(mode) {
+export function _onStatModeChangeInternal(_mode) {
   renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
   _mvLayers.forEach(function(item) {
     if (_mvSelected.has(item.path)) return;

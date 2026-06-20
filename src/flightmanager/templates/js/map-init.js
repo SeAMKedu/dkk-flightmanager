@@ -10,7 +10,6 @@ var _baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   {attribution:'&copy; OpenStreetMap', maxZoom:19});
 var _baseOrto = null;
 var _baseLayerCtrl = null;
-var _mmlApiKey = '';           // set from /api/config in init()
 _baseOSM.addTo(map);
 
 export function _initBaseLayers(mmlKey) {

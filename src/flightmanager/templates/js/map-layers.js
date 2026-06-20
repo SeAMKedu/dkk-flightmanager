@@ -3,7 +3,7 @@
 import { st } from './state.js';
 import { map, lrs, editLayers, resetLrs } from './map-init.js';
 import { _legendUserVis, resetLegend, redrawRings } from './legend.js';
-import { getFitBoundsFlag, setFitBoundsFlag, getLastPreviewedIds, setLastPreviewedIds,
+import { getFitBoundsFlag, setFitBoundsFlag, setLastPreviewedIds,
          getRadiusLinked, setRadiusLinked, idsKey, updateGsd, clearAreaFocus, showError } from './form-controls.js';
 import { getTakeoffAuto, setTakeoffAuto, getTakeoffUserMoved, _renderTakeoffMarker } from './takeoff.js';
 import { renderStatus } from './status-panel.js';
@@ -285,6 +285,6 @@ export function centroid(geom) {
       return [cs.reduce(function(s,c){return s+c[1];},0)/cs.length,
               cs.reduce(function(s,c){return s+c[0];},0)/cs.length];
     }
-  } catch(e){}
+  } catch {}
   return null;
 }

@@ -1,7 +1,7 @@
 // ── Bridge / Split mode ────────────────────────────────────────────────────────
 
 import { st } from './state.js';
-import { map, lrs, editLayers, layerGeom } from './map-init.js';
+import { map, editLayers, layerGeom } from './map-init.js';
 import { markDirty } from './dirty-tracking.js';
 import { _setEditedPoly } from './form-controls.js';
 // Circular — only called at runtime:

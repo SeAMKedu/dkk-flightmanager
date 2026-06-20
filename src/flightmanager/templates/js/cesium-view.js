@@ -135,7 +135,7 @@ function _loadCesium() {
 }
 
 function _createViewer() {
-  /* eslint-disable no-undef */
+   
   Cesium.Ion.defaultAccessToken = '';
   _viewer = new Cesium.Viewer('cesium-container', {
     baseLayerPicker:       false,
@@ -158,7 +158,7 @@ function _createViewer() {
   _viewer.scene.globe.depthTestAgainstTerrain = false;
   _viewer.scene.highDynamicRange = false;
   _viewer.clock.onTick.addEventListener(_onTick);
-  /* eslint-enable no-undef */
+   
 }
 
 // ── Scene rendering ───────────────────────────────────────────────────────────
@@ -177,9 +177,9 @@ function _clearScene() {
 
 /** Add entity to a named group and to the flat list; applies current layer visibility. */
 function _addEntity(group, entityDef) {
-  /* eslint-disable no-undef */
+   
   var e = _viewer.entities.add(entityDef);
-  /* eslint-enable no-undef */
+   
   e.show = _layerVis[group];
   _entityGroups[group].push(e);
   _currentEntities.push(e);
@@ -206,13 +206,13 @@ function _bldgCenter(geom) {
       var lat = cs.reduce(function(s, c) { return s + c[1]; }, 0) / cs.length;
       return [lng, lat];
     }
-  } catch(e) {}
+  } catch {}
   return null;
 }
 
 /** Build a Cesium PolygonHierarchy from a GeoJSON Polygon coordinate ring array. */
 function _polyHierarchy(polyCoords) {
-  /* eslint-disable no-undef */
+   
   var outer = polyCoords[0].map(function(c) {
     return Cesium.Cartesian3.fromDegrees(c[0], c[1]);
   });
@@ -222,7 +222,7 @@ function _polyHierarchy(polyCoords) {
     }));
   });
   return new Cesium.PolygonHierarchy(outer, holes);
-  /* eslint-enable no-undef */
+   
 }
 
 function _effectiveSpeedMs() {
@@ -259,7 +259,7 @@ function _viridisCesiumColor(t) {
   var i = Math.min(Math.floor(seg), _C3D_STOPS.length - 2);
   var f = seg - i;
   var a = _C3D_STOPS[i], b = _C3D_STOPS[i + 1];
-  return new Cesium.Color( // eslint-disable-line no-undef
+  return new Cesium.Color(  
     (a[0] + f * (b[0] - a[0])) / 255,
     (a[1] + f * (b[1] - a[1])) / 255,
     (a[2] + f * (b[2] - a[2])) / 255,
@@ -399,7 +399,7 @@ function _renderScene() {
 
   _totalDuration = waypoints[waypoints.length - 1].time;
 
-  /* eslint-disable no-undef */
+   
   var positions = waypoints.map(function(wp) {
     return Cesium.Cartesian3.fromDegrees(wp.lon, wp.lat, wp.height);
   });
@@ -648,7 +648,7 @@ function _renderScene() {
     });
   }
 
-  /* eslint-enable no-undef */
+   
 
   // Fly to scene
   _viewer.zoomTo(curtainRef);

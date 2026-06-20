@@ -7,16 +7,16 @@ import { defaultJobName, updateFolderHint, updateGsd, setSub, setSimpManual,
          clearPolyEdit, onIdBlur, simpStep, setSimpAuto, scheduleAutoUpdate,
          getParams, showError, clearError, parseIds } from './form-controls.js';
 import { markDirty, confirmIfDirty, hideConfirmModal } from './dirty-tracking.js';
-import { setJpOpen, toggleJp, loadJobsList, buildJobCard } from './jobs-panel.js';
+import { setJpOpen, toggleJp, loadJobsList } from './jobs-panel.js';
 import { renderStatus } from './status-panel.js';
 import { openSettings, closeSettings, discardSettings, saveSettings, cfgSearch, openAbout, closeAbout } from './settings-panel.js';
-import { _initBaseLayers, resetMapToUserLocation } from './map-init.js';
+import { _initBaseLayers } from './map-init.js';
 import { startPreview, startExport } from './preview-runner.js';
 import { toggleEdit, saveEdit, resetPoly } from './polygon-edit.js';
 import { exitBridgeMode, commitSplit } from './polygon-bridge.js';
 import { openJob, goBackToMap, revealJob, cloneJob, confirmDeleteJob, deleteJob,
          startRename, doRename, showStaleNotice, hideStaleNotice,
-         toggleColorPopup, _applyColor, initColorPalette, _setColorPicker } from './job-ops.js';
+         toggleColorPopup, _applyColor, initColorPalette } from './job-ops.js';
 import { showFolderOnMap, openMapView, closeMapView, mvOpenJob, mvToggleSkip,
          mvDeleteJob, toggleMvRoute, mvMerge, mvBulkMove, mvBulkDelete, mvClearSel,
          mvAutoRoute } from './map-view.js';
@@ -27,7 +27,7 @@ import { bulkMove, bulkDelete, exportKml, exportPdf, openGoogleMaps, routeRename
          exportRoute, closeExportRouteModal, submitExportRoute,
          unifiedMerge, unifiedBulkMove, unifiedBulkDelete, unifiedClearSel } from './bulk-ops.js';
 import { openBatchDialog, closeBatchDialog, setBatchType, submitBatch } from './batch-modal.js';
-import { routeAngleAuto, routeAngleStep, speedAuto, speedStep, updateRouteStats } from './route-planner.js';
+import { routeAngleAuto, routeAngleStep, speedAuto, speedStep } from './route-planner.js';
 import { onStatModeChange, _mvStatJobClick } from './stat-view.js';
 import { _initEventStream, showExtModifiedNotice, hideExtModifiedNotice, reloadCurrentJob } from './event-stream.js';
 import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';

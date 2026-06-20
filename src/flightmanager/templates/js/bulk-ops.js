@@ -9,9 +9,8 @@ import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal } from './
 import { closeCardMenu } from './card-menu.js';
 import { openDeleteModal, openMoveModal, openRouteRenameModal } from './modal-utils.js';
 // Circular — only called at runtime:
-import { getMvMode, getMvSelected, getMvCurrentFolder, openMapView,
+import { getMvMode, getMvSelected, getMvCurrentFolder,
          mvMerge, mvBulkMove, mvBulkDelete, mvClearSel } from './map-view.js';
-import { openJob } from './job-ops.js';
 import { setForecastBarPdf } from './forecast-bar.js';
 
 export function bulkMove() {
@@ -42,7 +41,7 @@ async function _loadSelectedJobs() {
     try {
       var data = await apiGet(jobApiUrl(paths[i]));
       jobs.push({path: paths[i], params: data.params});
-    } catch (e) { /* skip */ }
+    } catch { /* skip */ }
   }
   if (!jobs.length) return null;
   jobs.sort(function(a, b) {
@@ -82,7 +81,7 @@ function _streamReport(jobId, fileName) {
   return new Promise(function(resolve, reject) {
     var es = new EventSource('/api/report/progress/' + jobId);
     es.onmessage = async function(ev) {
-      var d; try { d = JSON.parse(ev.data); } catch (_) { return; }
+      var d; try { d = JSON.parse(ev.data); } catch { return; }
       if (d.stage === 'keepalive') return;
       if (d.stage === 'error') { es.close(); reject(new Error(d.msg || 'generation error')); return; }
       if (d.stage === 'done') {

@@ -48,7 +48,7 @@ document.getElementById('jp-filter').addEventListener('input', function() {
 export async function loadJobsList() {
   try {
     var data;
-    try { data = await apiGet('/api/jobs'); } catch (e) { return; }
+    try { data = await apiGet('/api/jobs'); } catch { return; }
     _jobsGroups = data.groups || [];
     _jobsCache = [];
     _jobsGroups.forEach(function(g){ _jobsCache = _jobsCache.concat(g.jobs || []); });

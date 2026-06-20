@@ -75,7 +75,7 @@ export function saveEdit() {
   setTimeout(startPreview, 0);
 }
 
-map.on('dblclick', function(e) {
+map.on('dblclick', function(_e) {
   if (st._mvMode) return;
   if (st.editMode) saveEdit();
 });

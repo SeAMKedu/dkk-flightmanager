@@ -4,10 +4,10 @@ import { st } from './state.js';
 import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from './map-init.js';
 import { escHtml, jobApiUrl } from './utils.js';
 import { apiGet, apiPost, apiPatch, apiDelete } from './api.js';
-import { markDirty, confirmIfDirty, xbUpdate } from './dirty-tracking.js';
+import { confirmIfDirty, xbUpdate } from './dirty-tracking.js';
 import { showError, clearError, updateFolderHint, updateGsd, setRadiusLinked,
          setSub, setSimpAuto, setSimpManual, setAutoTimer,
-         getAutoTimer, setFitBoundsFlag, setLastPreviewedIds, _setEditedPoly, _clearEditedPoly,
+         getAutoTimer, setFitBoundsFlag, setLastPreviewedIds, _setEditedPoly,
          _setSec } from './form-controls.js';
 import { redrawRings } from './legend.js';
 import { loadJobsList } from './jobs-panel.js';
@@ -15,14 +15,14 @@ import { renderStatus } from './status-panel.js';
 import { renderMap } from './map-layers.js';
 import { setRouteAngleSilent as _setRouteAngleSilentRP,
          setSpeedSilent } from './route-planner.js';
-import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
+import { _cpSetFromHex } from './color-picker.js';
 import { restoreTplSettings } from './tpl-modal.js';
 import { hideExtModifiedNotice } from './event-stream.js';
 // Circular — only called at runtime:
 import { startPreview } from './preview-runner.js';
 import { closeMapView, getMvMode, setMvFromEditor, openMapView } from './map-view.js';
 import { _detachEditListeners } from './polygon-edit.js';
-import { _clearTakeoff, getTakeoffAuto, getTakeoffUserMoved, _renderTakeoffMarker,
+import { _clearTakeoff, _renderTakeoffMarker,
          setTakeoffAuto, setTakeoffUserMoved } from './takeoff.js';
 
 export function openJob(path) {

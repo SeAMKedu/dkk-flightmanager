@@ -12,7 +12,6 @@ var _routeDebounceTimer = null;
 var _routeLayer = null;
 var _arrowLayer = null;
 var _coverageLayer = null;
-var _routeAngleAdjusting = false;
 var _lastRouteStats = null;
 var _lastFpAcross = null;
 var _lastFpAlong = null;
@@ -491,12 +490,10 @@ export function setSpeedSilent(v) {
     clearTimeout(_angleHoldTimer);
     clearInterval(_angleRepeatInterval);
     _angleHoldTimer = null; _angleRepeatInterval = null;
-    _routeAngleAdjusting = false;
     updateRouteOverlay();
   }
 
   function _startRepeat(dir) {
-    _routeAngleAdjusting = true;
     routeAngleStep(dir);
     _angleHoldTimer = setTimeout(function() {
       _angleRepeatInterval = setInterval(function() { routeAngleStep(dir); }, 80);

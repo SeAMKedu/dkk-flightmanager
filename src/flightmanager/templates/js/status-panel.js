@@ -17,7 +17,6 @@ export function renderStatus(s) {
   function fmt1(v) { return s && v != null ? v.toFixed(1) : _dash; }
   function fmt0(v) { return s && v != null ? v.toFixed(0) : _dash; }
   function fmt2(v) { return s && v != null ? v.toFixed(2) : _dash; }
-  function fmti(v) { return s && v != null ? String(v)    : _dash; }
   var rh = s ? (s.review_reasons||[]).map(function(r){
     return '<div class="ritem">&#9888; '+r+'</div>';
   }).join('') : '';
