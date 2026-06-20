@@ -38,6 +38,10 @@ dist/
 build/
 .eggs/
 
+# Node / JS tooling (dev-only — never part of the Python package)
+node_modules/
+package-lock.json
+
 # SQLite
 *.sqlite
 *.sqlite3

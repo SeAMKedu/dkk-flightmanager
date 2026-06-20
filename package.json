@@ -1,0 +1,16 @@
+{
+  "name": "dkk-flightmanager-ui",
+  "version": "1.8.0",
+  "private": true,
+  "description": "Lint config for the flightmanager browser UI (ES modules in src/flightmanager/templates/js)",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint src/flightmanager/templates/js",
+    "lint:fix": "eslint src/flightmanager/templates/js --fix"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0"
+  }
+}

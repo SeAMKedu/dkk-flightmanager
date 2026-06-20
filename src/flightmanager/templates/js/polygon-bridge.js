@@ -256,7 +256,7 @@ function _computeSplitPolygons(geom, coordA, coordB, polyIdx) {
   var ring = partCoords[0];
   var N = ring.length - 1;
   var iA = -1, iB = -1;
-  for (var i = 0; i < N; i++) {
+  for (i = 0; i < N; i++) {
     if (ring[i][0] === coordA[0] && ring[i][1] === coordA[1]) iA = i;
     if (ring[i][0] === coordB[0] && ring[i][1] === coordB[1]) iB = i;
   }
@@ -265,12 +265,12 @@ function _computeSplitPolygons(geom, coordA, coordB, polyIdx) {
   if (iB - iA < 2 || N - (iB - iA) < 2) return null;
 
   var r1 = [];
-  for (var i = iA; i <= iB; i++) r1.push(ring[i]);
+  for (i = iA; i <= iB; i++) r1.push(ring[i]);
   r1.push(ring[iA]);
 
   var r2 = [];
-  for (var i = iB; i < N; i++) r2.push(ring[i]);
-  for (var i = 0; i <= iA; i++) r2.push(ring[i]);
+  for (i = iB; i < N; i++) r2.push(ring[i]);
+  for (i = 0; i <= iA; i++) r2.push(ring[i]);
   r2.push(ring[iB]);
 
   var holesA = partCoords.slice(1);

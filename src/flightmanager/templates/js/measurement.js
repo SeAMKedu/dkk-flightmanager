@@ -66,8 +66,8 @@ function _initMeasEvents() {
       };
     }
     if (_measActive && _measTemp) {
-      var rect = container.getBoundingClientRect();
-      var cp = L.point(e.clientX - rect.left, e.clientY - rect.top);
+      rect = container.getBoundingClientRect();
+      cp = L.point(e.clientX - rect.left, e.clientY - rect.top);
       _measTemp.endLL = map.containerPointToLatLng(cp);
       _redrawMeas();
     }

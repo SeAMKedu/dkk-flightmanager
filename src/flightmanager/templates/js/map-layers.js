@@ -192,7 +192,7 @@ export function renderMap(data) {
                   : null;
                 altLine = '<br><small>Altitude: '+lo+(hi?' – '+hi:'+')+' m AGL — fly below '+lo+' m to exit</small>';
               } else if (p.upper_ref === 'AGL' && p.upper_limit != null) {
-                var hi = p.upper_uom === 'FT' ? Math.round(p.upper_limit * 0.3048) : p.upper_limit;
+                hi = p.upper_uom === 'FT' ? Math.round(p.upper_limit * 0.3048) : p.upper_limit;
                 altLine = '<br><small>Ground to '+hi+' m AGL</small>';
               }
               var nestLine = p.contained_by && p.contained_by.length

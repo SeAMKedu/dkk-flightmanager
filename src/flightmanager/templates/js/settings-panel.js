@@ -359,7 +359,7 @@ function _renderStats(data) {
 
   if (!rows.length) { el.innerHTML = ''; return; }
 
-  var b = _fmtBytes(totalBytes);
+  b = _fmtBytes(totalBytes);
   var summary = totalDl + ' fetched,  ' + totalHits + ' cached' + (b ? ',  ' + b : '');
 
   var html = '<div class="about-stats-title">Session statistics</div>'
