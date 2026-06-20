@@ -235,6 +235,12 @@
       </select>
     </div>
     <div id="bridge-hint"></div>
+    <!-- PDF report progress: slim bar between the action bar and the forecast window -->
+    <div id="pdf-progress" class="hidden">
+      <span class="pp-title">Generating PDF</span>
+      <span class="pp-msg" id="pp-msg">Starting</span>
+      <span class="pp-bar"><span class="pp-fill" id="pp-fill"></span></span>
+    </div>
     <!-- Map view: floating action bar (top-center, visible when jobs selected) -->
     <div id="mv-actions">
       <span id="mv-sel-count"></span>
@@ -635,12 +641,6 @@
   <div id="ttitle">Running…</div>
   <div id="ttrack"><div id="tfill"></div></div>
   <div id="tmsg">Starting…</div>
-</div>
-
-<div id="pdf-progress" class="hidden">
-  <div class="pp-title">Generating PDF</div>
-  <div class="pp-msg" id="pp-msg">Starting</div>
-  <div class="pp-bar"><div class="pp-fill" id="pp-fill"></div></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

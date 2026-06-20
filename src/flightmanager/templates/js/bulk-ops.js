@@ -12,6 +12,7 @@ import { openDeleteModal, openMoveModal, openRouteRenameModal } from './modal-ut
 import { getMvMode, getMvSelected, getMvCurrentFolder, openMapView,
          mvMerge, mvBulkMove, mvBulkDelete, mvClearSel } from './map-view.js';
 import { openJob } from './job-ops.js';
+import { setForecastBarPdf } from './forecast-bar.js';
 
 export function bulkMove() {
   if (!_selectedJobs.size) return;
@@ -62,6 +63,7 @@ var _pdfBusy = false;
 function _ppShow() {
   var el = document.getElementById('pdf-progress');
   if (el) { el.classList.remove('hidden'); _ppSet(0, 'Starting'); }
+  setForecastBarPdf(true);
 }
 function _ppSet(pct, msg) {
   var f = document.getElementById('pp-fill');
@@ -72,6 +74,7 @@ function _ppSet(pct, msg) {
 function _ppHide() {
   var el = document.getElementById('pdf-progress');
   if (el) el.classList.add('hidden');
+  setForecastBarPdf(false);
 }
 
 // Stream a report job's SSE progress into the overlay, then download the PDF.

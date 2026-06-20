@@ -3,6 +3,7 @@
 /* Satellite overpass + weather forecast bar (top centre, mirrors battery timeline) */
 #forecast-bar{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:600;background:rgba(15,23,42,.86);border-radius:8px;padding:5px 8px 4px;backdrop-filter:blur(3px);display:none;max-width:min(86vw,860px);transition:top .15s ease}
 #forecast-bar.with-actions{top:54px}
+#forecast-bar.with-pdf{top:66px}
 #forecast-bar.collapsed{max-width:none}
 #forecast-bar.collapsed .fc-body{display:none}
 #forecast-bar .fc-loading{color:#cbd5e1;font:600 11px sans-serif;padding:6px 10px;text-align:center}

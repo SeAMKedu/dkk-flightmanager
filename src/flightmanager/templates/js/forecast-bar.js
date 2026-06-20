@@ -63,6 +63,12 @@ export function setForecastBarShifted(shifted) {
   if (_fcContainer) _fcContainer.classList.toggle('with-actions', !!shifted);
 }
 
+// Nudge the bar further down while the PDF progress bar occupies the gap below
+// the action bar, so the two never overlap.
+export function setForecastBarPdf(active) {
+  if (_fcContainer) _fcContainer.classList.toggle('with-pdf', !!active);
+}
+
 function _fcEnsureContainer() {
   if (!_fcContainer) {
     _fcContainer = document.createElement('div');

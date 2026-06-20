@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import base64
 import io
+import math
 import os
 
 from fpdf import FPDF
 from PIL import Image
-from shapely.geometry import shape
+from shapely.geometry import box, shape
 
 from flightmanager import tilemap
 from flightmanager.launch_sites import cluster_jobs
@@ -40,6 +41,8 @@ C_SURVEY = (59, 130, 246)
 C_STRIP = (245, 158, 11)
 C_TRANSIT = (251, 191, 36)
 C_KEEPOUT = (220, 38, 38)
+C_ZONE = (239, 68, 68)
+C_ZONE_LINE = (153, 27, 27)
 C_TAKEOFF = (15, 23, 42)
 C_LAUNCH = (245, 158, 11)
 C_READY = (22, 163, 74)
@@ -96,6 +99,26 @@ def _bbox_of(geoms: list[dict], extra_points: list | None = None):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+# Minimum map ground width (m) for the MML ortho (native z15) so small parcels
+# don't upscale into mush. ~350 m keeps the z15 tiles legible.
+_MML_MIN_EXTENT_M = 350.0
+
+
+def _ensure_min_extent(bbox, min_m: float):
+    """Expand a bbox (about its centre, preserving aspect) so its ground width is
+    at least *min_m* metres. Only ever grows."""
+    minlon, minlat, maxlon, maxlat = bbox
+    latc = (minlat + maxlat) / 2
+    wm = (maxlon - minlon) * 111320.0 * max(math.cos(math.radians(latc)), 1e-6)
+    if wm <= 0 or wm >= min_m:
+        return bbox
+    f = min_m / wm
+    clon, clat = (minlon + maxlon) / 2, (minlat + maxlat) / 2
+    dlon = (maxlon - minlon) * f / 2
+    dlat = (maxlat - minlat) * f / 2
+    return (clon - dlon, clat - dlat, clon + dlon, clat + dlat)
+
+
 # ── map drawing ───────────────────────────────────────────────────────────────
 
 def _draw_map(pdf: FPDF, x: float, y: float, w: float, h: float, *, bbox, overlays: dict,  # noqa: C901
@@ -107,6 +130,11 @@ def _draw_map(pdf: FPDF, x: float, y: float, w: float, h: float, *, bbox, overla
     bbox outward (smaller = tighter zoom).
     """
     bbox = tilemap.fit_bbox(tilemap.pad_bbox(bbox, pad), w / h)
+    # MML ortho tops out at native z15: a tiny field upscales those tiles into a
+    # pixelated mess. Enforce a minimum ground extent so the zoom never goes past
+    # what z15 renders acceptably.
+    if basemap == "mml":
+        bbox = _ensure_min_extent(bbox, _MML_MIN_EXTENT_M)
     provider = tilemap.get_provider(basemap, mml_key=mml_key)
     bm = tilemap.fetch_basemap(bbox, target_px=int(w * 6), provider=provider, mml_key=mml_key)
     iw, ih = bm.size
@@ -121,13 +149,15 @@ def _draw_map(pdf: FPDF, x: float, y: float, w: float, h: float, *, bbox, overla
     # vector overlays read clearly. (Per-image opacity needs an alpha raster;
     # a low-opacity white fill via the graphics state is the lightweight path.)
     if basemap == "mml":
-        with pdf.local_context(fill_opacity=0.32):
+        with pdf.local_context(fill_opacity=0.60):
             pdf.set_fill_color(255, 255, 255)
             pdf.rect(x, y, w, h, style="F")
 
     def T(lon, lat):
         px, py = bm.lonlat_to_px(lon, lat)
         return x + px / iw * w, y + py / ih * h
+
+    map_rect = box(*bbox)   # for the UAS-zone "does it encompass the whole map?" test
 
     def poly(geom, color, lw, fill=False, fillc=None, dash=None):
         pdf.set_draw_color(*color)
@@ -158,48 +188,71 @@ def _draw_map(pdf: FPDF, x: float, y: float, w: float, h: float, *, bbox, overla
         if dash:
             pdf.set_dash_pattern()
 
+    # All vector overlays are clipped to the map rect — a keepout/circle/strip that
+    # extends past the framed bbox must not spill across the page.
     # Order: launch circles (bottom) -> keepout -> survey -> transits -> strips -> takeoffs.
-    for lc in overlays.get("launch_circles", []):
-        cx, cy = T(lc["center"][0], lc["center"][1])
-        ex, ey = T(lc["edge"][0], lc["edge"][1])     # a point radius_m from centre
-        r = ((ex - cx) ** 2 + (ey - cy) ** 2) ** 0.5
-        pdf.set_draw_color(*C_LAUNCH)
-        pdf.set_line_width(0.4)
-        pdf.set_dash_pattern(dash=1.2, gap=1.2)
-        pdf.circle(cx, cy, r, style="D")
-        pdf.set_dash_pattern()
-        # crosshair at the circle centre
-        pdf.set_line_width(0.3)
-        pdf.line(cx - 1.4, cy, cx + 1.4, cy)
-        pdf.line(cx, cy - 1.4, cx, cy + 1.4)
+    with pdf.rect_clip(x, y, w, h):
+        # UAS zones (filled red, 0.75 opaque) - but skip any zone that fully
+        # encompasses the map view (e.g. a large airfield zone the whole area sits
+        # inside): filling the entire map adds nothing. Smaller zones with an edge
+        # in view are kept, so nearby restrictions still show.
+        for zg in overlays.get("zones", []):
+            try:
+                geom = shape(zg)
+            except Exception:
+                continue
+            if geom.contains(map_rect):
+                continue
+            with pdf.local_context(fill_opacity=0.75):
+                pdf.set_fill_color(*C_ZONE)
+                pdf.set_draw_color(*C_ZONE_LINE)
+                pdf.set_line_width(0.4)
+                for ring in _rings(zg):
+                    pts = [T(c[0], c[1]) for c in ring]
+                    if len(pts) >= 2:
+                        pdf.polygon(pts, style="DF")
 
-    poly(overlays.get("keepout"), C_KEEPOUT, 0.3)
-    for op in overlays.get("polygons", []):        # overview: many survey polygons
-        poly(op, C_SURVEY, 0.4)
-    poly(overlays.get("survey"), C_SURVEY, 0.6)
-    lines(overlays.get("transits"), C_TRANSIT, 0.35, dash=1.0)
-    lines(overlays.get("strips"), C_STRIP, 0.5)
+        for lc in overlays.get("launch_circles", []):
+            cx, cy = T(lc["center"][0], lc["center"][1])
+            ex, ey = T(lc["edge"][0], lc["edge"][1])     # a point radius_m from centre
+            r = ((ex - cx) ** 2 + (ey - cy) ** 2) ** 0.5
+            pdf.set_draw_color(*C_LAUNCH)
+            pdf.set_line_width(0.6)
+            pdf.set_dash_pattern(dash=1.2, gap=1.2)
+            pdf.circle(cx, cy, r, style="D")
+            pdf.set_dash_pattern()
+            # crosshair at the circle centre
+            pdf.set_line_width(0.4)
+            pdf.line(cx - 1.4, cy, cx + 1.4, cy)
+            pdf.line(cx, cy - 1.4, cx, cy + 1.4)
 
-    # Flight-order legs (overview): straight dashed lines between takeoffs.
-    legs = overlays.get("legs")
-    if legs and len(legs) >= 2:
-        pdf.set_draw_color(*C_STRIP)
-        pdf.set_line_width(0.4)
-        pdf.set_dash_pattern(dash=1.5, gap=1.2)
-        pdf.polyline([T(p[0], p[1]) for p in legs])
-        pdf.set_dash_pattern()
+        poly(overlays.get("keepout"), C_KEEPOUT, 0.5)
+        for op in overlays.get("polygons", []):        # overview: many survey polygons
+            poly(op, C_SURVEY, 0.6)
+        poly(overlays.get("survey"), C_SURVEY, 0.9)
+        lines(overlays.get("transits"), C_TRANSIT, 0.5, dash=1.0)
+        lines(overlays.get("strips"), C_STRIP, 0.75)
 
-    for tk in overlays.get("takeoffs", []):
-        tx, ty = T(tk["pt"][0], tk["pt"][1])
-        pdf.set_fill_color(*C_STRIP)
-        pdf.set_draw_color(255, 255, 255)
-        pdf.set_line_width(0.4)
-        pdf.circle(tx, ty, 1.8, style="DF")
-        if tk.get("label") is not None:
-            pdf.set_font("Helvetica", "B", 7)
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_xy(tx - 3, ty - 1.5)
-            pdf.cell(6, 3, str(tk["label"]), align="C")
+        # Flight-order legs (overview): straight dashed lines between takeoffs.
+        legs = overlays.get("legs")
+        if legs and len(legs) >= 2:
+            pdf.set_draw_color(*C_STRIP)
+            pdf.set_line_width(0.6)
+            pdf.set_dash_pattern(dash=1.5, gap=1.2)
+            pdf.polyline([T(p[0], p[1]) for p in legs])
+            pdf.set_dash_pattern()
+
+        for tk in overlays.get("takeoffs", []):
+            tx, ty = T(tk["pt"][0], tk["pt"][1])
+            pdf.set_fill_color(*C_STRIP)
+            pdf.set_draw_color(255, 255, 255)
+            pdf.set_line_width(0.5)
+            pdf.circle(tx, ty, 1.9, style="DF")
+            if tk.get("label") is not None:
+                pdf.set_font("Helvetica", "B", 7)
+                pdf.set_text_color(0, 0, 0)
+                pdf.set_xy(tx - 3, ty - 1.5)
+                pdf.cell(6, 3, str(tk["label"]), align="C")
 
     pdf.set_draw_color(*C_LINE)
     pdf.set_line_width(0.3)
@@ -267,6 +320,15 @@ def _t(s) -> str:
     return s.encode("latin-1", "replace").decode("latin-1")
 
 
+def _fit_text(pdf: FPDF, text: str, max_w: float) -> str:
+    """Trim *text* with a trailing '..' so it fits within *max_w* mm at the current font."""
+    if pdf.get_string_width(text) <= max_w:
+        return text
+    while text and pdf.get_string_width(text + "..") > max_w:
+        text = text[:-1]
+    return (text + "..") if text else text
+
+
 def _mf(manifest: dict, dotted: str, default=None):
     """Read a (possibly nested) manifest field, e.g. ``geometry.final_area_ha``."""
     cur = manifest
@@ -287,6 +349,9 @@ def _job_overlays(rd: dict) -> dict:
         "transits": rd.get("transits_geojson"),
         "takeoffs": ([{"pt": rd["takeoff_point_4326"], "label": None}]
                      if rd.get("takeoff_point_4326") else []),
+        # All intersecting/nearby UAS zones with geometry; _draw_map filters out any
+        # that fully encompass the map view.
+        "zones": [z["geojson"] for z in (rd.get("zone_hits") or []) if z.get("geojson")],
     }
 
 
@@ -298,23 +363,19 @@ def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: s
         _section_tab(pdf, **tab)
     stats = rd.get("stats", {})
     name = params.get("job_name") or manifest.get("job_name") or "job"
+    so = params.get("sort_order")
+    title = (f"#{so + 1}  {name}" if so is not None else name)
 
     pdf.set_xy(MARGIN, MARGIN)
     pdf.set_font("Helvetica", "B", 15)
     pdf.set_text_color(*C_INK)
-    pdf.cell(CONTENT_W * 0.6, 8, _t(name))
+    pdf.cell(CONTENT_W * 0.7, 8, _t(title))
     ready = bool(manifest.get("flight_ready", stats.get("flight_ready")))
     needs = bool(manifest.get("needs_review", stats.get("needs_review")))
     _badge(pdf, A4_W - MARGIN, MARGIN + 1, ready, needs)
 
     reasons = manifest.get("review_reasons") or stats.get("review_reasons") or []
     y = MARGIN + 10
-    if reasons:
-        pdf.set_xy(MARGIN, y)
-        pdf.set_font("Helvetica", "", 8)
-        pdf.set_text_color(*C_REVIEW)
-        pdf.multi_cell(CONTENT_W, 4, _t("Review: " + "; ".join(reasons)))
-        y = pdf.get_y() + 1
 
     # Map. Frame to the survey + takeoff (tight) so the job fills the view and the
     # takeoff marker stays visible.
@@ -341,7 +402,7 @@ def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: s
         ("Area (final)", f"{_fmt(stats.get('final_area_ha'),' ha',2)}  (lost {_fmt(stats.get('area_lost_pct'),'%',1)})"),
         ("Batteries", ">1 battery" if _mf(manifest, "battery.over_one_battery") else "1 battery"),
     ]
-    _kv_table(pdf, MARGIN, y, col_w, rows, title="Flight parameters")
+    left_end = _kv_table(pdf, MARGIN, y, col_w, rows, title="Flight parameters")
 
     rx = MARGIN + col_w + 8
     ry = y
@@ -349,17 +410,35 @@ def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: s
     if dsm:
         try:
             img = Image.open(io.BytesIO(base64.b64decode(dsm)))
-            ar = img.height / img.width
-            iw = col_w
-            ih = min(iw * ar, 46)
+            # The DSM thumbnail is rendered in equirectangular EPSG:4326, so its
+            # pixel aspect stretches east-west (cos(lat) at ~62N). Display it at the
+            # **Web-Mercator** aspect of its bounds instead (matching the main map),
+            # which rescales the image to its true shape and makes the survey outline
+            # line up with the map. Letterbox within col_w x 46 mm.
+            db = rd.get("dsm_bounds")
+            if db:
+                west, south, east, north = db
+                mw = math.radians(east - west)
+                mh = tilemap._merc_y(north) - tilemap._merc_y(south)
+                ar = (mh / mw) if mw > 0 else (img.height / img.width)
+            else:
+                ar = img.height / img.width
+            iw, ih = col_w, col_w * ar
+            if ih > 46:
+                ih, iw = 46.0, 46.0 / ar
+            # Header: label left, elevation range right-aligned to the image edge.
+            elev = f"{_fmt(stats.get('elevation_min_m') or _mf(manifest,'dsm.elevation_min_m'),' m')} - {_fmt(stats.get('elevation_max_m') or _mf(manifest,'dsm.elevation_max_m'),' m')}"
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*C_INK)
             pdf.set_xy(rx, ry)
-            pdf.cell(col_w, 5.5, "Terrain (DSM)")
+            pdf.cell(iw * 0.5, 5.5, "Terrain (DSM)")
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*C_MUTED)
+            pdf.set_xy(rx, ry)
+            pdf.cell(iw, 5.5, _t(elev), align="R")
             dsm_y = ry + 6.5
             pdf.image(img, x=rx, y=dsm_y, w=iw, h=ih)
-            # Outline the flight area on the DSM (white) so the terrain under the
-            # survey polygon is obvious. dsm_bounds = (west, south, east, north).
+            # Outline the flight area on the DSM (white). dsm_bounds = (W, S, E, N).
             db = rd.get("dsm_bounds")
             survey = rd.get("survey")
             if db and survey:
@@ -373,29 +452,53 @@ def build_job_card(pdf: FPDF, params: dict, manifest: dict, rd: dict, mml_key: s
                            for c in ring]
                     if len(pts) >= 2:
                         pdf.polygon(pts, style="D")
-            ry = dsm_y + ih + 3
-            elev = f"{_fmt(stats.get('elevation_min_m') or _mf(manifest,'dsm.elevation_min_m'),' m')} - {_fmt(stats.get('elevation_max_m') or _mf(manifest,'dsm.elevation_max_m'),' m')}"
-            pdf.set_font("Helvetica", "", 7.5)
-            pdf.set_text_color(*C_MUTED)
-            pdf.set_xy(rx, ry)
-            pdf.cell(col_w, 4, _t("Elevation range: " + elev))
-            ry += 6
+            ry = dsm_y + ih + 4
         except Exception:
             pass
 
+    # UAS zones: name truncated to fit, floor right-aligned (so the two never overlap).
     zone_hits = rd.get("zone_hits") or []
     direct = [z for z in zone_hits if not z.get("context_only") and not z.get("buffer_only")]
-    zrows = []
-    for z in direct[:5]:
-        floor = z.get("lower_limit_m_agl")
-        zrows.append((z.get("name", "zone")[:34], f"floor {floor} m" if floor is not None else "-"))
-    if zrows:
-        _kv_table(pdf, rx, ry, col_w, zrows, title="UAS zones")
+    if direct:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*C_INK)
+        pdf.set_xy(rx, ry)
+        pdf.cell(col_w, 5.5, _t("UAS zones"))
+        ry += 6.5
+        for z in direct[:6]:
+            floor = z.get("lower_limit_m_agl")
+            fl = f"floor {floor} m" if floor is not None else "-"
+            pdf.set_font("Helvetica", "B", 8)
+            fw = pdf.get_string_width(fl) + 1
+            pdf.set_font("Helvetica", "", 8)
+            nm = _fit_text(pdf, _t(z.get("name", "zone")), col_w - fw - 2)
+            pdf.set_text_color(*C_MUTED)
+            pdf.set_xy(rx, ry)
+            pdf.cell(col_w - fw - 2, 4.6, nm)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_text_color(*C_INK)
+            pdf.set_xy(rx + col_w - fw, ry)
+            pdf.cell(fw, 4.6, _t(fl), align="R")
+            ry += 4.9
     elif not dsm:
         pdf.set_xy(rx, ry)
         pdf.set_font("Helvetica", "", 8.5)
         pdf.set_text_color(*C_MUTED)
         pdf.cell(col_w, 5, "No UAS zone intersections.")
+
+    # Review reasons (below both columns) - each on its own line, amber.
+    if reasons:
+        ry2 = max(left_end, ry) + 4
+        pdf.set_xy(MARGIN, ry2)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*C_REVIEW)
+        pdf.cell(CONTENT_W, 5.5, _t("Needs review"))
+        ry2 += 6
+        pdf.set_font("Helvetica", "", 8)
+        for r in reasons:
+            pdf.set_xy(MARGIN, ry2)
+            pdf.multi_cell(CONTENT_W, 4, _t("- " + r))
+            ry2 = pdf.get_y() + 1.5
 
     # Footer.
     pdf.set_y(A4_H - 14)
