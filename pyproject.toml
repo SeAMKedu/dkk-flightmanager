@@ -27,7 +27,9 @@ dependencies = [
     "pillow>=10.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
+# PEP 735 dev group (uv-native). `uv sync` installs runtime + this group.
+# pip users: `pip install -e .` (runtime) and `pip install --group dev` (pip >= 25.1).
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -35,6 +37,8 @@ dev = [
     "ruff>=0.4",
     "radon>=6.0",
     "invoke>=2.2",
+    "pip-audit>=2.7",   # dependency CVE scanner (the `npm audit` analogue)
+    "bandit>=1.7",      # static security linter (SAST) for our own code
 ]
 
 [project.scripts]
@@ -67,6 +71,13 @@ max-complexity = 10
 # radon mi: maintainability index  (run: radon mi src/flightmanager -s -n B)
 # radon raw: raw line counts        (run: radon raw src/flightmanager -s)
 exclude = "tests/*"
+
+[tool.bandit]
+# Static security scan of our own code (run: inv seclint).
+exclude_dirs = ["tests", ".venv"]
+# B404/B603/B607: the `reveal` endpoint and CLI `--open` intentionally launch the OS
+# file manager via a fixed, list-form (non-shell) subprocess call — not user input.
+skips = ["B404", "B603", "B607"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

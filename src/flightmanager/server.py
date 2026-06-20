@@ -77,7 +77,7 @@ def _load_ui() -> str:
 
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(_TEMPLATES_DIR),
-        autoescape=False,
+        autoescape=True,
     )
     return env.get_template("ui.html").render()
 

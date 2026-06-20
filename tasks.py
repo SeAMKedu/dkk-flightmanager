@@ -38,6 +38,18 @@ def loc(c):
         print(f"{metrics['loc']:>5}  {path}")
 
 
-@task(pre=[lint, fmt, cc, mi, loc])
+@task
+def audit(c):
+    """pip-audit: scan dependencies for known CVEs (the `npm audit` analogue)."""
+    c.run("pip-audit")
+
+
+@task
+def seclint(c):
+    """Bandit: static security scan of our own code (fails on medium+)."""
+    c.run(f"bandit -c pyproject.toml -r {SRC} -q --severity-level medium")
+
+
+@task(pre=[lint, fmt, cc, mi, loc, seclint, audit])
 def check(c):
     """Run all checks."""

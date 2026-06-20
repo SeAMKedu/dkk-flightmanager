@@ -42,7 +42,8 @@ def _fingerprint(centroids: list[tuple[float, float]], day: str) -> str:
     payload = json.dumps(
         {"v": _CACHE_VERSION, "pts": rounded, "day": day}, sort_keys=True
     )
-    return hashlib.sha1(payload.encode()).hexdigest()
+    # Cache fingerprint only — not a security hash.
+    return hashlib.sha1(payload.encode(), usedforsecurity=False).hexdigest()
 
 
 def _read_cache(cache_path: Path, fingerprint: str, max_age_hours: int) -> dict | None:
