@@ -19,6 +19,8 @@ import logging
 import os
 import sqlite3
 import threading
+import weakref
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import floor
@@ -47,8 +49,31 @@ TileBbox = tuple[float, float, float, float]  # xmin, ymin, xmax, ymax
 # to dest_path and return (source_url, dataset_version_or_None).
 FetcherFn = Callable[[str, TileBbox, Path], tuple[str, str | None]]
 
-# Per-tile threading locks — prevents two threads fetching the same tile simultaneously.
-_tile_locks: dict[tuple[str, str], threading.Lock] = {}
+# Per-tile threading locks — prevents two threads fetching the same tile
+# simultaneously. Held in a WeakValueDictionary so a tile's lock lives only
+# while a thread is actually using it (via the `with` in get_tiles) and is
+# garbage-collected afterwards; otherwise this dict grew one entry per distinct
+# tile ever touched for the lifetime of the long-lived serve process.
+# A raw threading.Lock is not weak-referenceable, so wrap it.
+class _TileLock:
+    """A weak-referenceable, context-manager lock for a single tile."""
+
+    __slots__ = ("_lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> "_TileLock":
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._lock.release()
+
+
+_tile_locks: "weakref.WeakValueDictionary[tuple[str, str], _TileLock]" = (
+    weakref.WeakValueDictionary()
+)
 _tile_locks_mu = threading.Lock()
 
 
@@ -116,7 +141,14 @@ def _db_path(cache_dir: str | Path) -> Path:
 
 def _init_db(db: Path) -> None:
     db.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
+        # Enable Write-Ahead Logging so reads (stats, staleness checks, the file
+        # watcher, etc.) can proceed concurrently with a tile-cache write instead
+        # of contending on the database-level lock. WAL is a persistent property
+        # of the file, so setting it once here applies to every later connection
+        # (geo_cache, cli, query_disk_size). The companion busy timeout is already
+        # provided by sqlite3.connect()'s default timeout=5.0 on every connection.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tiles (
                 dataset          TEXT NOT NULL,
@@ -165,7 +197,7 @@ def _init_db(db: Path) -> None:
 
 def _lookup(db: Path, dataset: str, tile_id: str, *, touch: bool = False) -> TileRecord | None:
     now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         row = conn.execute(
             "SELECT tile_id, dataset, xmin, ymin, xmax, ymax, source_url, "
             "fetch_timestamp, dataset_version, file_path, checksum, byte_size "
@@ -190,7 +222,7 @@ def _lookup(db: Path, dataset: str, tile_id: str, *, touch: bool = False) -> Til
 
 def _register(db: Path, record: TileRecord) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute(
             """INSERT OR REPLACE INTO tiles
                (dataset, tile_id, xmin, ymin, xmax, ymax, source_url,
@@ -206,7 +238,7 @@ def _register(db: Path, record: TileRecord) -> None:
 
 def _evict_lru(db: Path, max_bytes: int) -> None:
     """Delete least-recently-used tiles until total cache size is under max_bytes."""
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         total = conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()[0] or 0
         if total <= max_bytes:
             return
@@ -224,7 +256,7 @@ def _evict_lru(db: Path, max_bytes: int) -> None:
             Path(file_path).unlink(missing_ok=True)
         except OSError as e:
             log.warning("Could not delete evicted tile %s: %s", file_path, e)
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             conn.execute(
                 "DELETE FROM tiles WHERE dataset=? AND tile_id=?", (dataset, tile_id)
             )
@@ -262,12 +294,17 @@ def _is_expired(record: TileRecord, ttl_days: int) -> bool:
     return _is_ts_expired(record.fetch_timestamp, ttl_days)
 
 
-def _tile_lock(dataset: str, tile_id: str) -> threading.Lock:
+def _tile_lock(dataset: str, tile_id: str) -> _TileLock:
     key = (dataset, tile_id)
     with _tile_locks_mu:
-        if key not in _tile_locks:
-            _tile_locks[key] = threading.Lock()
-        return _tile_locks[key]
+        lock = _tile_locks.get(key)
+        if lock is None:
+            lock = _TileLock()
+            _tile_locks[key] = lock
+        # Return the strong reference; the caller's `with` keeps it alive for the
+        # duration of the critical section, so concurrent callers for the same
+        # tile observe the same lock object.
+        return lock
 
 
 def _fetch_and_register(
@@ -420,7 +457,7 @@ def query_disk_size(cache_dir: str | Path) -> int:
     db = _db_path(Path(cache_dir))
     if not db.exists():
         return 0
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         row = conn.execute("SELECT SUM(byte_size) FROM tiles").fetchone()
     return int(row[0] or 0)
 
@@ -432,3 +469,22 @@ def check_tile_exists(cache_config: "CacheConfig", dataset: str, tile_id: str) -
         return False
     record = _lookup(db, dataset, tile_id)
     return record is not None and record.path.exists()
+
+
+def newest_tile_fetch(
+    cache_config: "CacheConfig", dataset: str, tile_ids: list[str]
+) -> str | None:
+    """Return the newest ISO fetch_timestamp among the given cached tiles, or None.
+
+    Used to detect "source data updated" — when the cache holds a newer copy of a
+    tile than the one a job recorded using.
+    """
+    db = _db_path(Path(cache_config.cache_dir))
+    if not db.exists():
+        return None
+    newest: str | None = None
+    for tile_id in tile_ids:
+        record = _lookup(db, dataset, tile_id)
+        if record and (newest is None or record.fetch_timestamp > newest):
+            newest = record.fetch_timestamp
+    return newest

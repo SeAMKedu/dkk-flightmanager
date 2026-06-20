@@ -2,6 +2,7 @@
 
 import { st } from './state.js';
 import { map, lrs } from './map-init.js';
+import { apiPost } from './api.js';
 import { markDirty } from './dirty-tracking.js';
 import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
 import { notifyCesiumRouteReady } from './cesium-view.js';
@@ -9,10 +10,36 @@ import { getTplSettings } from './tpl-modal.js';
 
 var _routeDebounceTimer = null;
 var _routeLayer = null;
+var _arrowLayer = null;
 var _coverageLayer = null;
 var _routeAngleAdjusting = false;
 var _lastRouteStats = null;
 var _lastFpAcross = null;
+var _lastFpAlong = null;
+
+var _ARROW_MIN_ZOOM = 17;
+function _arrowsVisible() {
+  var btn = document.getElementById('leg-route');
+  var routeOn = !btn || !btn.classList.contains('off');
+  return routeOn && map.getZoom() >= _ARROW_MIN_ZOOM;
+}
+map.on('zoomend', function() {
+  if (!_arrowLayer) return;
+  if (_arrowsVisible()) { if (!map.hasLayer(_arrowLayer)) _arrowLayer.addTo(map); }
+  else                  { if (map.hasLayer(_arrowLayer))  map.removeLayer(_arrowLayer); }
+});
+// Keep arrows in sync when the route legend eye-toggle is clicked.
+document.addEventListener('DOMContentLoaded', function() {
+  var legBtn = document.getElementById('leg-route');
+  if (legBtn) legBtn.addEventListener('click', function() {
+    if (!_arrowLayer) return;
+    // After the legend handler runs, classList already reflects new state.
+    setTimeout(function() {
+      if (_arrowsVisible()) { if (!map.hasLayer(_arrowLayer)) _arrowLayer.addTo(map); }
+      else                  { if (map.hasLayer(_arrowLayer))  map.removeLayer(_arrowLayer); }
+    }, 0);
+  });
+});
 
 export function _getLastRouteStats() { return _lastRouteStats; }
 
@@ -36,6 +63,7 @@ function _getRouteParams() {
     stripM: fpAcross * (1 - ovs / 100),
     photoM: fpAlong  * (1 - ovf / 100),
     fpAcross: fpAcross,
+    fpAlong:  fpAlong,
   };
 }
 
@@ -92,6 +120,7 @@ function _computeRoughLines(polygon4326, angleDeg, stripM, fpAcross) {
 
 function _drawRoughPreview(polygon4326, angleDeg, stripM, fpAcross) {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_arrowLayer)    { map.removeLayer(_arrowLayer);    _arrowLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   lrs.route = null; lrs.coverage = null;
 
@@ -111,8 +140,13 @@ function _drawRoughPreview(polygon4326, angleDeg, stripM, fpAcross) {
   notifyCesiumRouteReady(null, null);
 }
 
+export function clearArrowLayer() {
+  if (_arrowLayer) { map.removeLayer(_arrowLayer); _arrowLayer = null; }
+}
+
 export function _clearRouteLayer() {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_arrowLayer)    { map.removeLayer(_arrowLayer);    _arrowLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   lrs.route = null; lrs.coverage = null;
   var row = document.getElementById('leg-route-row');
@@ -126,17 +160,23 @@ export function _clearRouteLayer() {
   notifyCesiumRouteReady(null, null);
 }
 
-function _stripCoverageRect(ll1, ll2, fpAcross, lat0, lon0, mLat, mLon) {
+function _stripCoverageRect(ll1, ll2, fpAcross, fpAlong, lat0, lon0, mLat, mLon) {
   var x1 = (ll1[1] - lon0) * mLon, y1 = (ll1[0] - lat0) * mLat;
   var x2 = (ll2[1] - lon0) * mLon, y2 = (ll2[0] - lat0) * mLat;
   var dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
   if (len < 0.1) return null;
-  var px = -dy / len, py = dx / len, hw = fpAcross / 2;
+  var ux = dx / len, uy = dy / len;          // unit along-strip vector
+  var px = -uy,      py = ux;                // unit cross-strip vector
+  var hw = fpAcross / 2;
+  var hf = (fpAlong  || 0) / 2;             // half along-track footprint (vertical FOV overhang)
+  // Extend each endpoint outward by hf to cover the full camera footprint
+  var ex1 = x1 - ux * hf, ey1 = y1 - uy * hf;
+  var ex2 = x2 + ux * hf, ey2 = y2 + uy * hf;
   return [
-    [lat0 + (y1 + py*hw)/mLat, lon0 + (x1 + px*hw)/mLon],
-    [lat0 + (y2 + py*hw)/mLat, lon0 + (x2 + px*hw)/mLon],
-    [lat0 + (y2 - py*hw)/mLat, lon0 + (x2 - px*hw)/mLon],
-    [lat0 + (y1 - py*hw)/mLat, lon0 + (x1 - px*hw)/mLon],
+    [lat0 + (ey1 + py*hw)/mLat, lon0 + (ex1 + px*hw)/mLon],
+    [lat0 + (ey2 + py*hw)/mLat, lon0 + (ex2 + px*hw)/mLon],
+    [lat0 + (ey2 - py*hw)/mLat, lon0 + (ex2 - px*hw)/mLon],
+    [lat0 + (ey1 - py*hw)/mLat, lon0 + (ex1 - px*hw)/mLon],
   ];
 }
 
@@ -163,6 +203,7 @@ function _altColor(t) {
 
 function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
   if (_routeLayer)    { map.removeLayer(_routeLayer);    _routeLayer    = null; }
+  if (_arrowLayer)    { map.removeLayer(_arrowLayer);    _arrowLayer    = null; }
   if (_coverageLayer) { map.removeLayer(_coverageLayer); _coverageLayer = null; }
   if (!lines || !lines.length) { lrs.route = null; lrs.coverage = null; return; }
 
@@ -183,6 +224,7 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
   var altRange = (altMax - altMin) || 1;
 
   var g = L.layerGroup();
+  var ag = L.layerGroup();
   var defaultColor = '#f59e0b';
   lines.forEach(function(line, idx) {
     var wptAlts = hasWptAlts ? wptAltsList[idx] : null;
@@ -212,15 +254,19 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
     L.marker(mid, {
       icon: L.divIcon({html:arrowHtml, className:'', iconSize:[14,14], iconAnchor:[7,7]}),
       interactive:false, keyboard:false,
-    }).addTo(g);
+    }).addTo(ag);
   });
   (transits || []).forEach(function(seg) {
     L.polyline(seg, {color: defaultColor, weight: 2, opacity: 0.85, interactive: false}).addTo(g);
   });
 
   _routeLayer = g; lrs.route = g;
+  _arrowLayer = ag;
   var btn = document.getElementById('leg-route');
-  if (btn && !btn.classList.contains('off')) g.addTo(map);
+  if (btn && !btn.classList.contains('off')) {
+    g.addTo(map);
+    if (_arrowsVisible()) ag.addTo(map);
+  }
   var row = document.getElementById('leg-route-row');
   if (row) row.style.display = '';
 
@@ -251,7 +297,7 @@ function _drawRouteLines(lines, transits, fpAcross, altitudes, wptAltsList) {
       var covStyle = {color: color, weight: 0.8, opacity: 0.5,
                       fillColor: color, fillOpacity: 0.15, interactive: false};
       // Coverage rect uses only the endpoints, not intermediate waypoints
-      var corners = _stripCoverageRect(line[0], line[line.length - 1], fpAcross, lat0, lon0, mLat, mLon);
+      var corners = _stripCoverageRect(line[0], line[line.length - 1], fpAcross, _lastFpAlong, lat0, lon0, mLat, mLon);
       if (corners) L.polygon(corners, covStyle).addTo(cg);
     });
     _coverageLayer = cg; lrs.coverage = cg;
@@ -322,6 +368,7 @@ export function updateRouteOverlay(cachedStrips, cachedTransits) {
   var p = _getRouteParams();
   if (!p) { _clearRouteLayer(); updateRouteStats(null); return; }
   _lastFpAcross = p.fpAcross;
+  _lastFpAlong  = p.fpAlong;
   if (cachedStrips) {
     _drawRouteGeoJSON(cachedStrips, cachedTransits);
     return;
@@ -355,14 +402,10 @@ async function _fetchAccurateEstimate() {
     adv_powerline_clearance_m: tpl ? tpl.adv_powerline_clearance_m  : null,
     adv_slope_f:               tpl ? tpl.adv_slope_f                : null,
     adv_min_dip_m:             tpl ? tpl.adv_min_dip_m              : null,
+    session_id:                st.sessionId,
   };
   try {
-    var res = await fetch('/api/route_estimate', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) return;
-    var data = await res.json();
+    var data = await apiPost('/api/route_estimate', body);
     updateRouteStats(data);
     if (data.strips_geojson) _drawRouteGeoJSON(data.strips_geojson, data.transits_geojson);
     if (st._routeAngleDeg === null && data.angle_deg_used != null) {

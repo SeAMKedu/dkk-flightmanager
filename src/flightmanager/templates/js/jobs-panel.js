@@ -2,6 +2,7 @@
 
 import { st } from './state.js';
 import { escHtml } from './utils.js';
+import { apiGet } from './api.js';
 // Circular — only called at runtime:
 import { toggleJobSelection, _updateSelBar, _selectedJobs, _selectedMeta } from './multi-select.js';
 import { toggleCardMenu } from './card-menu.js';
@@ -46,9 +47,8 @@ document.getElementById('jp-filter').addEventListener('input', function() {
 
 export async function loadJobsList() {
   try {
-    var r = await fetch('/api/jobs');
-    if (!r.ok) return;
-    var data = await r.json();
+    var data;
+    try { data = await apiGet('/api/jobs'); } catch (e) { return; }
     _jobsGroups = data.groups || [];
     _jobsCache = [];
     _jobsGroups.forEach(function(g){ _jobsCache = _jobsCache.concat(g.jobs || []); });

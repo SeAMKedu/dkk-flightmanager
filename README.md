@@ -17,9 +17,8 @@ Output files written per job:
 | `<name>.kmz` | WPML mapping route with embedded terrain-follow DSM — import into DJI Pilot 2 |
 | `<name>_dsm.tif` | Terrain-follow DSM (also embedded in the KMZ, kept separately as a backup) |
 | `<name>_homes.kml` | Building pins — import as a Pilot 2 custom map layer |
-| `<name>_map.html` | Browser map preview — survey polygon, buildings, keep-out circles, warning radius circles, UAS zones, DSM elevation overlay; all layers toggleable |
 | `manifest.json` | Full provenance record with flight stats and safety flags |
-| `job_params.json` | Browser UI save state (inputs, flight params, polygon params, last preview) — used to re-open the job for editing |
+| `job_params.json` | Browser UI save state (inputs, flight params, polygon params, simplified survey outline) — used to re-open the job for editing. Written atomically; `schema_version` tracks the on-disk format |
 | `thumbnail.svg` | Small polygon thumbnail shown in the jobs panel |
 | `run.log` | Structured log for this run |
 
@@ -47,6 +46,7 @@ Output files written per job:
   - [Drone profiles](#drone-profiles---drone)
   - [Strip speed (auto mode)](#strip-speed-auto-mode)
   - [Batch skeleton job creation](#batch-skeleton-job-creation-flightmanager-batch)
+  - [Refreshing stale jobs](#refreshing-stale-jobs-flightmanager-refresh)
   - [Cache management](#cache-management)
 - [Operator workflow](#operator-workflow)
 - [Subcategory and keep-out distances](#subcategory-and-keep-out-distances)
@@ -58,6 +58,8 @@ Output files written per job:
 
 ## Architecture
 
+> **Development note — AI-assisted ("vibe coded").** This application was built largely through iterative prompting of an LLM coding agent rather than line-by-line hand authoring; the architecture, tests, and this documentation were shaped that way. It is a working planning aid with a real test suite, but it has not had a line-by-line human security/safety audit. Review the safety-critical paths yourself (UAS-zone checks, building keep-out, altitude/terrain-follow) before relying on any output — and see the [Disclaimer](#disclaimer).
+
 ### Technology stack
 
 | Layer | Technology |
@@ -67,6 +69,7 @@ Output files written per job:
 | Raster / DSM | rasterio, numpy |
 | KMZ / WPML | lxml, zipfile |
 | Tile cache | SQLite (1 km grid, atomic writes) |
+| Job storage | Per-job JSON (`job_params.json` intent + `manifest.json` provenance), atomic writes, schema-versioned |
 | Frontend | Vanilla JS (ES modules), Leaflet 1.9, Leaflet.draw, CesiumJS (CDN, 3D view) |
 | Config | TOML (`config.toml`), Pydantic v2 models |
 | CLI | Typer |
@@ -80,7 +83,7 @@ Every job runs through the same ordered stages in `pipeline.py:run_job()`:
 ```
 Parcel / property fetch  →  Buildings fetch  →  Geometry processing
   →  DEM tiles  →  DSM mosaic  →  Zone check  →  KMZ  →  Homes KML
-  →  HTML preview  →  Manifest
+  →  Manifest
 ```
 
 `run_preview()` runs only the first five stages (no file output) and returns a GeoJSON payload with a base64 DSM thumbnail. The browser calls preview on every parameter change; export (Save) runs the full pipeline.
@@ -96,6 +99,8 @@ Progress is streamed to the browser via Server-Sent Events (`GET /api/progress/{
 | MML WMTS/WCS | 2 m DEM tiles (elevation model) | SQLite tile cache, 1 km grid |
 | MML Maastotietokanta | Building footprints + power lines | SQLite tile cache, 1 km grid |
 | Traficom REST | UAS restriction zones | SQLite, 1-day TTL |
+| CelesTrak OMM | Satellite orbital elements (overpass forecast) | JSON per NORAD id, 3-day TTL |
+| Open-Meteo | Daily weather forecast (map-view bar) | JSON per coordinate, 3-hour TTL |
 
 Tile cache keys are `E{xmin}_N{ymin}` on the 1 km EPSG:3067 grid. All writes are atomic. Building and DEM tiles share the same SQLite database as parcel/property geometry records (`cache.py` and `geo_cache.py` share the same DB primitives).
 
@@ -120,13 +125,18 @@ The single-page UI (`templates/ui.html`) loads JavaScript as ES modules from `te
 | Module | Responsibility |
 |---|---|
 | `main.js` | Init, wires up all other modules |
+| `api.js` | Thin `fetch` wrapper (`apiGet/apiPost/apiPatch/apiDelete`); single seam for JSON calls + error handling |
 | `route-planner.js` | Calls `POST /api/route_estimate`, updates 2D overlay and notifies Cesium |
 | `preview-runner.js` | Calls `POST /api/preview`, manages SSE progress |
 | `job-ops.js` | Save / open / clone / delete job |
+| `refresh-banner.js` | Detects stale jobs (`GET /api/refresh/scan`) and runs in-place recompute (`POST /api/refresh`) |
 | `map-layers.js` | Leaflet layer management (route, coverage, buildings, zones, DSM) |
 | `cesium-view.js` | CesiumJS 3D view; lazy-loads from CDN on first use |
 | `tpl-modal.js` | Template Settings modal (overlap, safety, variable-altitude params) |
 | `map-view.js` | Folder map view (job polygon overlays, statistics, timeline) |
+| `launch-sites.js` | Renders launch-site dots, route line, and flight-announcement circles in map view |
+| `stat-view.js` | Map-view statistics panel and modes (incl. MGRS-tiles overlay) |
+| `forecast-bar.js` | Map-view satellite-overpass + weather forecast bar |
 | `dirty-tracking.js` | Unsaved-change detection and confirmation prompts |
 
 ## Setup
@@ -188,6 +198,24 @@ The MML API key is free — obtain one at https://www.maanmittauslaitos.fi/rajap
 
 `flightmanager` reads the `.env` file automatically on startup, so no extra steps are needed. Ruokavirasto parcel data is open and requires no key.
 
+### 5 — (Optional) Add the Sentinel-2 grid for satellite overpasses
+
+The satellite-overpass feature maps your jobs onto Sentinel-2 MGRS tiles and computes upcoming near-nadir overpasses of the tracked Earth-observation satellites. This needs the Sentinel-2 tiling-grid GeoJSON, which is **not bundled** (~20 MB). Download it once and place it where `config.toml` expects it:
+
+```bash
+mkdir -p data
+# Download sentinel2_tiling_grid_wgs84.geojson from:
+#   https://zenodo.org/records/10998972
+# and save it to data/sentinel2_tiling_grid_wgs84.geojson
+```
+
+Override the location with `grid_file` in the `[satellites]` section if you keep it elsewhere. Orbital elements are fetched from CelesTrak on demand and cached locally; no key is required. If the grid file is absent, overpass info is simply omitted — nothing else is affected. List overpasses from the CLI:
+
+```bash
+flightmanager satellites --folder my-group   # tiles + overpasses for a job folder
+flightmanager satellites --point 62.79,22.84 # check a single lat,lon
+```
+
 ## Browser UI
 
 The recommended way to use the tool is the built-in browser UI:
@@ -205,15 +233,31 @@ The panel lists all saved jobs grouped into folders. Use the header buttons to c
 
 The panel updates live — changes made by the CLI, MCP server, or another tab appear immediately. If the currently open job is modified externally, a blue notice offers **Reload** or **Dismiss**.
 
+If any saved jobs were built by an older pipeline version or now have newer source data available, a green banner appears at the top of the panel (**"N jobs can be refreshed · Refresh all"**). **Refresh all** recomputes them in place (route, DSM, stats, KMZ, manifest) from cached tiles, preserving each job's geometry, and reports how many changed flight-ready/review status. Equivalent CLI command: `flightmanager refresh --all-stale`.
+
 **Batch import:** click **↓ Batch**, paste parcel/property IDs (one per line, `#` comments ignored) or load a `.txt`/`.csv` file, pick a folder and optional param overrides, then click **Create N jobs**. Each ID becomes a skeleton job (polygon stored, no KMZ yet). Equivalent CLI command: `flightmanager batch`.
 
-**Multi-select:** hover a card to reveal its checkbox. Select two or more to activate the toolbar: **Merge** (union polygons into a new job), **Export KML** (download selected jobs as a KML file), **Google Maps** (open navigation waypoints in Google Maps), **Route rename** (prefix each selected job with `YYYYMMDD-NN-` in route order, skipping skeleton jobs — re-running on the same selection replaces the existing prefix), **Move**, or **Delete**.
+**Multi-select:** hover a card to reveal its checkbox. Select two or more to activate the toolbar: **Merge** (union polygons into a new job), **Export KML** (download selected jobs as a KML file), **PDF** (download a flight report: a one-page card for a single selected job, or a mission packet for several), **Google Maps** (open navigation waypoints in Google Maps), **Route rename** (prefix each selected job with `YYYYMMDD-NN-` in route order, skipping skeleton jobs — re-running on the same selection replaces the existing prefix), **Move**, or **Delete**.
 
 **Map view:** click **Map** on any folder header to see all its job polygons on the map. Dash pattern encodes status: solid = flight-ready, long dashes = needs review, short dashes = untouched, dotted = unknown. Hover a polygon to open a popup with the job name, status, area, and two quick actions: **⊘ Skip** (exclude the job from route ordering and counting) and **Delete**. Skipped jobs render at low opacity. Hover the popup to keep it open; mouse out to dismiss. Click a polygon to select it; double-click to open the job for editing. Ctrl+click to multi-select. Click **Map** again, open a job, or click **＋ New Job** to return to the editor.
 
-A toolbar floats at the top of the map whenever map view is active. **Export Route** copies the `.kmz` and homes KML for every route job in the current folder to a local directory you specify — a quick way to collect all mission files before heading to the field. Route jobs are those with a computed takeoff point that have not been marked as skipped; `homes.kml` files are renamed `<job_name>_homes.kml` to avoid collisions. **Auto route** computes the optimal survey order for all ready jobs in the folder using a greedy nearest-neighbour algorithm (starting from the northernmost takeoff point); if some jobs already have route positions, a modal offers to re-route everything from scratch or slot in only the unrouted ones. The remaining toolbar buttons (**Merge**, **Export KML**, **Google Maps**, **Route rename**, **Move**, **Delete**) become active when one or more jobs are selected.
+**Launch sites:** consecutive jobs flown from the same parking spot are grouped into a single **launch site** rather than shown as one route dot per job. Jobs are walked in flight order and accumulated into a site as long as each takeoff stays within ~50 m of the site's running takeoff centroid; the first takeoff beyond that radius starts a new site (so a job near an earlier site but visited much later in the sequence becomes its own site). Each site renders as one amber dot at its takeoff centroid, labelled with the site's **first route index** so it lines up with the per-job route numbering (a thin amber outline marks multi-job sites), and the dots are joined in flight order by the amber dashed route line. Dots that would overlap on screen are nudged apart for legibility (their circles keep their true positions). When you zoom in to street level (zoom ≥ 17, the same level the route chevrons appear), each site **splits back into its individual per-job route-index circles** at the real takeoff spots and the route lines are hidden, so the close-up shows exactly where each job launches. Toggle the layer with **Launch sites on/off** in the legend.
 
-**Statistics panel:** a card below the status legend (top-right) shows summary statistics for the current folder. Use the dropdown to switch between seven modes:
+Hovering a launch-site dot reveals the **smallest enclosing circle** over all of that site's survey polygons and takeoff points, with a crosshair at the circle centre, and fills a fixed **announcement box** at the bottom-left of the map. The box holds everything for the site: the member jobs (with the route-index range, e.g. `#3–#5`) plus exactly the fields you enter into an announcement app such as Flyk — the circle-centre coordinates, the diameter (and radius), the maximum flight altitude across the site, and the estimated duration (rounded *up* to the next half hour for margin). A white dotted line (with a dark halo, so it reads on any basemap) links the box to the hovered dot, drawn beneath the dots. *(Note: the launch-site dot is where you stand/launch from; the circle centre is the geometric centre of the area you cover — they are deliberately two different points.)*
+
+**Clicking** a launch-site dot selects all of that site's jobs at once — handy for then routing, exporting, or moving the whole parking-spot group together via the map-view toolbar. At the zoomed-in per-job view, clicking a single takeoff circle selects just that one job.
+
+A toolbar floats at the top of the map whenever map view is active. **Export Route** copies the `.kmz` and homes KML for every route job in the current folder to a local directory you specify — a quick way to collect all mission files before heading to the field. Route jobs are those with a computed takeoff point that have not been marked as skipped; `homes.kml` files are renamed `<job_name>_homes.kml` to avoid collisions. **Auto route** computes the optimal survey order for all ready jobs in the folder using a greedy nearest-neighbour algorithm (starting from the northernmost takeoff point); if some jobs already have route positions, a modal offers to re-route everything from scratch or slot in only the unrouted ones. The remaining toolbar buttons (**Merge**, **Export KML**, **PDF**, **Google Maps**, **Route rename**, **Move**, **Delete**) become active when one or more jobs are selected.
+
+**PDF flight report:** a printable, offline field document. For a single selected job it is a one-page **card** (flight-ready / needs-review badge and reasons, a map of the survey area with the lawnmower strips, transits, takeoff and keep-out drawn over an aerial basemap, a flight-parameter table, the terrain DSM thumbnail, intersecting UAS zones with their altitude floors, and a NOTAM reminder). For several jobs it is a **mission packet**: a cover with totals, an overview map showing every job in flight order with the launch sites and inter-takeoff legs, a summary table, one **flight-announcement page per launch site** (centre coordinates, diameter, max altitude and duration - the fields you enter into Flyk), then the per-job cards. The map basemap is the MML orthophoto by default (OSM as a fallback / `--basemap osm`); overlays are drawn as vector graphics so they stay sharp at print resolution. Generate from the toolbar **PDF** button (a progress overlay shows which page is rendering and stays visible even if you deselect the jobs while it works), or with the CLI:
+
+```bash
+flightmanager report 20260611-02-test2 --open          # one-page card
+flightmanager report --folder my-group --packet        # full mission packet
+flightmanager report a b c --no-cards -o out.pdf        # packet without per-job cards
+```
+
+**Statistics panel:** a card below the status legend (top-right) shows summary statistics for the current folder. Use the dropdown to switch between modes:
 
 | Mode | What it shows |
 |---|---|
@@ -224,10 +268,13 @@ A toolbar floats at the top of the map whenever map view is active. **Export Rou
 | **Lost area %** | Green-to-red palette; 0 % loss shown as a separate green bucket; lists 10 jobs with most lost area |
 | **Lost area ha** | Same palette as Lost %, but in absolute hectares |
 | **Flight time** | Five-bin light-to-dark green palette; lists 5 longest and 5 shortest jobs |
+| **MGRS tiles** | Draws the Sentinel-2 tile(s) the jobs fall in plus their neighbours, each in a distinct colour, listed in the legend with job counts — shows how close the folder sits to a tile/UTM-zone border. Job polygons keep their own colours. Requires the grid file (see setup step 5). |
 
-Jobs without data for the selected stat are shown in grey. In any mode other than Jobs, a dim overlay is added between the base map tiles and the job polygons to improve color contrast. If jobs are selected (Ctrl+click), the stats reflect only the selected set. Click a job name in any list to pan and zoom the map to that polygon and add it to the selection. The selected stat mode is remembered across sessions.
+Jobs without data for the selected stat are shown in grey. In the binning modes (everything except **Jobs** and **MGRS tiles**) a dim overlay is added between the base map tiles and the job polygons to improve color contrast. If jobs are selected (Ctrl+click), the stats reflect only the selected set. Click a job name in any list to pan and zoom the map to that polygon and add it to the selection. The selected stat mode is remembered across sessions.
 
-**Battery / flight-time timeline:** a proportional bar appears near the bottom centre of the map whenever there is at least one routable job (a job with a computed route and a flight-time estimate in its manifest). Each segment represents one job, scaled by its estimated flight time. Route index numbers appear below each segment in the same amber circles used on the map. Battery boundaries are shown as outline battery icons above the bar: a new battery starts whenever the remaining charge (85 % of the drone's rated battery duration) is insufficient to cover the next job. The total flight time for the displayed route is shown to the right. Click any segment to pan and zoom the map to that job's polygon. When jobs are multi-selected, only the selected jobs appear on the timeline; otherwise all routable jobs in the folder are shown.
+**Satellite & weather forecast bar:** a bar at the top centre of the map view (mirroring the battery timeline) shows a per-day forecast for the folder's grid square: weather (daytime-average icon, temperature, wind, and cloud cover) and which tracked Earth-observation satellites pass overhead that day. Only daytime passes are shown as badges (colour-coded by family — Sentinel green, Landsat orange); night passes collapse into a `+N☾` marker. A pass is marked a **clear-sky window** (yellow glow) when the cloud forecast at its actual overpass time is low, and a whole day is tinted **green ("golden")** when it is both drone-flyable (wind below the configured limit, fair sky) and has a clear-sky pass — i.e. a day you can both fly and expect usable satellite imagery. The header shows the MGRS tile id; collapse the bar with the chevron (state is remembered). Weather comes from Open-Meteo (`[weather]` config; FMI is a planned alternative); thresholds (`clear_sky_max_cloud_pct`, `drone_wind_limit_ms`, the daytime window) and the tracked satellites are configurable in **⚙ Settings** or `config.toml`. If the grid file is absent the weather still shows; only the satellite overpasses are omitted.
+
+**Battery / flight-time timeline:** a proportional bar appears near the bottom centre of the map whenever there is at least one routable job (a job with a computed route and a flight-time estimate in its manifest). Each segment represents one job, scaled by its estimated flight time. Per-job route index numbers appear below each segment in amber circles (note these are individual job positions; the map groups jobs into launch sites). Battery boundaries are shown as outline battery icons above the bar: a new battery starts whenever the remaining charge (85 % of the drone's rated battery duration) is insufficient to cover the next job. The total flight time for the displayed route is shown to the right. Click any segment or its index circle to zoom the map to that job (fitting its polygon and takeoff point). When jobs are multi-selected, only the selected jobs appear on the timeline; otherwise all routable jobs in the folder are shown.
 
 ### Defining the survey area
 
@@ -279,14 +326,17 @@ Preview runs automatically whenever a parameter changes. The map shows the surve
 
 ### 3D flight preview
 
-> **Work in progress**
-
 Click the **3D** button in the map controls (top-left, next to the layer switcher) to switch from the Leaflet 2D view to an interactive CesiumJS 3D globe. The button is enabled once a route estimate has been computed.
 
 In 3D view:
 - The flight path is rendered as a tube. In simple mode all strips are shown in a single colour. In **variable-altitude** mode (ADV active) strips are colour-coded by altitude using the same viridis palette as the DSM overlay (purple = low altitude near buildings, yellow = high altitude over open field) and a colour legend appears in the top-right corner of the 3D view.
 - A translucent curtain hangs below the path to visualise the ground clearance profile.
-- **Playback controls** appear at the bottom of the 3D view: ▶ play/pause, ⟳ reset, a time scrubber, and a playback-speed selector. The drone icon animates along the route in real time.
+- **Obstacle and restriction volumes** are drawn around the route so you can eyeball clearances:
+  - **Building keep-out** (red) — in A2, a 1:1 climb envelope around each keep-out building: a cylinder from ground to the minimum altitude plus a widening frustum up to the maximum in variable-altitude mode, or a single cylinder sized by the flat flight altitude in simple mode. In A1/A3 a fixed 150 m radius × 150 m tall separation cylinder per the aviation rule.
+  - **Power lines** (amber) — each overhead 110 kV+ line as a 60 m wide × 40 m tall rectangular keep-out pipe.
+  - **UAS zones** (orange) — each restriction zone extruded from its altitude floor to its ceiling, so an airfield's concentric A/B/C/D bands stack into the characteristic stepped inverted pyramid.
+- A **layer legend** (top-right) lists every active layer — DSM, area, flight path, curtain, drone, keep-out, power lines, UAS zones — each with an eye toggle for visibility.
+- **Playback controls** appear at the bottom of the 3D view: ▶ play/pause, ⟳ reset, a time scrubber, and a playback-speed selector. The drone icon animates along the route in real time, with an altitude/speed telemetry readout.
 - Click **2D** (the mirror of the toggle, shown over the Cesium view) to return to the Leaflet map.
 
 The 3D view loads CesiumJS from a CDN on first use; subsequent activations are instant.
@@ -327,7 +377,7 @@ In edit mode:
 
 ### Save and settings
 
-- **Save** — writes KMZ, DSM, homes KML, HTML preview, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs, pressing **Esc**, or clicking the **←** back arrow.
+- **Save** — writes KMZ, DSM, homes KML, manifest, `job_params.json`, and thumbnail to disk. Unsaved changes are tracked and you are prompted before switching jobs, pressing **Esc**, or clicking the **←** back arrow.
 - **⚙ Settings** — opens the in-browser config editor (all sections: Flight, Safety, Polygon, UAS Zones, Cache, Output, Parcels, Properties). Changed fields highlight in amber; a search box filters across all sections. Saving hot-reloads the server and writes directly to `config.toml`. Drone profiles must be edited in `config.toml` directly; `config.example.toml` is the reference for all options.
 - **ⓘ About** — the `⋯` button in the header opens the About dialog, which shows the software version and a **session statistics** table: how many tiles, parcel geometries, and zone records were fetched from the network vs. served from the local cache, and the total bytes downloaded.
 
@@ -487,11 +537,11 @@ flightmanager run --name pelto-2024 --bbox 295000,6974000,305000,6984000
 | `--subcategory` | from config | Operating subcategory: `A2` or `A3` |
 | `--buffer` | from config | Home keep-out buffer in metres (overrides the subcategory default) |
 | `--homes-distance` | 2× buffer | Max distance (m) from survey polygon to include a building in the homes KML — see below |
-| `--preview-radius` | 3× height | Radius (m) of the yellow informational circle in the HTML preview — see below |
+| `--preview-radius` | 3× height | Radius (m) of the yellow informational circle on the preview map — see below |
 | `--simplify` | from config | Polygon vertex reduction — see below |
 | `--offset` | `0` | Expand (+) or contract (−) the survey polygon by this many metres relative to the parcel boundary — see below |
 | `--no-keepout` | off | Disable automatic keep-out subtraction around buildings — see below |
-| `--open` | off | Open the HTML map preview in the default browser after the job completes |
+| `--open` | off | Reveal the job output folder in the system file manager after the job completes |
 | `--config`, `-c` | `config.toml` | Path to config file |
 | `--dry-run` | off | Fetch and validate only — no output files written |
 | `--offline` | off | Cache-only mode; fail cleanly on any cache miss |
@@ -556,7 +606,7 @@ flightmanager run --name pelto-2024 --parcels 5241087453 --no-keepout
 
 When `--no-keepout` is used:
 - The survey polygon is not cut back around buildings — it covers the full parcel area.
-- Buildings and their distance circles are still shown on the HTML preview map.
+- Buildings and their distance circles are still shown on the preview map.
 - A prominent red warning is added to the preview panel reminding the operator to verify distances to all buildings manually.
 
 Use this only when you have the landowner's permission to fly close to buildings and have verified the required separation under your operating subcategory. Set `offset_enabled = false` under `[home_safety]` in `config.toml` (or via **⚙ Settings → Safety**) to make it the default.
@@ -668,6 +718,23 @@ The `--parcels` / `--properties` flag determines ID type. If neither is given, t
 | `--height FLOAT` | Flight height override (m AGL) |
 | `--subcategory TEXT` | `A2` or `A3` |
 
+### Refreshing stale jobs (`flightmanager refresh`)
+
+Recomputes already-exported jobs **in place** with the current pipeline. A job is "stale" when it was built by an older pipeline version (the route/altitude/keep-out logic has since changed) or when the local cache now holds newer source tiles than the job used. Refresh is **recompute-only**: the edited / ID-derived geometry is preserved — only the route, DSM, stats, KMZ, and manifest are rebuilt from cached tiles.
+
+```bash
+# Refresh specific jobs
+flightmanager refresh 20260611-02-test2 my-group/5241087453
+
+# Refresh every stale job
+flightmanager refresh --all-stale
+
+# Limit --all-stale to one folder
+flightmanager refresh --all-stale --folder my-group
+```
+
+The browser UI surfaces the same thing as a banner ("N jobs can be refreshed · Refresh all") when stale jobs are detected on load. Refreshing flags any job whose `flight_ready` / `needs_review` status changes as a result.
+
 ### MCP server (standalone)
 
 See the [AI assistant integration](#ai-assistant-integration-mcp) section above for the primary (integrated) approach. The `mcp` command is for headless use without `flightmanager serve`:
@@ -724,7 +791,6 @@ The same table appears on `flightmanager serve` shutdown and in the **ⓘ About*
 5. Edit the polygon if needed (double-click to enter, double-click background to save). Buildings and zones refresh automatically on exit.
 6. Check the white ✕ takeoff/landing marker — the tool suggests a boundary point that minimises your worst-case VLOS distance to the drone. Drag it to a more accessible location if needed (e.g. closer to a road or gate). Use **↺ Reset takeoff position** to go back to the auto suggestion.
 7. Click **Save** when satisfied.
-8. Open `<name>_map.html` for a full-detail pre-flight review with all overlays.
 
 ### On the RC
 
@@ -779,7 +845,7 @@ Set `home_include_buffer_m` under `[home_safety]` in `config.toml` (or via **⚙
 
 ### Map preview yellow circle (`--preview-radius`)
 
-The HTML preview draws a yellow dashed circle around each keep-out building. This is a visual reference only — it does not affect the KMZ or homes KML.
+The preview map draws a yellow dashed circle around each keep-out building. This is a visual reference only — it does not affect the KMZ or homes KML.
 
 The default radius is **3× derived flight height** (the "3:1 horizontal rule" sometimes used for risk assessment). At 100 m AGL the default is 300 m.
 
@@ -796,7 +862,7 @@ Set `preview_radius_m` under `[home_safety]` in `config.toml` (or via **⚙ Sett
 ## Safety notes
 
 - **120 m AGL limit** — enforced by the tool; `max_height_agl_m` in config.
-- **UAS zones** — checked automatically against Traficom's published permanent zone data. The survey area is expanded by 500 m before the check so boundary-adjacent zones are also flagged. Finnish UAS vyöhykkeet (A–D) are concentric altitude bands; the browser UI treats the zone floor (`lower_limit`) as the binding altitude cap and auto-sets height to 75 % of that floor when a zone is hit. Zone data is re-fetched daily. When the survey intersects an airfield's outer zone, inner concentric zones are shown with a dashed border for context. **Temporary restrictions (NOTAMs) are NOT included** — check NOTAMs manually on the day.
+- **UAS zones** — checked automatically against Traficom's published permanent zone data. The survey area is expanded by 500 m before the check so boundary-adjacent zones are also flagged. Finnish UAS vyöhykkeet (A–D) are concentric altitude bands; the browser UI treats the zone floor (`lower_limit`) as the binding altitude cap and auto-sets height to 75 % of that floor when a zone is hit. Zone data is re-fetched daily. When the survey intersects an airfield's outer zone, inner concentric zones are shown with a dashed border for context. **Temporary restrictions are NOT included** — NOTAMs *and* temporary reserved/segregated airspace (TRA/TSA, published via AUP/UUP, e.g. military-exercise areas) must be checked manually on the day (ais.fi / Fintraffic Sky / Droneinfo).
 - The generated job is a planning aid. The remote pilot remains responsible for compliance, airspace checks, and uninvolved-person separation on the day.
 
 ## Disclaimer
@@ -837,7 +903,7 @@ See `fixtures/FIXTURE_NOTES.md` for annotated analysis of all M3E-specific value
 
 ## Attribution (CC-BY 4.0)
 
-All data sources require attribution. The manifest records the exact strings with retrieval dates. Both the browser UI map and the static HTML preview display the applicable credits in the Leaflet attribution control.
+All data sources require attribution. The manifest records the exact strings with retrieval dates. The browser UI map displays the applicable credits in the Leaflet attribution control.
 
 | Data | Attribution string |
 |---|---|

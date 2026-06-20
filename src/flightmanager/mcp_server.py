@@ -303,11 +303,12 @@ def get_job(path: str) -> str:
 
     return json.dumps({
         "card": card,
-        "inputs": params.get("inputs", {}),
-        "flight": params.get("flight", manifest.get("flight", {})),
-        "polygon": params.get("polygon", {}),
-        "flight_ready": manifest.get("flight_ready", params.get("flight_ready")),
-        "needs_review": manifest.get("needs_review", params.get("needs_review")),
+        "inputs": params.get("inputs", {}),       # editable intent
+        "flight": params.get("flight", {}),        # editable intent (requested params)
+        "polygon": params.get("polygon", {}),      # editable intent
+        # Provenance flags come from the card (the single manifest+params merge point).
+        "flight_ready": card.get("flight_ready"),
+        "needs_review": card.get("needs_review"),
         "review_reasons": manifest.get("review_reasons", []),
         "geometry": manifest.get("geometry", {}),
         "stats": {
@@ -527,7 +528,7 @@ def export_existing_job(  # noqa: C901
 
     try:
         with _pipeline_guard():
-            manifest = export_job(
+            manifest, _route_geojson = export_job(
                 name, cfg,
                 parcel_ids=parcel_ids,
                 property_ids=property_ids,
@@ -540,8 +541,9 @@ def export_existing_job(  # noqa: C901
 
     if color:
         try:
+            from flightmanager.job_store import save_params
             stored["color"] = color
-            params_path.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_params(job_dir, stored)
         except Exception:
             pass
 
@@ -814,7 +816,7 @@ def run_export(
 
     try:
         with _pipeline_guard():
-            manifest = export_job(
+            manifest, _route_geojson = export_job(
                 name, cfg,
                 parcel_ids=parcel_ids or None,
                 property_ids=property_ids or None,
@@ -847,9 +849,8 @@ def run_export(
         "color": color or None,
     }
     try:
-        (job_dir / "job_params.json").write_text(
-            json.dumps(params_doc, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        from flightmanager.job_store import save_params
+        save_params(job_dir, params_doc)
     except Exception:
         pass
 
@@ -862,7 +863,6 @@ def run_export(
             "kmz": next(job_dir.glob("*.kmz"), None),
             "homes_kml": next(job_dir.glob("*_homes.kml"), None),
             "manifest": job_dir / "manifest.json",
-            "preview_html": next(job_dir.glob("*_map.html"), None),
         }.items()
         if p is not None and Path(p).exists()
     }

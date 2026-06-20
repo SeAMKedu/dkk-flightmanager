@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dkk-flightmanager"
-version = "1.7.0"
+version = "1.8.0"
 description = "DJI terrain-following flight manager for Finnish agricultural field surveys"
 requires-python = ">=3.11"
 dependencies = [
@@ -22,6 +22,9 @@ dependencies = [
     "tomli-w>=1.0",
     "mcp>=1.0",
     "filelock>=3.12",
+    "skyfield>=1.49",
+    "fpdf2>=2.7",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]
@@ -55,7 +58,6 @@ ignore = ["E501"]  # line length not enforced; focus on unused imports and compl
 # load_dotenv() must run before project imports in these entry points
 "src/flightmanager/_devserver.py" = ["E402"]
 "src/flightmanager/cli.py" = ["E402"]
-"src/flightmanager/preview.py" = ["E402"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

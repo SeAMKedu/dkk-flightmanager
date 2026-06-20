@@ -1,5 +1,7 @@
 // ── Settings panel ────────────────────────────────────────────────────────────
 
+import { apiGet, apiPatch, ApiError } from './api.js';
+
 var _cfgSections   = [];   // [{id, label, fields:[...]}]
 var _cfgValues     = {};   // key → current (possibly edited) value
 var _cfgOrigValues = {};   // key → value as loaded from server
@@ -12,8 +14,7 @@ export async function openSettings() {
   document.getElementById('cfg-search').value = '';
   _cfgSearchQ = '';
   try {
-    var resp = await fetch('/api/settings');
-    var data = await resp.json();
+    var data = await apiGet('/api/settings');
     _cfgSections   = data.sections;
     _cfgValues     = {};
     _cfgOrigValues = {};
@@ -293,16 +294,7 @@ export async function saveSettings() {
   var btn = document.getElementById('cfg-save-btn');
   btn.disabled = true;
   try {
-    var resp = await fetch('/api/settings', {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(changes),
-    });
-    var data = await resp.json();
-    if (!resp.ok) {
-      _cfgStatus('Save failed: ' + (data.detail || resp.status), 'err');
-      return;
-    }
+    await apiPatch('/api/settings', changes);
     _cfgOrigValues = Object.assign({}, _cfgValues);
     document.querySelectorAll('.cfg-input.cfg-modified').forEach(function(el) {
       el.classList.remove('cfg-modified');
@@ -310,7 +302,8 @@ export async function saveSettings() {
     _cfgUpdateNavDots();
     _cfgStatus('Settings saved. Some changes (output dir, cache TTLs) take effect immediately; drone/flight defaults apply to new jobs.', 'ok');
   } catch(e) {
-    _cfgStatus('Network error: ' + e.message, 'err');
+    if (e instanceof ApiError) _cfgStatus('Save failed: ' + e.detail, 'err');
+    else _cfgStatus('Network error: ' + e.message, 'err');
   } finally {
     btn.disabled = false;
   }
@@ -387,14 +380,11 @@ export async function openAbout() {
   var modal = document.getElementById('about-modal');
   modal.style.display = 'flex';
   try {
-    var r = await fetch('/api/version');
-    var d = await r.json();
+    var d = await apiGet('/api/version');
     document.getElementById('about-version').textContent = 'v' + d.version;
   } catch(e) {}
   try {
-    var rs = await fetch('/api/stats');
-    var ds = await rs.json();
-    _renderStats(ds);
+    _renderStats(await apiGet('/api/stats'));
   } catch(e) {}
 }
 

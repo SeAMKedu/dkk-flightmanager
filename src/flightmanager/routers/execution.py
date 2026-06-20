@@ -16,7 +16,7 @@ from flightmanager.wpml import resolve_strip_speed
 from pydantic import BaseModel
 
 import flightmanager._server_state as _st
-from flightmanager.job_store import make_thumbnail_svg
+from flightmanager.job_store import make_survey_outline, make_thumbnail_svg, save_params
 
 router = APIRouter()
 
@@ -41,6 +41,7 @@ class PreviewRequest(BaseModel):
     speed_ms: float | None = None
     takeoff_point_4326: list | None = None  # [lon, lat] — user's pinned takeoff, if any
     template_settings: dict | None = None  # per-job template/waylines overrides
+    session_id: str | None = None  # client session — keys the per-session preview store
 
 
 class RouteEstimateRequest(BaseModel):
@@ -58,6 +59,7 @@ class RouteEstimateRequest(BaseModel):
     adv_powerline_clearance_m: float | None = None
     adv_slope_f: float | None = None
     adv_min_dip_m: float | None = None
+    session_id: str | None = None  # client session — reads its own preview obstacles
 
 
 class ExportRequest(PreviewRequest):
@@ -74,6 +76,10 @@ class BatchRequest(BaseModel):
     params: dict = {}
 
 
+class RefreshRequest(BaseModel):
+    paths: list[str]  # job paths to recompute in place
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -82,16 +88,8 @@ class BatchRequest(BaseModel):
 @router.post("/api/preview")
 async def start_preview(req: PreviewRequest):
     import asyncio
-    import uuid
 
-    with _st.job_lock:
-        if _st.active_job_id is not None:
-            raise HTTPException(409, detail="A job is already running — please wait.")
-        job_id = str(uuid.uuid4())
-        _st.active_job_id = job_id
-
-    queue: asyncio.Queue = asyncio.Queue()
-    _st.job_queues[job_id] = queue
+    job_id, queue = _begin_job()
     loop = asyncio.get_running_loop()
     cfg = _prepare_config(req)
 
@@ -123,7 +121,7 @@ async def start_preview(req: PreviewRequest):
                 custom_polygon_4326=custom_poly_geom,
                 takeoff_point_4326=req.takeoff_point_4326 or None,
             )
-            _st.last_preview_result = result
+            _st.store_preview(req.session_id, result)
             print(f"[preview] job {job_id[:8]} done")
             loop.call_soon_threadsafe(
                 queue.put_nowait,
@@ -139,8 +137,7 @@ async def start_preview(req: PreviewRequest):
             )
         finally:
             lock.release()
-            with _st.job_lock:
-                _st.active_job_id = None
+            _end_job()
 
     loop.run_in_executor(_st.executor, run)
     return {"job_id": job_id}
@@ -149,16 +146,8 @@ async def start_preview(req: PreviewRequest):
 @router.post("/api/export")
 async def start_export(req: ExportRequest):
     import asyncio
-    import uuid
 
-    with _st.job_lock:
-        if _st.active_job_id is not None:
-            raise HTTPException(409, detail="A job is already running — please wait.")
-        job_id = str(uuid.uuid4())
-        _st.active_job_id = job_id
-
-    queue: asyncio.Queue = asyncio.Queue()
-    _st.job_queues[job_id] = queue
+    job_id, queue = _begin_job()
     loop = asyncio.get_running_loop()
     cfg = _prepare_config(req)
 
@@ -184,9 +173,8 @@ async def start_export(req: ExportRequest):
         lock = _acquire_pipeline_lock(job_id, loop, queue, "export")
         if lock is None:
             return
-        # Snapshot the preview result before export_job so a concurrent preview
-        # can't overwrite the global between job completion and the file write.
-        preview_snapshot = _st.last_preview_result
+        # The caller's own last preview (session-keyed), captured before export_job.
+        preview_snapshot = _st.get_preview(req.session_id)
         try:
             from flightmanager.pipeline import export_job
 
@@ -211,7 +199,6 @@ async def start_export(req: ExportRequest):
                     "kmz":          job_dir / f"{req.job_name}.kmz",
                     "homes_kml":    job_dir / f"{req.job_name}_homes.kml",
                     "dsm_tif":      job_dir / f"{req.job_name}_dsm.tif",
-                    "preview_html": job_dir / f"{req.job_name}_map.html",
                     "manifest":     job_dir / "manifest.json",
                 }.items()
                 if p.exists()
@@ -261,8 +248,7 @@ async def start_export(req: ExportRequest):
             )
         finally:
             lock.release()
-            with _st.job_lock:
-                _st.active_job_id = None
+            _end_job()
 
     loop.run_in_executor(_st.executor, run)
     return {"job_id": job_id}
@@ -350,13 +336,170 @@ async def start_batch(req: BatchRequest):
     return {"job_id": job_id}
 
 
-def _load_preview_obstacles(reproject_to_3067):
-    """Return (buildings, power_lines) from the last stored preview result."""
+# ---------------------------------------------------------------------------
+# Refresh — recompute stale jobs in place (recompute-only)
+# ---------------------------------------------------------------------------
+
+
+def _export_request_from_params(name: str, folder: str | None, params: dict) -> ExportRequest:
+    """Reconstruct an ExportRequest from a job's stored job_params."""
+    inputs = params.get("inputs", {})
+    flight = params.get("flight", {})
+    poly = params.get("polygon", {})
+    safety = params.get("safety", {})
+    return ExportRequest(
+        job_name=name, folder=folder,
+        parcel_ids=inputs.get("parcel_ids") or [],
+        property_ids=inputs.get("property_ids") or [],
+        drone=flight.get("drone"),
+        height_m=flight.get("height_m"),
+        subcategory=flight.get("subcategory", "A3"),
+        route_angle_deg=flight.get("route_angle_deg"),
+        speed_ms=flight.get("speed_ms"),
+        offset_m=(poly.get("offset_m") or 0.0),
+        simplify=poly.get("simplify", "auto"),
+        keepout=poly.get("keepout", True),
+        preview_radius_m=safety.get("preview_radius_m"),
+        custom_polygon=params.get("custom_polygon_4326"),
+        takeoff_point_4326=params.get("takeoff_point_4326"),
+        color=params.get("color"),
+        template_settings=params.get("template_settings") or {},
+    )
+
+
+def _job_flags(manifest: dict) -> dict:
+    """Pull the safety/stat fields that a refresh may change, for the diff summary."""
+    bat = manifest.get("battery") or {}
+    if "estimated_flight_time_min" in bat:
+        ft = bat["estimated_flight_time_min"]
+    elif "pieces" in bat:
+        ft = sum(p.get("estimated_flight_time_min", 0) for p in bat["pieces"])
+    else:
+        ft = None
+    g = manifest.get("geometry", {})
+    return {
+        "flight_ready": manifest.get("flight_ready"),
+        "needs_review": manifest.get("needs_review"),
+        "flight_time_min": round(ft, 1) if ft is not None else None,
+        "final_area_ha": g.get("final_area_ha"),
+    }
+
+
+def _refresh_one_job(path: str, output_dir) -> dict:
+    """Recompute one job in place from its stored params. Returns a result dict."""
+    import json as _json
+
+    from shapely.geometry import shape
+
+    from flightmanager.job_store import load_params, resolve_job_dir
+    from flightmanager.pipeline import export_job
+
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    params = load_params(job_dir)
+    if params is None or params.get("batch_created"):
+        return {"path": path, "status": "skipped", "reason": "no exported job to recompute"}
+
+    before: dict = {}
+    manifest_path = job_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            before = _job_flags(_json.loads(manifest_path.read_text(encoding="utf-8")))
+        except Exception:
+            before = {}
+
+    ereq = _export_request_from_params(name, folder, params)
+    cfg = _prepare_config(ereq)
+    custom_poly = shape(ereq.custom_polygon) if ereq.custom_polygon else None
+    manifest, route_geojson = export_job(
+        name, cfg,
+        parcel_ids=ereq.parcel_ids or None,
+        property_ids=ereq.property_ids or None,
+        custom_polygon_4326=custom_poly,
+        folder=folder or None,
+    )
+    _write_job_params(job_dir, ereq, manifest, None, route_geojson)
+    after = _job_flags(manifest)
+    flips = [
+        f"{k}: {before.get(k)} → {after.get(k)}"
+        for k in ("flight_ready", "needs_review")
+        if before.get(k) != after.get(k)
+    ]
+    return {"path": path, "status": "ok", "before": before, "after": after, "flips": flips}
+
+
+@router.post("/api/refresh")
+async def start_refresh(req: RefreshRequest):
+    """Recompute the given jobs in place with the current pipeline (recompute-only).
+
+    Auto-applies: each job's KMZ/DSM/manifest/job_params are rewritten. Progress and a
+    per-job summary (including flight_ready / needs_review flips) stream over SSE.
+    """
+    import asyncio
+    from pathlib import Path as _Path
+
+    if not req.paths:
+        raise HTTPException(400, detail="paths list is empty")
+
+    job_id, queue = _begin_job()
+    loop = asyncio.get_running_loop()
+    output_dir = _Path(_st.config.output.output_dir).resolve()
+
+    def cb(stage: str, msg: str, pct: int) -> None:
+        try:
+            loop.call_soon_threadsafe(
+                queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct}
+            )
+        except Exception:
+            pass
+
+    def run() -> None:
+        lock = _acquire_pipeline_lock(job_id, loop, queue, "refresh")
+        if lock is None:
+            return
+        try:
+            results: list[dict] = []
+            total = len(req.paths)
+            for i, path in enumerate(req.paths):
+                cb("refresh", f"[{i + 1}/{total}] {path}…", int(i / total * 100))
+                try:
+                    results.append(_refresh_one_job(path, output_dir))
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    results.append({"path": path, "status": "error", "reason": str(exc)})
+
+            ok = sum(1 for r in results if r["status"] == "ok")
+            flipped = sum(1 for r in results if r.get("flips"))
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"stage": "done", "pct": 100, "payload": {
+                    "results": results, "recomputed": ok,
+                    "skipped": sum(1 for r in results if r["status"] == "skipped"),
+                    "failed": sum(1 for r in results if r["status"] == "error"),
+                    "flipped": flipped,
+                }},
+            )
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            loop.call_soon_threadsafe(
+                queue.put_nowait, {"stage": "error", "pct": 0, "msg": str(exc)},
+            )
+        finally:
+            lock.release()
+            _end_job()
+
+    loop.run_in_executor(_st.executor, run)
+    return {"job_id": job_id}
+
+
+def _load_preview_obstacles(preview: dict | None, reproject_to_3067):
+    """Return (buildings, power_lines) from a stored preview result dict."""
     from flightmanager.buildings import Building
     from flightmanager.powerlines import PowerLine
     from shapely.geometry import shape as _shape_geom
 
-    preview = _st.last_preview_result or {}
+    preview = preview or {}
     buildings: list[Building] = []
     for bd in preview.get("buildings", []):
         try:
@@ -406,60 +549,34 @@ async def route_estimate(req: RouteEstimateRequest):
     ovs = req.overlap_side_pct  if req.overlap_side_pct  is not None else cfg.flight.overlap_side_pct
     speed_ms = req.speed_ms if req.speed_ms else resolve_strip_speed(cfg.flight, drone, H)
 
-    p_m = drone.pixel_pitch_um * 1e-6
-    f_m = drone.focal_length_mm * 1e-3
-    footprint_m = H * drone.image_width_px * p_m / f_m
-    strip_m = footprint_m * (1 - ovs / 100)
-    photo_m = H * drone.image_height_px * p_m / f_m * (1 - ovf / 100)
-
-    poly_4326 = _shape(req.polygon_4326)
-    poly_3067 = reproject_to_3067(poly_4326)
-
-    angle_deg = req.angle_deg
-    if angle_deg is None:
-        angle_deg = _route.compute_auto_angle(poly_3067)
+    poly_3067 = reproject_to_3067(_shape(req.polygon_4326))
 
     home_3067 = None
     if req.takeoff_point_4326:
         hp = reproject_to_3067(Point(req.takeoff_point_4326))
         home_3067 = (hp.x, hp.y)
 
-    if req.advanced_mode:
-        from flightmanager.adaptive_route import compute_adaptive_route
-        cfg_flight = cfg.flight
-        H_max     = req.adv_max_height_m          or cfg_flight.adv_max_height_m or H
-        H_min     = req.adv_min_height_m           or cfg_flight.adv_min_height_m
-        clearance = req.adv_powerline_clearance_m  or cfg_flight.adv_powerline_clearance_m
-        slope_f   = req.adv_slope_f                or cfg_flight.adv_slope_f
-        min_dip_m = req.adv_min_dip_m if req.adv_min_dip_m is not None else cfg_flight.adv_min_dip_m
-        try:
-            buildings, power_lines = _load_preview_obstacles(reproject_to_3067)
-            result, altitude_profile, _strip_wps, _transit_wps = compute_adaptive_route(
-                poly_3067, angle_deg, buildings, power_lines,
-                drone=drone,
-                H_max=H_max, H_min=H_min,
-                overlap_front_pct=ovf, overlap_side_pct=ovs,
-                powerline_clearance_m=clearance,
-                slope_f=slope_f,
-                min_dip_m=min_dip_m,
-                home_3067=home_3067,
-            )
-        except Exception as exc:
-            import traceback; traceback.print_exc()
-            print(f"[route_estimate] adaptive route failed: {exc}")
-            result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
-            altitude_profile = [H_max] * result.strip_count
-            _strip_wps = _transit_wps = None
-        adv_min_h = H_min
-    else:
-        result = _route.compute_route(poly_3067, angle_deg, strip_m, photo_m, home_3067=home_3067)
-        altitude_profile = [H] * result.strip_count
-        _strip_wps = _transit_wps = None
-        adv_min_h = None
+    fl = cfg.flight
+    buildings, power_lines = (
+        _load_preview_obstacles(_st.get_preview(req.session_id), reproject_to_3067)
+        if req.advanced_mode else (None, None)
+    )
+    pr = _route.plan_route(
+        poly_3067, drone=drone, height_m=H,
+        overlap_front_pct=ovf, overlap_side_pct=ovs,
+        angle_deg=req.angle_deg, home_3067=home_3067,
+        advanced=req.advanced_mode, buildings=buildings, power_lines=power_lines,
+        adv_min_height_m=req.adv_min_height_m or fl.adv_min_height_m,
+        adv_max_height_m=req.adv_max_height_m or fl.adv_max_height_m,
+        adv_powerline_clearance_m=req.adv_powerline_clearance_m or fl.adv_powerline_clearance_m,
+        adv_slope_f=req.adv_slope_f or fl.adv_slope_f,
+        adv_min_dip_m=req.adv_min_dip_m if req.adv_min_dip_m is not None else fl.adv_min_dip_m,
+    )
+    adv_min_h = (req.adv_min_height_m or fl.adv_min_height_m) if req.advanced_mode else None
 
     flight_time = _route.estimate_flight_time(
-        result,
-        flight_height_m=altitude_profile[0] if altitude_profile else H,
+        pr.route,
+        flight_height_m=pr.altitude_profile[0] if pr.altitude_profile else H,
         auto_speed_ms=speed_ms,
         transit_speed_ms=cfg.flight.transitional_speed_ms,
         takeoff_security_height_m=cfg.flight.takeoff_security_height_m,
@@ -469,31 +586,55 @@ async def route_estimate(req: RouteEstimateRequest):
     # Build strips/transits GeoJSON via the same helper the preview/export paths use,
     # so transit features carry the 1:1-safe ``altitude_m`` (the 3D view falls back to
     # strip-end turn altitudes otherwise, dipping into building frustums).
-    from flightmanager.pipeline import _route_result_to_geojson
-    gj = _route_result_to_geojson(
-        result, altitude_profile, drone, ovf,
-        strip_waypoints=_strip_wps, transit_waypoints=_transit_wps,
+    gj = _route.route_result_to_geojson(
+        pr.route, pr.altitude_profile, drone, ovf,
+        strip_waypoints=pr.strip_waypoints, transit_waypoints=pr.transit_waypoints,
         adv_min_height_m=adv_min_h,
     )
 
     return {
-        "strip_count":       result.strip_count,
-        "photo_count":       result.photo_count,
-        "route_dist_m":      round(result.total_route_dist_m),
+        "strip_count":       pr.route.strip_count,
+        "photo_count":       pr.route.photo_count,
+        "route_dist_m":      round(pr.route.total_route_dist_m),
         "flight_time_min":   round(flight_time, 1),
-        "angle_deg_used":    round(angle_deg, 1),
+        "angle_deg_used":    round(pr.angle_deg, 1),
         "over_one_battery":  flight_time > drone.battery_minutes,
         "battery_minutes":   drone.battery_minutes,
         "strips_geojson":    gj["strips_geojson"],
         "transits_geojson":  gj["transits_geojson"],
         "advanced_mode":     req.advanced_mode,
-        "altitude_profile":  [round(a, 1) for a in altitude_profile],
+        "altitude_profile":  [round(a, 1) for a in pr.altitude_profile],
     }
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _begin_job() -> tuple[str, "object"]:
+    """Reserve the single active-job slot. Returns (job_id, sse_queue) or raises 409.
+
+    The one-job-at-a-time gate (single ThreadPoolExecutor worker + cross-process file
+    lock) is the seam a real job queue replaces during the hosting epic.
+    """
+    import asyncio
+    import uuid
+
+    with _st.job_lock:
+        if _st.active_job_id is not None:
+            raise HTTPException(409, detail="A job is already running — please wait.")
+        job_id = str(uuid.uuid4())
+        _st.active_job_id = job_id
+    queue: asyncio.Queue = asyncio.Queue()
+    _st.job_queues[job_id] = queue
+    return job_id, queue
+
+
+def _end_job() -> None:
+    """Release the active-job slot so the next preview/export can start."""
+    with _st.job_lock:
+        _st.active_job_id = None
 
 
 def _acquire_pipeline_lock(job_id: str, loop, queue, label: str):
@@ -521,7 +662,7 @@ def _acquire_pipeline_lock(job_id: str, loop, queue, label: str):
         return None
 
 
-def _apply_template_settings(cfg, ts: dict) -> None:
+def _apply_template_settings(cfg, ts: dict) -> None:  # noqa: C901
     """Apply template_settings dict fields (overlaps, safety, advanced mode) to cfg in-place."""
     if ts.get("overlap_front_pct") is not None:
         cfg.flight.overlap_front_pct = int(ts["overlap_front_pct"])
@@ -555,10 +696,10 @@ def _apply_template_settings(cfg, ts: dict) -> None:
         cfg.home_safety.home_buffer_m = cfg.flight.adv_min_height_m
 
 
-def _prepare_config(req: PreviewRequest):
+def _prepare_config(req: PreviewRequest, base_config=None):
     import copy
 
-    cfg = copy.deepcopy(_st.config)
+    cfg = copy.deepcopy(base_config if base_config is not None else _st.config)
 
     if req.drone and req.drone in [d.name for d in cfg.drones]:
         cfg.default_drone = req.drone
@@ -599,16 +740,6 @@ def _prepare_config(req: PreviewRequest):
     return cfg
 
 
-def _merge_preview_and_route(preview_result: dict | None, route_geojson: dict | None) -> dict | None:
-    """Merge preview snapshot with KMZ-derived route GeoJSON, dropping the DSM thumbnail."""
-    if not preview_result:
-        return None
-    merged = {k: v for k, v in preview_result.items() if k != "dsm_b64"}
-    if route_geojson:
-        merged.update(route_geojson)
-    return merged
-
-
 def _write_job_params(
     job_dir: Path,
     req: ExportRequest,
@@ -616,7 +747,13 @@ def _write_job_params(
     preview_result: dict | None = None,
     route_geojson: dict | None = None,
 ) -> None:
-    """Write job_params.json and thumbnail.svg alongside the manifest."""
+    """Write job_params.json and thumbnail.svg alongside the manifest.
+
+    The full preview/route GeoJSON is no longer persisted — only a small
+    ``survey_outline`` (for the map view and an instant first-paint on open).
+    Strips/transits are recomputed by the live preview that runs on job open.
+    """
+    survey = req.custom_polygon or (preview_result or {}).get("survey")
     params = {
         "job_name": req.job_name,
         "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -641,30 +778,23 @@ def _write_job_params(
         },
         "template_settings": req.template_settings or {},
         "custom_polygon_4326": req.custom_polygon,
+        "survey_outline": make_survey_outline(survey),
         "takeoff_point_4326":  req.takeoff_point_4326,
         "color": req.color or None,
-        "last_preview_geojson": _merge_preview_and_route(preview_result, route_geojson),
     }
     # Preserve existing color, sort_order, and skipped from prior save
-    if (job_dir / "job_params.json").exists():
-        try:
-            existing = json.loads(
-                (job_dir / "job_params.json").read_text(encoding="utf-8")
-            )
-            if params["color"] is None:
-                params["color"] = existing.get("color")
-            if "sort_order" in existing:
-                params["sort_order"] = existing["sort_order"]
-            if "skipped" in existing:
-                params["skipped"] = existing["skipped"]
-        except Exception:
-            pass
+    from flightmanager.job_store import load_params
+    existing = load_params(job_dir)
+    if existing:
+        if params["color"] is None:
+            params["color"] = existing.get("color")
+        if "sort_order" in existing:
+            params["sort_order"] = existing["sort_order"]
+        if "skipped" in existing:
+            params["skipped"] = existing["skipped"]
 
-    (job_dir / "job_params.json").write_text(
-        json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_params(job_dir, params)
 
-    survey = req.custom_polygon or (preview_result or {}).get("survey")
     svg = make_thumbnail_svg(survey)
     if svg:
         (job_dir / "thumbnail.svg").write_text(svg, encoding="utf-8")

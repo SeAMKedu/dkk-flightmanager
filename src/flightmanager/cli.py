@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # reads .env (or .env.local) from cwd upward; no-op if not found
 import sqlite3
-import webbrowser
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -327,7 +327,7 @@ def run_job_cmd(
     ),
     open_map: bool = typer.Option(
         False, "--open",
-        help="Open the HTML map preview in the default browser after the job completes.",
+        help="Reveal the job output folder in the system file manager after the job completes.",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run",
@@ -395,11 +395,14 @@ def run_job_cmd(
     _print_job_summary(manifest, dry_run)
 
     if open_map and not dry_run:
-        map_path = Path(cfg.output.output_dir) / name / f"{name}_map.html"
-        if map_path.exists():
-            webbrowser.open(map_path.resolve().as_uri())
+        import subprocess
+        import sys
+        job_dir = Path(cfg.output.output_dir) / name
+        if job_dir.is_dir():
+            opener = {"darwin": "open", "win32": "explorer"}.get(sys.platform, "xdg-open")
+            subprocess.Popen([opener, str(job_dir)])
         else:
-            typer.echo(f"Warning: map file not found at {map_path}", err=True)
+            typer.echo(f"Warning: job folder not found at {job_dir}", err=True)
 
     from flightmanager.net_stats import print_summary as _print_net_stats
     _print_net_stats(cfg.cache.cache_dir)
@@ -468,7 +471,7 @@ def cache_status(
         typer.echo("Cache is empty (no index.sqlite found).")
         return
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         rows = conn.execute("""
             SELECT dataset,
                    COUNT(*) as tiles,
@@ -531,7 +534,7 @@ def cache_refresh(
 
     cutoff_days = older_than  # None means use per-dataset TTL (handled by get_tiles refresh flag)
 
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         if cutoff_days is not None:
             cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).isoformat()
             rows = conn.execute(
@@ -755,6 +758,180 @@ def batch_cmd(
         raise typer.Exit(1)
 
 
+def _collect_job_centroids(out_dir: Path, folder: str | None) -> list[tuple[float, float]]:
+    """Return (lat, lon) centroids of all job polygons in *out_dir* (or one folder)."""
+    from shapely.geometry import shape
+
+    from flightmanager.job_store import best_polygon, is_job_dir
+
+    points: list[tuple[float, float]] = []
+    base = out_dir / folder if folder else out_dir
+    if not base.exists():
+        return points
+    for d in sorted(base.iterdir()):
+        if not d.is_dir() or not is_job_dir(d):
+            continue
+        geom = best_polygon(d)
+        if not geom:
+            continue
+        c = shape(geom).centroid
+        points.append((c.y, c.x))
+    return points
+
+
+def _collect_stale_paths(output_dir: Path, cache_config, folder: Optional[str]) -> list[str]:
+    """Return job paths flagged stale (skipping untouched skeletons), optionally one folder."""
+    import json
+
+    from flightmanager.job_store import refresh_status, resolve_job_dir, scan_jobs
+    from flightmanager.manifest import PIPELINE_VERSION
+
+    targets: list[str] = []
+    for group in scan_jobs(output_dir):
+        if folder and group["name"] != folder:
+            continue
+        for card in group["jobs"]:
+            if card.get("untouched"):
+                continue
+            _, _, jd = resolve_job_dir(output_dir, card["path"])
+            manifest_path = jd / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if refresh_status(manifest, cache_config, PIPELINE_VERSION)["needs_refresh"]:
+                targets.append(card["path"])
+    return targets
+
+
+@app.command("refresh")
+def refresh_cmd(
+    paths: list[str] = typer.Argument(
+        default=None, help="Job paths (folder/name or name) to refresh."
+    ),
+    all_stale: bool = typer.Option(
+        False, "--all-stale", help="Refresh every job flagged stale (pipeline / source data)."
+    ),
+    folder: Optional[str] = typer.Option(
+        None, "--folder", help="Limit --all-stale to one group folder."
+    ),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """Recompute exported jobs in place with the current pipeline (recompute-only).
+
+    Pass explicit job paths, or --all-stale to refresh every job whose pipeline_version
+    is behind or whose source tiles the cache now holds a newer copy of (--folder narrows
+    that to one group). The edited / ID-derived geometry is preserved — only the route,
+    DSM, stats, KMZ and manifest are recomputed from cached tiles.
+    """
+    from filelock import Timeout
+
+    import flightmanager._server_state as _st
+    from flightmanager._pipeline_lock import pipeline_lock
+    from flightmanager.routers.execution import _refresh_one_job
+
+    cfg = _load_cfg(config_path)
+    _st.config = cfg  # _refresh_one_job builds per-job config from the shared state
+    output_dir = Path(cfg.output.output_dir).resolve()
+
+    targets = (
+        _collect_stale_paths(output_dir, cfg.cache, folder)
+        if (all_stale or folder) else list(paths or [])
+    )
+
+    if not targets:
+        typer.echo("No jobs to refresh.")
+        raise typer.Exit(0)
+
+    typer.echo(f"Refreshing {len(targets)} job(s) …")
+    ok = flips = failed = skipped = 0
+    try:
+        with pipeline_lock(cfg.cache.cache_dir):
+            for i, p in enumerate(targets, 1):
+                typer.echo(f"[{i}/{len(targets)}] {p}")
+                try:
+                    r = _refresh_one_job(p, output_dir)
+                    if r["status"] == "ok":
+                        ok += 1
+                        if r["flips"]:
+                            flips += 1
+                            typer.echo("    ⚠ " + "; ".join(r["flips"]))
+                    else:
+                        skipped += 1
+                        typer.echo(f"    skipped: {r.get('reason', '')}")
+                except Exception as e:
+                    failed += 1
+                    typer.echo(f"    ERROR: {e}", err=True)
+    except Timeout:
+        typer.echo("Pipeline busy — another process holds the lock. Try again shortly.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Done — {ok} recomputed, {flips} with flag changes, {skipped} skipped, {failed} failed.")
+
+
+@app.command("satellites")
+def satellites_cmd(
+    folder: Optional[str] = typer.Option(None, "--folder", help="Only consider jobs in this output subfolder."),
+    point: Optional[str] = typer.Option(None, "--point", help="Check a single 'lat,lon' point instead of jobs."),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """List upcoming satellite overpasses for the job grid square(s).
+
+    Computes near-nadir overpasses of the tracked Earth-observation satellites
+    (configured in [satellites]) over the Sentinel-2 MGRS tile(s) that the jobs
+    fall in. Requires the MGRS grid file (see [satellites].grid_file).
+
+      flightmanager satellites --folder my-group
+      flightmanager satellites --point 62.79,22.84
+    """
+    from collections import defaultdict
+
+    from flightmanager.satellites import overpasses_for_points
+
+    cfg = _load_cfg(config_path)
+
+    if point:
+        try:
+            lat_s, lon_s = point.split(",")
+            points = [(float(lat_s), float(lon_s))]
+        except ValueError:
+            typer.echo("Error: --point must be 'lat,lon'", err=True)
+            raise typer.Exit(1)
+    else:
+        points = _collect_job_centroids(Path(cfg.output.output_dir), folder)
+        if not points:
+            typer.echo("No job polygons found. Use --point to test a coordinate.", err=True)
+            raise typer.Exit(1)
+
+    typer.echo(f"Checking {len(points)} location(s)…")
+    result = overpasses_for_points(points, cfg.satellites, cfg.cache.cache_dir)
+
+    if not result.grid_ok:
+        typer.echo(f"⚠ {result.grid_msg}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"MGRS tile(s): {', '.join(result.tile_ids) or '(none)'}")
+    if result.grid_msg:
+        typer.echo(result.grid_msg)
+    if not result.overpasses:
+        typer.echo("No qualifying overpasses in the search window.")
+        raise typer.Exit(0)
+
+    by_day: dict[str, list] = defaultdict(list)
+    for op in result.overpasses:
+        by_day[op.peak_utc.strftime("%Y-%m-%d")].append(op)
+
+    typer.echo("")
+    for day in sorted(by_day):
+        typer.echo(day)
+        for op in by_day[day]:
+            t = op.peak_utc.strftime("%H:%M UTC")
+            typer.echo(f"  {t}  {op.name:<14} {op.tile_id:<6} peak {op.max_elev_deg:.0f}°")
+    typer.echo("")
+    typer.echo(result.attribution)
+
+
 @app.command("mcp")
 def mcp_cmd(
     config_path: str = typer.Option("config.toml", "--config", "-c"),
@@ -824,6 +1001,72 @@ def serve_cmd(
         access_log=False,
         timeout_graceful_shutdown=3,
     )
+
+
+@app.command("report")
+def report_cmd(
+    paths: list[str] = typer.Argument(
+        default=None, help="Job paths (folder/name or name) to report on."
+    ),
+    folder: Optional[str] = typer.Option(
+        None, "--folder", help="Report every job in this group folder."
+    ),
+    packet: bool = typer.Option(
+        False, "--packet", help="Mission packet (cover + overview + launch sites + cards)."
+    ),
+    basemap: str = typer.Option("mml", "--basemap", help="Basemap: 'mml' (orthophoto) or 'osm'."),
+    no_cards: bool = typer.Option(
+        False, "--no-cards", help="Packet without the per-job detail cards."
+    ),
+    out: Optional[str] = typer.Option(None, "--out", "-o", help="Output PDF path."),
+    open_pdf: bool = typer.Option(False, "--open", help="Open the PDF after generating."),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """Generate a PDF flight card (single job) or mission packet (multiple jobs).
+
+    A single job path produces a one-page card. Multiple paths, ``--folder``, or
+    ``--packet`` produce a mission packet: cover, overview map, per-launch-site
+    flight-announcement pages, then the per-job cards.
+    """
+    import flightmanager._server_state as _st
+    from flightmanager import report
+    from flightmanager.job_store import scan_jobs
+    from flightmanager.routers.management import _load_job_entry
+
+    cfg = _load_cfg(config_path)
+    _st.config = cfg
+    output_dir = Path(cfg.output.output_dir).resolve()
+
+    targets = list(paths or [])
+    if folder:
+        for group in scan_jobs(output_dir):
+            if group["name"] == folder:
+                targets += [c["path"] for c in group["jobs"]]
+    if not targets:
+        typer.echo("No jobs given. Pass job paths or --folder.", err=True)
+        raise typer.Exit(1)
+
+    entries = [e for p in targets if (e := _load_job_entry(output_dir, p))]
+    if not entries:
+        typer.echo("No matching jobs found.", err=True)
+        raise typer.Exit(1)
+
+    as_packet = packet or folder or len(entries) > 1
+    typer.echo(f"Rendering {'packet' if as_packet else 'card'} for {len(entries)} job(s) …")
+    if as_packet:
+        pdf = report.render_packet(cfg, entries, folder=folder,
+                                   basemap=basemap, include_job_cards=not no_cards)
+        default_name = f"dkk-{folder or 'packet'}.pdf"
+    else:
+        e = entries[0]
+        pdf = report.render_job_report(cfg, e["params"], e["manifest"], basemap=basemap)
+        default_name = f"{e['params'].get('job_name') or 'job'}.pdf"
+
+    out_path = Path(out) if out else (output_dir / default_name)
+    out_path.write_bytes(pdf)
+    typer.echo(f"Wrote {out_path}  ({len(pdf) // 1024} KB)")
+    if open_pdf:
+        typer.launch(str(out_path))
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ import { showFolderOnMap, openMapView, closeMapView, mvOpenJob, mvToggleSkip,
 import { toggleJobSelection, clearSelection, openMergeModal, closeMergeModal, submitMerge } from './multi-select.js';
 import { closeCardMenu, createFolder, closeFolderDialog, submitFolder, showMoveMenu, doMoveJob } from './card-menu.js';
 import { autoSortFolder, closeRouteConfirmModal } from './drag-reorder.js';
-import { bulkMove, bulkDelete, exportKml, openGoogleMaps, routeRename,
+import { bulkMove, bulkDelete, exportKml, exportPdf, openGoogleMaps, routeRename,
          exportRoute, closeExportRouteModal, submitExportRoute,
          unifiedMerge, unifiedBulkMove, unifiedBulkDelete, unifiedClearSel } from './bulk-ops.js';
 import { openBatchDialog, closeBatchDialog, setBatchType, submitBatch } from './batch-modal.js';
@@ -37,6 +37,8 @@ import { setVlosRange } from './takeoff.js';
 import { clearMeasurements } from './measurement.js';
 import { initCesiumView, toggle3dView } from './cesium-view.js';
 import { openTplModal, closeTplModal, tplTab, initTplModal, initTplDefaults } from './tpl-modal.js';
+import { apiGet } from './api.js';
+import { checkStaleJobs } from './refresh-banner.js';
 
 // ── Assign all functions needed in HTML onclick= attributes to window ─────────
 Object.assign(window, {
@@ -91,7 +93,7 @@ Object.assign(window, {
   autoSortFolder, closeRouteConfirmModal,
 
   // bulk-ops
-  bulkMove, bulkDelete, exportKml, openGoogleMaps, routeRename,
+  bulkMove, bulkDelete, exportKml, exportPdf, openGoogleMaps, routeRename,
   exportRoute, closeExportRouteModal, submitExportRoute,
   unifiedMerge, unifiedBulkMove, unifiedBulkDelete, unifiedClearSel,
 
@@ -126,9 +128,7 @@ async function init() {
   document.getElementById('jname').value = defaultJobName();
 
   try {
-    var r = await fetch('/api/drones');
-    if (!r.ok) throw new Error('drones ' + r.status);
-    st.drones = await r.json();
+    st.drones = await apiGet('/api/drones');
     var sel = document.getElementById('dsel');
     st.drones.forEach(function(d) {
       var o = document.createElement('option');
@@ -136,9 +136,7 @@ async function init() {
       sel.appendChild(o);
     });
 
-    var cr = await fetch('/api/config');
-    if (!cr.ok) throw new Error('config ' + cr.status);
-    var cfg = await cr.json();
+    var cfg = await apiGet('/api/config');
 
     st.outputDir = cfg.output_dir || '';
     updateFolderHint();
@@ -177,6 +175,7 @@ async function init() {
   setJpOpen(localStorage.getItem('jp-open') !== 'false');
   loadJobsList();
   _initEventStream();
+  checkStaleJobs();
 }
 
 init();

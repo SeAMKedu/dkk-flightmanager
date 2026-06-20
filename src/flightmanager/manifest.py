@@ -13,6 +13,15 @@ from flightmanager import tool_version
 from flightmanager.config import AppConfig
 from flightmanager.geometry import SurveyGeometry
 
+# Bump when the *computed output* of a recompute would meaningfully differ for the
+# same inputs — i.e. changes to route planning (route.py), altitude profile
+# (obstacle_heights.py), keep-out / geometry (geometry.py), flight-time estimation,
+# simplification, or WPML/KMZ structure (wpml.py). NOT bumped for cosmetic or
+# storage-shape changes. Jobs whose manifest records an older value are flagged as
+# "needs refresh" (see job_store.refresh_status). Distinct from `tool_version` (the
+# package/git version, which bumps every release).
+PIPELINE_VERSION = 1
+
 # CC-BY attribution templates keyed by dataset.
 # The ``{date}`` placeholder is filled with the tile's fetch date (YYYY-MM-DD).
 _CC_BY = {
@@ -76,7 +85,8 @@ def build_manifest(
 ) -> dict:
     """Assemble and return the full provenance manifest dict for a completed job."""
     return {
-        "tool_version":  tool_version(),
+        "tool_version":     tool_version(),
+        "pipeline_version": PIPELINE_VERSION,
         "job_name":      job_name,
         "run_timestamp": run_ts,
         "dry_run":       dry_run,

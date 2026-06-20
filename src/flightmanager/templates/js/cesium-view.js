@@ -710,16 +710,25 @@ function _buildLegend(hasArea, hasDsm, colorHex, altRange, hasKeeput, hasPowerli
   }
 
   if (altRange) {
-    // Variable-altitude mode: show viridis gradient with min/max labels
-    var pathRow = _legRow('path',
+    // Variable-altitude mode: gradient icon row + separate gradient bar with min/max (mirrors 2D leg-alt-row)
+    leg.appendChild(_legRow('path',
       '<div class="l-swatch" style="background:linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725);border:1px solid #9ca3af;"></div>',
-      'Flight path');
-    var altLabel = document.createElement('span');
-    altLabel.className = 'leg-alt-range';
-    altLabel.textContent = Math.round(altRange.min) + '–' + Math.round(altRange.max) + ' m';
-    altLabel.style.cssText = 'font-size:10px;color:#9ca3af;margin-left:4px;';
-    pathRow.appendChild(altLabel);
-    leg.appendChild(pathRow);
+      'Flight path'));
+    var altRow = document.createElement('div');
+    altRow.style.cssText = 'margin:2px 0 4px 20px;display:flex;flex-direction:column;gap:3px;';
+    var altGrad = document.createElement('div');
+    altGrad.className = 'leg-alt-grad';
+    var altLabels = document.createElement('div');
+    altLabels.style.cssText = 'display:flex;justify-content:space-between;font-size:9px;color:#64748b;padding:0 1px;';
+    var minSpan = document.createElement('span');
+    minSpan.textContent = Math.round(altRange.min) + ' m';
+    var maxSpan = document.createElement('span');
+    maxSpan.textContent = Math.round(altRange.max) + ' m';
+    altLabels.appendChild(minSpan);
+    altLabels.appendChild(maxSpan);
+    altRow.appendChild(altGrad);
+    altRow.appendChild(altLabels);
+    leg.appendChild(altRow);
   } else {
     leg.appendChild(_legRow('path',
       '<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="' + colorHex + '" stroke-width="3" stroke-linecap="round"/></svg>',

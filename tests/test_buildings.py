@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from shapely.geometry import mapping
 
 from flightmanager.buildings import (
     Building,

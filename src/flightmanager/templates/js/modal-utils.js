@@ -1,5 +1,7 @@
 // ── Shared modal utilities: delete, move, route-rename ────────────────────────
 
+import { apiPost } from './api.js';
+
 // ── Delete confirm modal ──────────────────────────────────────────────────────
 
 var _deleteCb = null;
@@ -64,17 +66,16 @@ export function submitNewFolderMove() {
   if (!name) return;
   var errEl = document.getElementById('move-error');
   errEl.style.display = 'none';
-  fetch('/api/folders', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name})})
-    .then(function(r) {
-      if (!r.ok && r.status !== 409) {
-        return r.json().catch(function() { return {detail: 'HTTP ' + r.status}; }).then(function(e) {
-          errEl.textContent = e.detail || 'Failed'; errEl.style.display = 'block';
-        });
-      }
-      closeMoveModal();
-      if (_moveCb) { var fn = _moveCb; _moveCb = null; fn(name); }
-    })
-    .catch(function(e) { errEl.textContent = 'Failed: ' + e.message; errEl.style.display = 'block'; });
+  function _ok() {
+    closeMoveModal();
+    if (_moveCb) { var fn = _moveCb; _moveCb = null; fn(name); }
+  }
+  apiPost('/api/folders', {name: name})
+    .then(_ok)
+    .catch(function(e) {
+      if (e.status === 409) { _ok(); return; }  // folder already exists is fine
+      errEl.textContent = e.detail || ('Failed: ' + e.message); errEl.style.display = 'block';
+    });
 }
 
 // ── Route rename confirm modal ─────────────────────────────────────────────────

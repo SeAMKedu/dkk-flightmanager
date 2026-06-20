@@ -1,6 +1,7 @@
 // ── Takeoff marker & VLOS rings ───────────────────────────────────────────────
 
 import { map } from './map-init.js';
+import { markDirty } from './dirty-tracking.js';
 
 var _takeoffAuto = null;        // [lng, lat] suggested by server
 var _takeoffPt   = null;        // [lng, lat] current (auto or user-dragged)
@@ -78,6 +79,7 @@ export function _renderTakeoffMarker(lngLat) {
     var ll = _takeoffMarker.getLatLng();
     _takeoffPt = [ll.lng, ll.lat];
     _hideVlos();
+    markDirty();
   });
   if (row) row.style.display = '';
   document.getElementById('takeoff-recalc-btn').disabled = false;

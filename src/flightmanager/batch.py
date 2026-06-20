@@ -11,7 +11,6 @@ server endpoint.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -127,11 +126,9 @@ def create_skeleton_jobs(
                 "custom_polygon_4326": geojson,
                 "batch_created": True,
                 "color": None,
-                "last_preview_geojson": None,
             }
-            (job_dir / "job_params.json").write_text(
-                json.dumps(job_params, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            from flightmanager.job_store import save_params
+            save_params(job_dir, job_params)
             results.append({"id": id_, "status": "ok"})
 
         except Exception as exc:

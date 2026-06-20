@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,7 +51,7 @@ def get_parcel_cache(
     """Return the cached parcel record, or ``None`` if missing or expired."""
     db = _db_path(Path(cache_config.cache_dir))
     _init_db(db)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         row = conn.execute(
             "SELECT parcel_id, lpis_year, tunnus, area_ha, geometry_wkt, fetch_timestamp "
             "FROM parcels WHERE parcel_id=? AND lpis_year=?",
@@ -79,7 +80,7 @@ def put_parcel_cache(
     db = _db_path(Path(cache_config.cache_dir))
     _init_db(db)
     fetch_ts = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute(
             """INSERT OR REPLACE INTO parcels
                (parcel_id, lpis_year, tunnus, area_ha, geometry_wkt, fetch_timestamp)
@@ -111,7 +112,7 @@ def get_property_cache(
     """Return the cached property record, or ``None`` if missing or expired."""
     db = _db_path(Path(cache_config.cache_dir))
     _init_db(db)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         row = conn.execute(
             "SELECT property_id, display_id, area_ha, geometry_wkt, fetch_timestamp "
             "FROM properties WHERE property_id=?",
@@ -139,7 +140,7 @@ def put_property_cache(
     db = _db_path(Path(cache_config.cache_dir))
     _init_db(db)
     fetch_ts = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute(
             """INSERT OR REPLACE INTO properties
                (property_id, display_id, area_ha, geometry_wkt, fetch_timestamp)

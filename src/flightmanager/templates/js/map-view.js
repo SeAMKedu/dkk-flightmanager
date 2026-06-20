@@ -3,13 +3,17 @@
 import { st } from './state.js';
 import { map, lrs, editLayers, resetLrs } from './map-init.js';
 import { escHtml, jobApiUrl } from './utils.js';
+import { apiGet, apiPost, apiPatch, apiDelete } from './api.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 import { openDeleteModal, openMoveModal } from './modal-utils.js';
 import { clearTakeoffForMapView, _hideVlos } from './takeoff.js';
-import { getMvStatColor, getMvStatMode, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
+import { getMvStatColor, getMvStatMode, statModeColorsJobs, clearMgrsLayer, renderStatPanel, _mvStatJobClick as _mvStatJobClickStat } from './stat-view.js';
 import { showBatteryTimeline, hideBatteryTimeline, destroyBatteryTimeline } from './battery-timeline.js';
+import { showForecastBar, destroyForecastBar, setForecastBarShifted } from './forecast-bar.js';
 import { hideCesiumView } from './cesium-view.js';
+import { clearArrowLayer } from './route-planner.js';
+import { drawLaunchSites, clearLaunchSites } from './launch-sites.js';
 // Circular — only called at runtime:
 import { saveEdit } from './polygon-edit.js';
 import { openJob as _openJobFn } from './job-ops.js';
@@ -27,6 +31,7 @@ var _mvAllFeatures = [];
 var _mvCurrentFolder = null;
 var _DEFAULT_COLOR = '#3b82f6';
 var _mvRouteLayer = null;
+var _mvRouteSeq = 0;
 var _mvRouteVisible = true;
 var _mvDimLayer = null;
 
@@ -57,6 +62,7 @@ export function openMapView(folderFilter) {
   Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
   resetLrs();
   editLayers.clearLayers();
+  clearArrowLayer();
   clearTakeoffForMapView();
   _hideVlos();
 
@@ -92,9 +98,12 @@ export function closeMapView() {
   clearTimeout(_mvHoverTimer);
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
   destroyBatteryTimeline();
+  destroyForecastBar();
+  clearMgrsLayer();
   _mvClearLayers();
   _mvHideDim();
-  if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
+  clearLaunchSites(map); _mvRouteLayer = null;
+  clearArrowLayer();
   _mvSelected.forEach(function(path) {
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
     if (card) card.classList.remove('selected');
@@ -113,53 +122,35 @@ export function closeMapView() {
 
 async function _mvLoad(folderFilter, skipFit) {
   try {
-    var r = await fetch('/api/jobs/geojson');
-    if (!r.ok) return;
-    var fc = await r.json();
+    var fc = await apiGet('/api/jobs/geojson');
     _mvAllFeatures = fc.features || [];
     _mvApplyFilter(folderFilter, skipFit);
     _mvDrawRoute();
   } catch(e) { console.error('[mapview]', e); }
 }
 
-export function _mvDrawRoute() {
-  if (_mvRouteLayer) { _mvRouteLayer.remove(); _mvRouteLayer = null; }
+export async function _mvDrawRoute() {
+  clearLaunchSites(map);          // tear down layers + detached zoom/move handlers
+  _mvRouteLayer = null;
+  // Sequence guard: _mvDrawRoute is fired from several places that can overlap
+  // (e.g. _mvApplyFilter + _mvLoad on open). The async fetch below means a stale
+  // call could otherwise create a second, untracked layer group that leaks.
+  var seq = ++_mvRouteSeq;
   if (!_mvRouteVisible || !_mvMode) return;
 
-  var features = _mvAllFeatures.filter(function(f){ return (f.properties.folder || null) === _mvCurrentFolder; });
-  var routable = features.filter(function(f){ return f.properties.takeoff_point_4326 && !f.properties.skipped; });
-  routable.sort(function(a, b) {
-    var pa = a.properties, pb = b.properties;
-    var soA = pa.sort_order, soB = pb.sort_order;
-    if (soA != null && soB != null) return soA - soB;
-    if (soA != null) return -1;
-    if (soB != null) return 1;
-    return 0;
-  });
-
-  if (routable.length < 2) return;
-
-  var latlngs = routable.map(function(f){
-    var tp = f.properties.takeoff_point_4326;
-    return [tp[1], tp[0]];
-  });
-
-  _mvRouteLayer = L.layerGroup().addTo(map);
-  L.polyline(latlngs, {color: '#f59e0b', weight: 2, opacity: 0.7, dashArray: '6,4'}).addTo(_mvRouteLayer);
-
-  routable.forEach(function(f, i) {
-    var tp = f.properties.takeoff_point_4326;
-    var n = i + 1;
-    var icon = L.divIcon({
-      className: '',
-      html: '<div style="background:#f59e0b;color:#000;font-size:10px;font-weight:700;'
-        + 'width:18px;height:18px;border-radius:50%;display:flex;align-items:center;'
-        + 'justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5)">'
-        + n + '</div>',
-      iconSize: [18, 18], iconAnchor: [9, 9],
-    });
-    L.marker([tp[1], tp[0]], {icon: icon, interactive: false}).addTo(_mvRouteLayer);
-  });
+  // Launch sites: consecutive jobs flown from one parking spot are grouped
+  // server-side into a single numbered dot (takeoff centroid) carrying its
+  // flight-announcement circle. Hover a dot to see the operating-area radius.
+  try {
+    var url = '/api/launch_sites'
+      + (_mvCurrentFolder ? ('?folder=' + encodeURIComponent(_mvCurrentFolder)) : '');
+    var resp = await apiGet(url);
+    if (seq !== _mvRouteSeq) return;            // superseded by a newer call
+    if (!_mvRouteVisible || !_mvMode) return;   // state may have changed during await
+    _mvRouteLayer = drawLaunchSites(map, resp.sites || []);
+  } catch (e) {
+    console.error('[launch-sites]', e);
+  }
 }
 
 export function toggleMvRoute() {
@@ -171,9 +162,7 @@ export function toggleMvRoute() {
 
 export async function _mvRefreshRouteData() {
   try {
-    var r = await fetch('/api/jobs/geojson');
-    if (!r.ok) return;
-    var fc = await r.json();
+    var fc = await apiGet('/api/jobs/geojson');
     _mvAllFeatures = fc.features || [];
     _mvDrawRoute();
   } catch(e) { console.error('[mv-refresh-route]', e); }
@@ -213,8 +202,9 @@ function _mvApplyFilter(folderFilter, skipFit) {
   });
   stale.forEach(function(p){ _mvSelected.delete(p); });
   showBatteryTimeline(_mvAllFeatures, _mvSelected, _mvCurrentFolder, _mvLayers);
+  showForecastBar(_mvCurrentFolder);
   renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
-  if (getMvStatMode() !== 'normal') {
+  if (statModeColorsJobs()) {
     _mvLayers.forEach(function(item) {
       if (_mvSelected.has(item.path)) return;
       var c = getMvStatColor(item.feature.properties);
@@ -341,19 +331,14 @@ export function mvOpenJob(path) {
 
 export async function mvToggleSkip(path, currentSkipped) {
   try {
-    var r = await fetch(jobApiUrl(path), {
-      method: 'PATCH', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({skipped: !currentSkipped})
-    });
-    if (!r.ok) { showError('Could not update job'); return; }
+    await apiPatch(jobApiUrl(path), {skipped: !currentSkipped});
     if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
-    var geoR = await fetch('/api/jobs/geojson');
-    if (geoR.ok) {
-      _mvAllFeatures = (await geoR.json()).features || [];
+    try {
+      _mvAllFeatures = (await apiGet('/api/jobs/geojson')).features || [];
       _mvApplyFilter(_mvCurrentFolder, true);
-    }
+    } catch(e) { /* geojson refresh best-effort */ }
     loadJobsList();
-  } catch(e) { showError('Failed: ' + e.message); }
+  } catch(e) { showError(e.detail || ('Failed: ' + e.message)); }
 }
 
 export function mvDeleteJob(path, name) {
@@ -361,8 +346,7 @@ export function mvDeleteJob(path, name) {
   if (_mvHoverPopup) { _mvHoverPopup = null; }
   openDeleteModal('Delete "' + name + '"? This cannot be undone.', async function() {
     try {
-      var r = await fetch(jobApiUrl(path), {method: 'DELETE'});
-      if (!r.ok) { showError('Delete failed'); return; }
+      await apiDelete(jobApiUrl(path));
       _mvLayers = _mvLayers.filter(function(item) {
         if (item.path === path) { _mvJobGroup.removeLayer(item.layer); return false; }
         return true;
@@ -370,12 +354,12 @@ export function mvDeleteJob(path, name) {
       _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== path; });
       if (st._activeJob === path) { st._activeJob = null; st._activeJobFolder = null; }
       loadJobsList();
-    } catch(e) { showError('Delete failed: ' + e.message); }
+    } catch(e) { showError(e.detail || ('Delete failed: ' + e.message)); }
   });
 }
 
 function _mvUpdateDim() {
-  if (getMvStatMode() !== 'normal' && _mvMode) { _mvShowDim(); } else { _mvHideDim(); }
+  if (statModeColorsJobs() && _mvMode) { _mvShowDim(); } else { _mvHideDim(); }
 }
 
 function _mvShowDim() {
@@ -415,6 +399,14 @@ export function _mvToggleSel(path) {
   _mvUpdateSelBar();
 }
 
+// Select every given job path that isn't already selected (used by launch-site
+// dot clicks to select all jobs flown from that parking spot).
+export function mvSelectPaths(paths) {
+  (paths || []).forEach(function(p) {
+    if (!_mvSelected.has(p)) _mvToggleSel(p);
+  });
+}
+
 export function mvClearSel() {
   _mvSelected.forEach(function(path) {
     var item = _mvLayers.find(function(i){ return i.path === path; });
@@ -433,6 +425,7 @@ export function mvClearSel() {
 function _mvUpdateSelBar() {
   var n = _mvSelected.size;
   document.getElementById('mv-actions').classList.toggle('visible', _mvMode && n > 0);
+  setForecastBarShifted(_mvMode && n > 0);
   document.getElementById('mv-sel-count').textContent = n + ' selected';
   document.getElementById('mv-merge-btn').disabled = n < 2;
   var openBtn = document.getElementById('mv-open-btn');
@@ -470,11 +463,8 @@ export function mvBulkMove() {
   openMoveModal(title, metas, async function(dest) {
     for (var i = 0; i < metas.length; i++) {
       try {
-        await fetch(jobApiUrl(metas[i].path, '/move'), {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({folder: dest})
-        });
-      } catch(e) { showError('Move failed: ' + e.message); }
+        await apiPost(jobApiUrl(metas[i].path, '/move'), {folder: dest});
+      } catch(e) { showError(e.detail || ('Move failed: ' + e.message)); }
     }
     mvClearSel();
     await loadJobsList();
@@ -490,7 +480,7 @@ export function mvBulkDelete() {
     var paths = Array.from(_mvSelected);
     for (var i = 0; i < paths.length; i++) {
       try {
-        await fetch(jobApiUrl(paths[i]), {method: 'DELETE'});
+        await apiDelete(jobApiUrl(paths[i]));
         _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== paths[i]; });
         _mvLayers = _mvLayers.filter(function(item) {
           if (item.path === paths[i]) { if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); return false; }

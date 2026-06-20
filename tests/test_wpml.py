@@ -17,7 +17,7 @@ from flightmanager.buildings import Building
 from flightmanager.config import FlightConfig
 from flightmanager.crs import CRSError
 from flightmanager.homes_kml import build_homes_kml
-from flightmanager.waypoints import ONE_BATTERY_MINUTES, budget_estimate
+from flightmanager.waypoints import budget_estimate
 from flightmanager.wpml import KmzResult, build_kmz
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"

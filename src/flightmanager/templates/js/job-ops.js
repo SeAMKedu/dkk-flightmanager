@@ -3,17 +3,18 @@
 import { st } from './state.js';
 import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from './map-init.js';
 import { escHtml, jobApiUrl } from './utils.js';
+import { apiGet, apiPost, apiPatch, apiDelete } from './api.js';
 import { markDirty, confirmIfDirty, xbUpdate } from './dirty-tracking.js';
 import { showError, clearError, updateFolderHint, updateGsd, setRadiusLinked,
          setSub, setSimpAuto, setSimpManual, setAutoTimer,
          getAutoTimer, setFitBoundsFlag, setLastPreviewedIds, _setEditedPoly, _clearEditedPoly,
          _setSec } from './form-controls.js';
-import { _legendUserVis, redrawRings, resetLegend } from './legend.js';
+import { redrawRings } from './legend.js';
 import { loadJobsList } from './jobs-panel.js';
 import { renderStatus } from './status-panel.js';
 import { renderMap } from './map-layers.js';
-import { updateRouteOverlay, updateRouteStats, setRouteAngleSilent as _setRouteAngleSilentRP,
-         setSpeedSilent, _renderAngleControl } from './route-planner.js';
+import { setRouteAngleSilent as _setRouteAngleSilentRP,
+         setSpeedSilent } from './route-planner.js';
 import { _cpSetFromHex, _syncPaletteActive } from './color-picker.js';
 import { restoreTplSettings } from './tpl-modal.js';
 import { hideExtModifiedNotice } from './event-stream.js';
@@ -32,9 +33,9 @@ export function openJob(path) {
 
 export async function _doOpenJob(path) {
   try {
-    var r = await fetch(jobApiUrl(path));
-    if (!r.ok) { showError('Could not load job: HTTP ' + r.status); return; }
-    var data = await r.json();
+    var data;
+    try { data = await apiGet(jobApiUrl(path)); }
+    catch (e) { showError('Could not load job: ' + (e.detail || e.message)); return; }
     var p = data.params;
     var name = path.includes('/') ? path.split('/').pop() : path;
     var autoTimer = getAutoTimer();
@@ -61,8 +62,13 @@ export async function _doOpenJob(path) {
     hideExtModifiedNotice();
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
     setFitBoundsFlag(true);
-    if (p && p.last_preview_geojson) {
-      st.previewData = p.last_preview_geojson;
+    // Instant first-paint from the stored survey outline (map view + open). The
+    // strips/transits/status are filled by the live startPreview() below, which
+    // runs on every open to refresh buildings + UAS zones for the current area.
+    var _outline = p && (p.survey_outline || p.custom_polygon_4326
+      || (p.last_preview_geojson || {}).survey);
+    if (_outline) {
+      st.previewData = {survey: _outline};
       setLastPreviewedIds(
         ((p.inputs && p.inputs.parcel_ids)||[]).join(',')
         + '||' + ((p.inputs && p.inputs.property_ids)||[]).join(',')
@@ -70,21 +76,6 @@ export async function _doOpenJob(path) {
       try {
         renderMap(st.previewData);
         redrawRings();
-        if (st.previewData.stats && st.previewData.stats.route_angle_deg_auto != null) {
-          st._routeAngleAuto = st.previewData.stats.route_angle_deg_auto;
-          _renderAngleControl();
-        }
-        updateRouteOverlay(st.previewData.strips_geojson, st.previewData.transits_geojson);
-        resetLegend(_legendUserVis);
-        renderStatus(st.previewData.stats);
-        if (st.previewData.stats) {
-          updateRouteStats({
-            strip_count:     st.previewData.stats.route_strip_count,
-            photo_count:     st.previewData.stats.route_photo_count,
-            flight_time_min: st.previewData.stats.route_flight_time_min,
-            strips_geojson:  st.previewData.strips_geojson,
-          });
-        }
         document.getElementById('rstbtn').disabled = false;
       } catch(ex) { console.error('[openJob] render error', ex); }
     } else {
@@ -155,27 +146,17 @@ export function goBackToMap() {
 }
 
 export async function revealJob(path) {
-  try {
-    var r = await fetch(jobApiUrl(path, '/reveal'), {method:'POST'});
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Could not open folder');
-    }
-  } catch(e) { showError('Could not open folder: ' + e.message); }
+  try { await apiPost(jobApiUrl(path, '/reveal')); }
+  catch(e) { showError(e.detail || ('Could not open folder: ' + e.message)); }
 }
 
 export async function cloneJob(path) {
   if (st.isRunning) return;
   try {
-    var r = await fetch(jobApiUrl(path, '/clone'), {method:'POST'});
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Clone failed'); return;
-    }
-    var data = await r.json();
+    var data = await apiPost(jobApiUrl(path, '/clone'));
     await loadJobsList();
     openJob(data.path);
-  } catch(e) { showError('Clone failed: ' + e.message); }
+  } catch(e) { showError(e.detail || ('Clone failed: ' + e.message)); }
 }
 
 export function confirmDeleteJob(j) {
@@ -192,17 +173,13 @@ export function confirmDeleteJob(j) {
 
 export async function deleteJob(j) {
   try {
-    var r = await fetch(jobApiUrl(j.path), {method:'DELETE'});
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Delete failed'); return;
-    }
+    await apiDelete(jobApiUrl(j.path));
     if (st._activeJob === j.path) {
       st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
       import('./form-controls.js').then(function(m){ m._doNewJob(); });
     }
     await loadJobsList();
-  } catch(e) { showError('Delete failed: ' + e.message); }
+  } catch(e) { showError(e.detail || ('Delete failed: ' + e.message)); }
 }
 
 export function startRename(j) {
@@ -231,22 +208,14 @@ export function startRename(j) {
 
 export async function doRename(j, newName) {
   try {
-    var r = await fetch(jobApiUrl(j.path), {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({new_name: newName})
-    });
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Rename failed'); await loadJobsList(); return;
-    }
-    var data = await r.json();
+    var data = await apiPatch(jobApiUrl(j.path), {new_name: newName});
     if (st._activeJob === j.path) {
       st._activeJob = data.path;
       document.getElementById('jname').value = newName;
       updateFolderHint();
     }
     await loadJobsList();
-  } catch(e) { showError('Rename failed: ' + e.message); await loadJobsList(); }
+  } catch(e) { showError(e.detail || ('Rename failed: ' + e.message)); await loadJobsList(); }
 }
 
 export function showStaleNotice(stale) {
@@ -312,9 +281,6 @@ document.getElementById('job-color').addEventListener('change', async function()
   if (!st._activeJob) return;
   try {
     st._ownSavedJob = st._activeJob;
-    await fetch(jobApiUrl(st._activeJob), {
-      method: 'PATCH', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({color: this.value})
-    });
+    await apiPatch(jobApiUrl(st._activeJob), {color: this.value});
   } catch(e) { console.warn('[color patch]', e); }
 });

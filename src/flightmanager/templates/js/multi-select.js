@@ -1,6 +1,7 @@
 // ── Multi-select & bulk operations ────────────────────────────────────────────
 
 import { escHtml } from './utils.js';
+import { apiPost } from './api.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 // Circular — only called at runtime:
@@ -85,22 +86,14 @@ export async function submitMerge() {
   closeMergeModal();
 
   try {
-    var r = await fetch('/api/merge', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        job_paths: Array.from(_selectedJobs),
-        new_name: newName,
-        folder: folder,
-        delete_sources: delSrc
-      })
+    var merged = await apiPost('/api/merge', {
+      job_paths: Array.from(_selectedJobs),
+      new_name: newName,
+      folder: folder,
+      delete_sources: delSrc
     });
-    if (!r.ok) {
-      var e = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(e.detail || 'Merge failed'); return;
-    }
-    var merged = await r.json().catch(function(){return null;});
     clearSelection();
     await loadJobsList();
     if (merged && merged.path) openJob(merged.path);
-  } catch(e) { showError('Merge failed: ' + e.message); }
+  } catch(e) { showError(e.detail || ('Merge failed: ' + e.message)); }
 }

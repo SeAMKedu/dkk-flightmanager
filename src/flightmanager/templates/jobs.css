@@ -56,6 +56,11 @@
 #stale-notice{display:none;background:#1e293b;border:1px solid #fde68a;border-radius:4px;padding:5px 8px;font-size:10px;color:#fde68a;margin-bottom:6px}
 #ext-modified-notice{display:none;align-items:center;gap:5px;background:#1e293b;border:1px solid #7dd3fc;border-radius:4px;padding:4px 8px;font-size:10px;color:#7dd3fc;margin-bottom:6px}
 #ext-modified-notice.visible{display:flex}
+#refresh-banner{align-items:center;justify-content:space-between;gap:6px;background:#1e293b;border:1px solid #86efac;border-radius:4px;padding:5px 8px;font-size:10px;color:#bbf7d0;margin-bottom:6px}
+#refresh-banner .rb-actions{display:flex;gap:4px;flex-shrink:0}
+#refresh-banner button{font-size:10px;padding:2px 7px;border:1px solid #86efac;background:#166534;color:#dcfce7;border-radius:3px;cursor:pointer}
+#refresh-banner button#rb-dismiss{padding:2px 6px;border-color:#475569;background:transparent;color:#94a3b8;font-size:12px;line-height:1}
+#refresh-banner button:hover{filter:brightness(1.15)}
 .ext-mod-btn{width:auto;background:transparent;border:1px solid #7dd3fc;color:#7dd3fc;border-radius:3px;padding:1px 7px;font-size:10px;font-weight:600;cursor:pointer;flex-shrink:0}
 .ext-mod-btn:hover{background:#1e40af;border-color:#93c5fd;color:#fff}
 .jname-row{display:flex;align-items:center;justify-content:space-between;margin-top:6px;margin-bottom:2px}
@@ -89,6 +94,23 @@
 .sel-action:hover{color:#1e293b;border-color:#475569}
 .sel-action.danger{color:#fca5a5;border-color:#7f1d1d}
 .sel-action.danger:hover{color:#fff;background:#dc2626;border-color:#dc2626}
+/* PDF report progress: a slim single-line bar in the top-centre gap between the
+   selection action bar and the forecast window. Independent of the action bar so
+   it stays visible if jobs are deselected mid-generation. The fill is determinate
+   (width = % done) AND carries a moving diagonal stripe, so it shows progress and
+   that work is still happening. */
+#pdf-progress{position:absolute;top:44px;left:50%;transform:translateX(-50%);z-index:601;
+  display:flex;align-items:center;gap:9px;white-space:nowrap;
+  background:rgba(15,23,42,.92);color:#f1f5f9;border:1px solid #334155;border-radius:13px;
+  padding:3px 12px;box-shadow:0 2px 8px rgba(0,0,0,.4);font:600 11px sans-serif}
+#pdf-progress.hidden{display:none}
+.pp-title{font-weight:700}
+.pp-msg{color:#94a3b8;font-weight:500}
+.pp-bar{width:120px;height:4px;background:#1e293b;border-radius:2px;overflow:hidden}
+.pp-fill{display:block;height:100%;width:3%;background:#f59e0b;border-radius:2px;transition:width .35s ease;
+  background-image:linear-gradient(45deg,rgba(255,255,255,.30) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.30) 50%,rgba(255,255,255,.30) 75%,transparent 75%);
+  background-size:14px 14px;animation:ppstripe .7s linear infinite}
+@keyframes ppstripe{0%{background-position:0 0}100%{background-position:14px 0}}
 .sel-clear{background:none;border:none;color:#475569;font-size:13px;cursor:pointer;padding:0 2px;width:auto;line-height:1}
 .sel-clear:hover{color:#94a3b8}
 .jfolder{margin-bottom:4px}

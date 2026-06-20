@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from shapely.geometry import Polygon
 
 from flightmanager.batch import create_skeleton_jobs

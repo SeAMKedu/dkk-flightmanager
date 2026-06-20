@@ -119,6 +119,34 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:
 
     app = FastAPI(title="dkk-flightmanager", docs_url=None, redoc_url=None, lifespan=_app_lifespan)
 
+    @app.middleware("http")
+    async def _timing(request, call_next):
+        """Log per-request latency so slow endpoints announce themselves.
+
+        Threshold (ms) is read from FLIGHTMANAGER_SLOW_MS each request so it can
+        be raised/lowered without a restart; <=0 disables. Requests at/over the
+        threshold log at WARNING, the rest at DEBUG (silent at default level).
+        SSE streams (/api/progress, /api/events) are skipped — they are
+        long-lived by design and their duration is meaningless here.
+        """
+        import os
+        import time
+        path = request.url.path
+        if path.startswith(("/api/progress", "/api/events")):
+            return await call_next(request)
+        t0 = time.perf_counter()
+        response = await call_next(request)
+        dt_ms = (time.perf_counter() - t0) * 1000
+        try:
+            slow_ms = float(os.environ.get("FLIGHTMANAGER_SLOW_MS", "500"))
+        except ValueError:
+            slow_ms = 500.0
+        if slow_ms > 0:
+            level = logging.WARNING if dt_ms >= slow_ms else logging.DEBUG
+            log.log(level, "%s %s -> %d %.0fms",
+                    request.method, path, response.status_code, dt_ms)
+        return response
+
     @app.get("/", response_class=HTMLResponse)
     async def ui():
         return _load_ui()

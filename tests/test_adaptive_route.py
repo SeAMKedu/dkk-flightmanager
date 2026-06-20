@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import math
 
 import pytest
 from shapely.geometry import box
 
 from flightmanager.adaptive_route import (
-    _altitude_at, _simplify_altitude_waypoints, _slope_across,
-    compute_adaptive_route,
+    _altitude_at, _simplify_altitude_waypoints, compute_adaptive_route,
 )
 from flightmanager.buildings import Building
 from flightmanager.config import DroneConfig

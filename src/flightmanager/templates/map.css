@@ -1,4 +1,47 @@
 #battery-timeline{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:600;pointer-events:none;background:rgba(15,23,42,.82);border-radius:8px;padding:5px 8px;backdrop-filter:blur(3px);display:none}
+
+/* Satellite overpass + weather forecast bar (top centre, mirrors battery timeline) */
+#forecast-bar{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:600;background:rgba(15,23,42,.86);border-radius:8px;padding:5px 8px 4px;backdrop-filter:blur(3px);display:none;max-width:min(86vw,860px);transition:top .15s ease}
+#forecast-bar.with-actions{top:54px}
+#forecast-bar.with-pdf{top:66px}
+#forecast-bar.collapsed{max-width:none}
+#forecast-bar.collapsed .fc-body{display:none}
+#forecast-bar .fc-loading{color:#cbd5e1;font:600 11px sans-serif;padding:6px 10px;text-align:center}
+#forecast-bar .fc-head{display:flex;align-items:center;justify-content:center;gap:5px;color:#93c5fd;font:700 9px/1 sans-serif;letter-spacing:.06em;text-transform:uppercase;margin:0 0 4px}
+#forecast-bar.collapsed .fc-head{margin:0}
+.fc-collapse{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:none;background:transparent;color:#93c5fd;cursor:pointer;border-radius:3px}
+.fc-collapse:hover{background:rgba(148,163,184,.18)}
+.fc-collapse svg{transition:transform .15s ease}
+#forecast-bar.collapsed .fc-collapse svg{transform:rotate(180deg)}
+/* Row-labelled grid: header column + one column per day. */
+.fc-grid{display:grid;align-items:center;row-gap:2px;column-gap:2px}
+.fc-rlabel{font:700 8px/1.1 sans-serif;color:#64748b;text-transform:uppercase;letter-spacing:.03em;text-align:right;padding-right:7px;white-space:nowrap;justify-self:end}
+.fc-cell{display:flex;align-items:center;justify-content:center;text-align:center;padding:1px 2px;min-width:0}
+.fc-cell.fc-col-today{background:rgba(245,158,11,.16)}
+.fc-cell.fc-r-date.fc-col-today{border-radius:4px 4px 0 0}
+.fc-cell.fc-r-sats.fc-col-today{border-radius:0 0 4px 4px}
+/* Golden day: flyable weather + a clear-sky satellite pass coincide. */
+.fc-cell.fc-col-golden{background:rgba(34,197,94,.16)}
+.fc-cell.fc-col-golden.fc-col-today{background:rgba(245,158,11,.16)}
+.fc-cell.fc-r-date.fc-col-golden{border-radius:4px 4px 0 0;box-shadow:inset 0 2px 0 #22c55e}
+.fc-cell.fc-r-sats.fc-col-golden{border-radius:0 0 4px 4px}
+.fc-warn{color:#fde047;background:rgba(180,83,9,.25);font:600 10px/1.3 sans-serif;padding:4px 8px;border-radius:5px;margin-bottom:5px;text-align:center}
+/* Per-row value sizing: wind + cloud are the primary pilot metrics. */
+.fc-cell.fc-r-date{flex-direction:column;color:#e2e8f0;font:600 10px/1.15 sans-serif;white-space:nowrap}
+.fc-r-date .fc-wd{font-weight:800}
+.fc-r-date .fc-dm{font-weight:600;color:#cbd5e1}
+.fc-wx{width:21px;height:21px;color:#e2e8f0}
+.fc-wx-empty{opacity:.25}
+.fc-cell.fc-r-temp{color:#cbd5e1;font:600 11px/1 sans-serif}
+.fc-cell.fc-r-wind{color:#f8fafc;font:800 15px/1 sans-serif}
+.fc-cell.fc-r-cloud{color:#cbd5e1;font:800 15px/1 sans-serif}
+.fc-cell.fc-r-cloud .fc-cloudv-clear{color:#4ade80}
+.fc-cell.fc-r-cloud .fc-cloudv-over{color:#64748b}
+.fc-sats{display:flex;flex-wrap:wrap;gap:2px;justify-content:center}
+.fc-sat{color:#fff;font:700 8px/1 sans-serif;padding:2px 3px;border-radius:3px;letter-spacing:.02em}
+.fc-sat.fc-sat-clear{box-shadow:0 0 0 1.5px #fde047,0 0 5px 1px rgba(253,224,71,.7)}
+.fc-sat.fc-sat-night{background:transparent!important;color:#64748b;font-weight:600;padding:2px 2px}
+.fc-attr{color:#64748b;font:500 8px/1 sans-serif;text-align:right;margin-top:4px}
 #sb.mv-hidden{display:none}
 #legend.mv-hidden{display:none}
 #sp.sp-visible{display:block}
@@ -34,6 +77,9 @@
 #mv-route-btn{background:none;border:1px solid #334155;border-radius:3px;color:#64748b;font-size:9px;padding:2px 7px;cursor:pointer;font-weight:600;transition:color .12s,border-color .12s;margin-top:6px;display:block;width:100%;text-align:center}
 #mv-route-btn:hover{color:#94a3b8;border-color:#475569}
 #mv-route-btn.active{color:#3b82f6;border-color:#3b82f6}
+.mgrs-tile-label{color:#475569;font:600 11px/1 sans-serif;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;white-space:nowrap;pointer-events:none}
+.mgrs-tile-label.mgrs-job{color:#0f172a;font-weight:800;font-size:12px}
+.mv-st-sw-nb{opacity:.5;border:1px dashed rgba(255,255,255,.6)}
 .mv-tooltip{background:#1e293b;border:1px solid #334155;color:#f1f5f9;font-size:12px;line-height:1.5;padding:6px 10px;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:auto}
 .mv-tooltip::before{border-top-color:#334155}
 .mv-tt-inner{min-width:140px}
@@ -52,15 +98,35 @@
 .mv-popup .leaflet-popup-tip{background:#1e293b}
 .mv-popup .leaflet-popup-close-button{color:#94a3b8}
 .mv-popup .leaflet-popup-close-button:hover{color:#f1f5f9}
+
+/* Fixed launch-site announcement box — bottom-left. Holds everything: the
+   member jobs plus the Flyk fields (centre, diameter, max altitude, duration).
+   A faint dotted connector (drawn in the 'lsLine' pane, beneath the dots) links
+   it to the hovered dot. */
+#ls-announce{position:absolute;left:12px;bottom:12px;z-index:700;display:none;
+  background:rgba(248,250,252,.96);color:#1e293b;border:1px solid #cbd5e1;
+  border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.3);padding:8px 11px;
+  font-size:12px;min-width:200px;max-width:260px}
+#ls-announce.show{display:block}
+.ls-an-title{font-size:13px;font-weight:700;color:#b45309}
+.ls-an-sub{font-size:11px;color:#64748b;margin:0 0 5px}
+.ls-an-row{display:flex;justify-content:space-between;gap:16px;line-height:1.65}
+.ls-an-row .k{color:#64748b}
+.ls-an-row .v{font-weight:600;font-variant-numeric:tabular-nums}
+.ls-an-jobs{margin-top:6px;padding-top:5px;border-top:1px solid #e2e8f0;
+  font-size:10px;color:#64748b;line-height:1.55}
+.ls-an-jobs div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Leaflet.draw midpoint handles — diamond via ::before so Leaflet's own
    translate3d positioning transform on the icon element is not overridden */
 .ld-mid{background:transparent!important;border:none!important;overflow:visible!important}
 .ld-mid::before{content:''!important;position:absolute!important;width:7px!important;height:7px!important;top:50%!important;left:50%!important;transform:translate(-50%,-50%) rotate(45deg)!important;background:#fff!important;border:1px solid #94a3b8!important;box-sizing:border-box!important}
-.leaflet-control-layers{border:none!important;background:none!important;box-shadow:none!important}
-.leaflet-control-layers-toggle{width:30px!important;height:30px!important;background-color:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);background-size:18px 18px!important}
-.leaflet-control-layers-expanded{padding:6px 8px!important;background:#fff;border-radius:4px;border:2px solid rgba(0,0,0,.2)!important;box-shadow:0 1px 5px rgba(0,0,0,.4);font-size:12px;min-width:80px}
-.leaflet-control-layers-expanded label{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;color:#1e293b;margin:3px 0;cursor:pointer}
-.leaflet-control-layers-expanded input{width:auto;margin:0;cursor:pointer}
+.base-layer-ctrl{background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.4)}
+.base-layer-icon{width:26px;height:26px;background:center/18px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath fill='%23555' d='M1 12.5l8 4 8-4-8-4zm0-4l8 4 8-4-8-4zm8-8L1 5l8 4 8-4z'/%3E%3C/svg%3E")}
+.base-layer-panel{display:none;flex-direction:column;gap:2px;padding:3px;border-top:1px solid #e2e8f0}
+.base-layer-ctrl:hover .base-layer-panel{display:flex}
+.base-layer-btn{width:46px;height:24px;background:#fff;border:1px solid transparent;border-radius:3px;font-size:11px;font-weight:600;color:#374151;cursor:pointer;transition:background .12s,color .12s,border-color .12s;padding:0;line-height:24px;text-align:center;white-space:nowrap}
+.base-layer-btn:hover:not(.active){background:#f1f5f9;border-color:#cbd5e1}
+.base-layer-btn.active{background:#3b82f6;color:#fff;border-color:#2563eb}
 .meas-clear-ctrl{width:30px!important;height:30px!important;background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;padding:0;font-size:18px;font-weight:700;line-height:30px;text-align:center;color:#444;cursor:pointer;display:block}
 .meas-clear-ctrl:hover{background:#f4f4f4;color:#111}
 .takeoff-icon{cursor:grab;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}

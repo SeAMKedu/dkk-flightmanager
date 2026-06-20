@@ -12,18 +12,22 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from flightmanager._server_state import SSEResponse
 from pydantic import BaseModel
 
 import flightmanager._server_state as _st
 from flightmanager.job_store import (
     best_polygon,
+    card_polygon,
     check_cache_staleness,
     is_folder_dir,
+    load_params,
     params_from_manifest,
     read_job_card,
+    refresh_status,
     resolve_job_dir,
+    save_params,
     scan_jobs,
 )
 
@@ -87,6 +91,10 @@ class SplitRequest(BaseModel):
     polygon_b: dict  # GeoJSON for the new sibling job
 
 
+class ExportKmlRequest(BaseModel):
+    paths: list[str]
+
+
 class MergeRequest(BaseModel):
     job_paths: list[str]
     new_name: str
@@ -109,17 +117,15 @@ async def list_jobs():
 async def jobs_geojson(folder: str | None = None):
     """Return all jobs as a GeoJSON FeatureCollection for the map view."""
     output_dir = Path(_st.config.output.output_dir).resolve()
-    groups = scan_jobs(output_dir)
+    groups = scan_jobs(output_dir, with_polygon=True)
     features = []
     for group in groups:
         if folder is not None and group["name"] != folder:
             continue
         for card in group["jobs"]:
-            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
-            geom = best_polygon(job_dir)
             features.append({
                 "type": "Feature",
-                "geometry": geom,
+                "geometry": card.get("_geometry"),
                 "properties": {
                     "path":              card["path"],
                     "name":              card["name"],
@@ -149,6 +155,312 @@ async def jobs_geojson(folder: str | None = None):
                 },
             })
     return {"type": "FeatureCollection", "features": features}
+
+
+@router.get("/api/launch_sites")
+async def launch_sites(folder: str | None = None):
+    """Group a folder's jobs into launch sites for flight announcements.
+
+    A launch site = a run of consecutive-flight-order jobs flown from one parking
+    spot (takeoffs within ~50 m). Each carries the takeoff-centroid dot plus the
+    smallest enclosing circle (centre + radius) over its survey polygons — the
+    operating area you announce on Flyk. Registered before ``/api/jobs/{path:path}``.
+    """
+    from flightmanager.launch_sites import cluster_jobs
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    cards: list[dict] = []
+    for group in scan_jobs(output_dir, with_polygon=True):
+        if folder is not None and group["name"] != folder:
+            continue
+        if folder is None and group["name"] is not None:
+            continue
+        cards.extend(group["jobs"])
+
+    sites = cluster_jobs(cards)
+    return {"sites": [s.to_dict() for s in sites]}
+
+
+# ── PDF report ────────────────────────────────────────────────────────────────
+
+def _load_job_entry(output_dir: Path, path: str) -> dict | None:
+    """Return ``{"params", "manifest"}`` for a job path (manifest reconstructed
+    for CLI-only jobs). None if the job dir is missing."""
+    folder, name, job_dir = resolve_job_dir(output_dir, path)
+    if not job_dir.is_dir():
+        return None
+    params = load_params(job_dir)
+    manifest: dict = {}
+    mp = job_dir / "manifest.json"
+    if mp.exists():
+        try:
+            manifest = json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = {}
+    if params is None:
+        params = params_from_manifest(name, manifest) if manifest else {}
+    params.setdefault("job_name", name)
+    params["folder"] = folder
+    params["path"] = path
+    return {"params": params, "manifest": manifest}
+
+
+@router.get("/api/jobs/{path:path}/report.pdf")
+async def job_report(path: str, basemap: str = "mml"):
+    """One-page PDF flight card for a job. Registered before ``/api/jobs/{path:path}``."""
+    import asyncio
+
+    from flightmanager import report
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    entry = _load_job_entry(output_dir, path)
+    if entry is None:
+        raise HTTPException(404, detail=f"Job '{path}' not found")
+    pdf = await asyncio.to_thread(
+        report.render_job_report, _st.config, entry["params"], entry["manifest"], basemap=basemap,
+    )
+    fname = (entry["params"].get("job_name") or "job") + ".pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+
+
+# Async report jobs: { job_id: {"queue", "result": bytes|None, "filename", "error"} }.
+# A report draws many maps (overview + per-site + per-job), so generation is run in
+# a thread and streams progress over SSE; the finished PDF is fetched separately.
+_report_jobs: dict = {}
+
+
+@router.post("/api/report/start")
+async def report_start(body: dict):
+    """Start a PDF report job. One path -> flight card, several -> mission packet.
+
+    Body: ``{paths: [...], folder?, basemap?, include_job_cards?}`` -> ``{job_id}``.
+    Stream progress via ``GET /api/report/progress/{job_id}``, then fetch the PDF
+    from ``GET /api/report/result/{job_id}``.
+    """
+    import asyncio
+    import uuid
+
+    from flightmanager import report
+
+    paths = body.get("paths") or []
+    if not paths:
+        raise HTTPException(400, detail="No job paths given")
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    entries = [e for p in paths if (e := _load_job_entry(output_dir, p))]
+    if not entries:
+        raise HTTPException(404, detail="No jobs found for the given paths")
+
+    basemap = body.get("basemap", "mml")
+    folder = body.get("folder")
+    job_id = uuid.uuid4().hex
+    queue: asyncio.Queue = asyncio.Queue()
+    _report_jobs[job_id] = {"queue": queue, "result": None, "error": None, "filename": None}
+    loop = asyncio.get_running_loop()
+
+    def progress_cb(stage, msg, pct):
+        loop.call_soon_threadsafe(queue.put_nowait, {"stage": stage, "msg": msg, "pct": pct})
+
+    async def run():
+        try:
+            if len(entries) == 1 and not folder:
+                pdf = await asyncio.to_thread(
+                    report.render_job_report, _st.config, entries[0]["params"],
+                    entries[0]["manifest"], basemap=basemap, progress_cb=progress_cb)
+                fname = (entries[0]["params"].get("job_name") or "job") + ".pdf"
+            else:
+                pdf = await asyncio.to_thread(
+                    report.render_packet, _st.config, entries, folder=folder,
+                    basemap=basemap, include_job_cards=body.get("include_job_cards", True),
+                    progress_cb=progress_cb)
+                fname = (folder or "jobs") + ".pdf"
+            _report_jobs[job_id]["result"] = pdf
+            _report_jobs[job_id]["filename"] = fname
+            queue.put_nowait({"stage": "done", "msg": "Ready", "pct": 100})
+        except Exception as e:  # noqa: BLE001
+            _report_jobs[job_id]["error"] = str(e)
+            queue.put_nowait({"stage": "error", "msg": str(e), "pct": 0})
+
+    asyncio.create_task(run())
+    return {"job_id": job_id}
+
+
+@router.get("/api/report/progress/{job_id}")
+async def report_progress(job_id: str):
+    """SSE progress for a report job (``{stage, msg, pct}``; ends on done/error)."""
+    import asyncio
+
+    entry = _report_jobs.get(job_id)
+    if not entry:
+        raise HTTPException(404, detail="Report job not found")
+
+    async def generate():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(entry["queue"].get(), timeout=25.0)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    if event.get("stage") in ("done", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    yield 'data: {"stage":"keepalive"}\n\n'
+        except asyncio.CancelledError:
+            pass
+
+    return SSEResponse(generate(), media_type="text/event-stream",
+                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/api/report/result/{job_id}")
+async def report_result(job_id: str):
+    """Return the finished PDF for a report job (one-shot; frees it afterwards)."""
+    entry = _report_jobs.pop(job_id, None)
+    if entry is None:
+        raise HTTPException(404, detail="Report job not found")
+    if entry.get("error"):
+        raise HTTPException(500, detail=entry["error"])
+    if entry.get("result") is None:
+        raise HTTPException(409, detail="Report not finished")
+    return Response(content=entry["result"], media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{entry["filename"]}"'})
+
+
+def _resolve_centroids(folder: str | None, paths: str | None):
+    """Return ``(centroids, folder_dir)`` for a folder and/or comma-separated paths.
+
+    Centroids are (lat, lon) of each job's best polygon; root jobs when neither given.
+    """
+    from shapely.geometry import shape
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    if paths:
+        wanted = [p for p in paths.split(",") if p.strip()]
+        job_dirs = [resolve_job_dir(output_dir, p)[2] for p in wanted]
+    else:
+        job_dirs = []
+        for group in scan_jobs(output_dir):
+            if folder is not None and group["name"] != folder:
+                continue
+            for card in group["jobs"]:
+                job_dirs.append(resolve_job_dir(output_dir, card["path"])[2])
+    folder_dir = output_dir / folder if folder else output_dir
+
+    centroids: list[tuple[float, float]] = []
+    for jd in job_dirs:
+        geom = best_polygon(jd)
+        if geom:
+            c = shape(geom).centroid
+            centroids.append((c.y, c.x))
+    return centroids, folder_dir
+
+
+@router.get("/api/forecast")
+async def forecast(folder: str | None = None, paths: str | None = None):
+    """Satellite-overpass + weather day-slots for the map-view bar.
+
+    Scope: a single ``folder`` (its jobs) and/or an explicit comma-separated
+    ``paths`` list. Falls back to root-level jobs when neither is given.
+    """
+    import asyncio
+
+    from flightmanager.forecast import build_forecast
+
+    centroids, folder_dir = _resolve_centroids(folder, paths)
+    return await asyncio.to_thread(
+        build_forecast,
+        centroids,
+        _st.config.satellites,
+        _st.config.weather,
+        _st.config.cache.cache_dir,
+        folder_dir=folder_dir,
+    )
+
+
+@router.get("/api/refresh/scan")
+async def refresh_scan(folder: str | None = None):
+    """List exported jobs that should be recomputed (stale pipeline / newer source data).
+
+    Cheap detection only — no recompute. Skips untouched batch skeletons (nothing built
+    yet). Registered before ``/api/jobs/{path:path}``.
+    """
+    from flightmanager.manifest import PIPELINE_VERSION
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    stale: list[dict] = []
+    for group in scan_jobs(output_dir):
+        if folder is not None and group["name"] != folder:
+            continue
+        for card in group["jobs"]:
+            if card.get("untouched"):
+                continue
+            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
+            manifest_path = job_dir / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            status = refresh_status(manifest, _st.config.cache, PIPELINE_VERSION)
+            if status["needs_refresh"]:
+                stale.append({
+                    "path": card["path"], "name": card["name"], "folder": card["folder"],
+                    "reasons": status["reasons"], "missing_tiles": status["missing_tiles"],
+                })
+    return {"pipeline_version": PIPELINE_VERSION, "stale": stale}
+
+
+@router.get("/api/mgrs_tiles")
+async def mgrs_tiles(folder: str | None = None, paths: str | None = None):
+    """MGRS tiles the jobs fall in plus their neighbours, for the 'MGRS tiles' stat
+    view. Grid-only (no weather/orbit network). Each tile: id, geometry, center,
+    is_job, job_count."""
+    import asyncio
+
+    from flightmanager import satellites as sat
+
+    centroids, _ = _resolve_centroids(folder, paths)
+    return await asyncio.to_thread(
+        sat.tiles_with_neighbors, centroids, _st.config.satellites,
+    )
+
+
+@router.post("/api/export/kml")
+async def export_kml(req: ExportKmlRequest):
+    """Build a Google-Earth KML for the selected jobs (survey polygons + takeoffs).
+
+    Replaces the old in-browser KML builder. Jobs are ordered by flight order
+    (sort_order first, then name); the survey polygon comes from card_polygon so
+    ID-derived jobs (survey_outline only) are included.
+    """
+    from flightmanager.kml_export import build_jobs_kml
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    jobs: list[dict] = []
+    for path in req.paths:
+        _, _, job_dir = resolve_job_dir(output_dir, path)
+        params = load_params(job_dir)
+        if params is None:
+            manifest_path = job_dir / "manifest.json"
+            if manifest_path.exists():
+                try:
+                    params = params_from_manifest(
+                        job_dir.name, json.loads(manifest_path.read_text(encoding="utf-8"))
+                    )
+                except Exception:
+                    continue
+            else:
+                continue
+        params.setdefault("job_name", job_dir.name)
+        jobs.append(params)
+
+    jobs.sort(key=lambda p: (
+        0 if p.get("sort_order") is not None else 1,
+        p.get("sort_order") or 0,
+        p.get("job_name") or "",
+    ))
+    kml = build_jobs_kml(jobs)
+    return Response(content=kml, media_type="application/vnd.google-earth.kml+xml")
 
 
 # ---------------------------------------------------------------------------
@@ -190,18 +502,15 @@ async def reorder_jobs(body: dict):
     ordered_set = {p: i for i, p in enumerate(paths)}
 
     for job_dir in siblings:
-        params_path = job_dir / "job_params.json"
-        if not params_path.exists():
+        data = load_params(job_dir)
+        if data is None:
             continue
         try:
-            data = json.loads(params_path.read_text(encoding="utf-8"))
             job_path = f"{folder0}/{job_dir.name}" if folder0 else job_dir.name
             new_so = ordered_set.get(job_path)  # None if not in list
             if data.get("sort_order") != new_so:
                 data["sort_order"] = new_so
-                params_path.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
+                save_params(job_dir, data)
         except Exception:
             pass
 
@@ -223,10 +532,9 @@ async def get_job(path: str):
         except Exception:
             pass
     if params_path.exists():
-        try:
-            params = json.loads(params_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+        params = load_params(job_dir)
+        if params is None:
+            raise HTTPException(500, detail="Could not read job_params.json")
     elif manifest:
         params = params_from_manifest(name, manifest)
     else:
@@ -268,17 +576,24 @@ def _rename_job(job_dir: Path, old_name: str, new_name: str, folder: str | None)
                 pass
         raise HTTPException(500, detail=f"Rename failed mid-way, rolled back: {exc}")
 
-    for json_file in (job_dir / "manifest.json", job_dir / "job_params.json"):
-        if json_file.exists():
-            try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-                if "job_name" in data:
-                    data["job_name"] = new_name
-                json_file.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
-            except Exception:
-                pass
+    manifest_file = job_dir / "manifest.json"
+    if manifest_file.exists():
+        try:
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            if "job_name" in data:
+                data["job_name"] = new_name
+            manifest_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+    params = load_params(job_dir)
+    if params is not None:
+        try:
+            params["job_name"] = new_name
+            save_params(job_dir, params)
+        except Exception:
+            pass
 
     try:
         job_dir.rename(new_dir)
@@ -303,10 +618,9 @@ async def update_job(path: str, body: dict):
 
     # Simple field update (color, sort_order, skipped — no rename)
     if "new_name" not in body and ("color" in body or "sort_order" in body or "skipped" in body):
-        params_path = job_dir / "job_params.json"
-        if params_path.exists():
+        data = load_params(job_dir)
+        if data is not None:
             try:
-                data = json.loads(params_path.read_text(encoding="utf-8"))
                 if "color" in body:
                     data["color"] = body["color"]
                 if "sort_order" in body:
@@ -314,9 +628,7 @@ async def update_job(path: str, body: dict):
                     data["sort_order"] = int(so) if so is not None else None
                 if "skipped" in body:
                     data["skipped"] = bool(body["skipped"])
-                params_path.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
+                save_params(job_dir, data)
             except Exception as exc:
                 raise HTTPException(500, detail=f"Could not update job: {exc}")
         return {"path": path, "color": body.get("color"), "sort_order": body.get("sort_order"), "skipped": body.get("skipped")}
@@ -353,10 +665,9 @@ async def clone_job(path: str):
     clone_dir.mkdir(parents=True, exist_ok=True)
 
     if params_path.exists():
-        try:
-            params = json.loads(params_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        params = load_params(src_dir)
+        if params is None:
+            raise HTTPException(500, detail="Could not read job_params.json")
     else:
         try:
             src_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -366,9 +677,7 @@ async def clone_job(path: str):
 
     params["job_name"] = clone_name
     params["saved_at"] = datetime.now(timezone.utc).isoformat()
-    (clone_dir / "job_params.json").write_text(
-        json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_params(clone_dir, params)
     thumb_src = src_dir / "thumbnail.svg"
     if thumb_src.exists():
         shutil.copy2(thumb_src, clone_dir / "thumbnail.svg")
@@ -393,10 +702,9 @@ async def split_job(path: str, req: SplitRequest):
     params_path = job_dir / "job_params.json"
     if not params_path.exists():
         raise HTTPException(404, detail=f"Job '{path}' has no job_params.json")
-    try:
-        params = json.loads(params_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Could not read job_params.json: {exc}")
+    params = load_params(job_dir)
+    if params is None:
+        raise HTTPException(500, detail="Could not read job_params.json")
 
     # Derive a unique name for the new job
     parent_dir = job_dir.parent
@@ -409,24 +717,24 @@ async def split_job(path: str, req: SplitRequest):
 
     now = datetime.now(timezone.utc).isoformat()
 
-    # Update existing job in place (polygon_a)
+    # Update existing job in place (polygon_a). Clear the stored outline so
+    # save_params re-derives it from the new polygon.
     params["custom_polygon_4326"] = req.polygon_a
-    params["last_preview_geojson"] = None
+    params["survey_outline"] = None
+    params.pop("last_preview_geojson", None)
     params["saved_at"] = now
-    params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_params(job_dir, params)
 
     # Create new sibling job (polygon_b, copy all other params)
     new_params = dict(params)
     new_params["job_name"] = new_name
     new_params["custom_polygon_4326"] = req.polygon_b
-    new_params["last_preview_geojson"] = None
+    new_params["survey_outline"] = None
     new_params["saved_at"] = now
 
     new_dir = parent_dir / new_name
     new_dir.mkdir(parents=True, exist_ok=True)
-    (new_dir / "job_params.json").write_text(
-        json.dumps(new_params, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_params(new_dir, new_params)
 
     new_path = f"{folder}/{new_name}" if folder else new_name
     return {"modified_path": path, "new_path": new_path, "new_name": new_name}
@@ -586,7 +894,6 @@ def _merge_by_ids(all_params: list[tuple[Path, dict]], new_name: str) -> dict:
         "custom_polygon_4326": None,
         "batch_created": False,
         "color": None,
-        "last_preview_geojson": None,
         "merge_strategy": "ids",
     }
 
@@ -599,9 +906,7 @@ def _merge_by_polygon(all_params: list[tuple[Path, dict]], new_name: str) -> dic
 
     polys = []
     for job_dir, p in all_params:
-        geojson = p.get("custom_polygon_4326") or (
-            (p.get("last_preview_geojson") or {}).get("survey")
-        )
+        geojson = card_polygon(p)
         if not geojson:
             raise HTTPException(
                 400,
@@ -634,7 +939,6 @@ def _merge_by_polygon(all_params: list[tuple[Path, dict]], new_name: str) -> dic
         "custom_polygon_4326": dict(mapping(merged)),
         "batch_created": False,
         "color": None,
-        "last_preview_geojson": None,
         "merge_strategy": "polygon_union",
     }
 
@@ -644,13 +948,11 @@ def _load_job_params(output_dir: Path, job_paths: list[str]) -> list[tuple[Path,
     all_params: list[tuple[Path, dict]] = []
     for path in job_paths:
         _, _, job_dir = resolve_job_dir(output_dir, path)
-        params_path = job_dir / "job_params.json"
-        if not params_path.exists():
+        if not (job_dir / "job_params.json").exists():
             raise HTTPException(404, detail=f"job_params.json not found for '{path}'")
-        try:
-            p = json.loads(params_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(500, detail=f"Could not read params for '{path}': {exc}")
+        p = load_params(job_dir)
+        if p is None:
+            raise HTTPException(500, detail=f"Could not read params for '{path}'")
         all_params.append((job_dir, p))
     return all_params
 
@@ -705,9 +1007,7 @@ async def merge_jobs(req: MergeRequest):
             409, detail=f"A job named '{new_name}' already exists in that location"
         )
     dest_dir.mkdir(parents=True, exist_ok=True)
-    (dest_dir / "job_params.json").write_text(
-        json.dumps(merged_params, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_params(dest_dir, merged_params)
 
     if req.delete_sources:
         _delete_merged_sources(output_dir, req.job_paths)

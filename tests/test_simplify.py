@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 
-import pytest
 from shapely.geometry import MultiPolygon, Point, Polygon
 
 from flightmanager.config import PolygonConfig

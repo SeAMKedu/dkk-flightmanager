@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,7 +18,6 @@ from flightmanager.cache import (
     _is_expired,
     _lookup,
     _register,
-    _sha256,
     covering_tiles,
     get_tiles,
     snap_down,
@@ -355,3 +353,41 @@ class TestProvenance:
         prov = tile_provenance([])
         assert prov["tile_ids"] == []
         assert prov["fetch_date_min"] is None
+
+
+class TestTileLocks:
+    """The per-tile lock registry must serialise same-tile access without
+    growing unboundedly across the long-lived serve process."""
+
+    def test_same_tile_returns_same_lock_while_held(self):
+        from flightmanager.cache import _tile_lock
+
+        a = _tile_lock("dem", "E1_N1")
+        b = _tile_lock("dem", "E1_N1")
+        # While a strong reference is held, repeated lookups share one lock.
+        assert a is b
+        assert _tile_lock("dem", "E2_N2") is not a
+
+    def test_unused_locks_are_garbage_collected(self):
+        import gc
+
+        from flightmanager.cache import _tile_lock, _tile_locks
+
+        # Touch several distinct tiles, holding no references afterwards.
+        for i in range(20):
+            _tile_lock("dem", f"E{i}_N0")
+        gc.collect()
+        # The weak registry must not retain entries for locks no one holds.
+        assert len(_tile_locks) == 0
+
+    def test_held_lock_survives_collection(self):
+        import gc
+
+        from flightmanager.cache import _tile_lock, _tile_locks
+
+        held = _tile_lock("buildings", "E9_N9")
+        gc.collect()
+        assert _tile_locks.get(("buildings", "E9_N9")) is held
+        del held
+        gc.collect()
+        assert _tile_locks.get(("buildings", "E9_N9")) is None

@@ -59,7 +59,7 @@ def _photo_interval_m(height_m: float, drone: DroneConfig, overlap_front_pct: fl
     return max(0.5, footprint_m * (1.0 - overlap_front_pct / 100.0))
 
 
-def _build_waypoint_list(
+def _build_waypoint_list(  # noqa: C901
     strips_3067: list,
     altitude_profile: list[float],
     inter_transits: list,

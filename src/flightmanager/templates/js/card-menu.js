@@ -2,6 +2,7 @@
 
 import { st } from './state.js';
 import { escHtml, jobApiUrl } from './utils.js';
+import { apiPost } from './api.js';
 import { showError } from './form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 import { openMoveModal } from './modal-utils.js';
@@ -56,21 +57,13 @@ export function showMoveMenu(btn, j) {
 
 export async function doMoveJob(j, toFolder) {
   try {
-    var r = await fetch(jobApiUrl(j.path, '/move'), {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({folder: toFolder})
-    });
-    if (!r.ok) {
-      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      showError(err.detail || 'Move failed'); return;
-    }
-    var data = await r.json();
+    var data = await apiPost(jobApiUrl(j.path, '/move'), {folder: toFolder});
     if (st._activeJob === j.path) {
       st._activeJob = data.path;
       st._activeJobFolder = data.folder || null;
     }
     await loadJobsList();
-  } catch(e) { showError('Move failed: ' + e.message); }
+  } catch(e) { showError(e.detail || ('Move failed: ' + e.message)); }
 }
 
 export function createFolder() {
@@ -91,20 +84,11 @@ export async function submitFolder() {
   var btn = document.getElementById('folder-submit');
   btn.disabled = true;
   try {
-    var r = await fetch('/api/folders', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: name})
-    });
-    if (!r.ok) {
-      var err = await r.json().catch(function(){return{detail:'HTTP '+r.status};});
-      errEl.textContent = err.detail || 'Could not create folder';
-      errEl.style.display = 'block';
-      return;
-    }
+    await apiPost('/api/folders', {name: name});
     closeFolderDialog();
     await loadJobsList();
   } catch(e) {
-    errEl.textContent = 'Failed: ' + e.message;
+    errEl.textContent = e.detail || ('Failed: ' + e.message);
     errEl.style.display = 'block';
   } finally { btn.disabled = false; }
 }

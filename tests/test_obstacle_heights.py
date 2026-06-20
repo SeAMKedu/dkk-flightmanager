@@ -123,7 +123,7 @@ class TestAltitudeProfileWithHeights:
 
     def test_tall_building_requires_more_altitude_than_short(self):
         # Same horizontal distance, compare industrial (15 m) vs residential (7 m)
-        mid_x, mid_y = 300100.0, 6900300.0
+        mid_y = 6900300.0
         bldg_geom = box(300075, 6900075, 300125, 6900125)  # centred ~175 m south of strip
 
         residential = Building(

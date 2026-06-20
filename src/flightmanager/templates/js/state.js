@@ -4,6 +4,10 @@
 
 export const st = {
   // App-wide state
+  // Per-tab session id — sent with preview/export/route_estimate so the server
+  // keeps each client's last-preview obstacle data separate (no cross-clobber).
+  sessionId: (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+             : 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2),
   drones: [],
   outputDir: '',
   previewData: null,

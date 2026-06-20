@@ -21,12 +21,37 @@ export function _initBaseLayers(mmlKey) {
     + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg'
     + '&api-key=' + mmlKey;
   // maxNativeZoom: MML WGS84_Pseudo-Mercator ortokuva tops out at zoom 15;
-  // Leaflet upscales those tiles for zooms 16–19 rather than showing empty tiles.
-  // maxNativeZoom: MML WGS84_Pseudo-Mercator ortokuva tops out at zoom 15;
   // Leaflet upscales those tiles for higher zooms rather than showing empty tiles.
   _baseOrto = L.tileLayer(url, {attribution:'&copy; <a href="https://maanmittauslaitos.fi">MML</a>', maxZoom:21, maxNativeZoom:15});
   if (_baseLayerCtrl) map.removeControl(_baseLayerCtrl);
-  _baseLayerCtrl = L.control.layers({'Map': _baseOSM, 'Ortho': _baseOrto}, null, {position:'topleft', collapsed:true}).addTo(map);
+
+  var BaseLayerControl = L.Control.extend({
+    options: {position: 'topleft'},
+    onAdd: function() {
+      var wrap = L.DomUtil.create('div', 'base-layer-ctrl');
+      L.DomUtil.create('div', 'base-layer-icon', wrap);
+      var panel = L.DomUtil.create('div', 'base-layer-panel', wrap);
+      var btnMap  = L.DomUtil.create('button', 'base-layer-btn active', panel);
+      var btnOrto = L.DomUtil.create('button', 'base-layer-btn', panel);
+      btnMap.textContent  = 'Map';
+      btnOrto.textContent = 'Ortho';
+      btnMap.title  = 'OpenStreetMap';
+      btnOrto.title = 'MML Ortokuva';
+      L.DomEvent.disableClickPropagation(wrap);
+      L.DomEvent.on(btnMap, 'click', function() {
+        if (map.hasLayer(_baseOrto)) { map.removeLayer(_baseOrto); map.addLayer(_baseOSM); }
+        btnMap.classList.add('active');
+        btnOrto.classList.remove('active');
+      });
+      L.DomEvent.on(btnOrto, 'click', function() {
+        if (map.hasLayer(_baseOSM)) { map.removeLayer(_baseOSM); map.addLayer(_baseOrto); }
+        btnOrto.classList.add('active');
+        btnMap.classList.remove('active');
+      });
+      return wrap;
+    }
+  });
+  _baseLayerCtrl = new BaseLayerControl().addTo(map);
 }
 
 export function resetMapToUserLocation() {

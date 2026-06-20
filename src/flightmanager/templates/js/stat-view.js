@@ -1,6 +1,7 @@
 // ── Map view: stat panel ────────────────────────────────────────────────────
 
 import { escHtml } from './utils.js';
+import { apiGet } from './api.js';
 
 var _mvStatMode = localStorage.getItem('mv-stat-mode') || 'normal';
 var _statBinMap = {};
@@ -11,12 +12,24 @@ var _LOST_PAL = ['#4ade80','#a3e635','#fde047','#fb923c','#ef4444'];
 var _TIME_PAL = ['#f0fdf4','#86efac','#4ade80','#22c55e','#16a34a'];
 var _SUB_PAL  = {A1:'#10b981', A2:'#f59e0b', A3:'#3b82f6'};
 var _ND_COL   = '#94a3b8';
+// Distinct hues for MGRS tiles (cycled). Job tiles vs neighbours differ by style.
+var _MGRS_PAL = ['#06b6d4','#8b5cf6','#ec4899','#f59e0b','#10b981','#ef4444',
+                 '#3b82f6','#84cc16','#f97316','#a855f7','#14b8a6','#eab308'];
+
+var _mgrsLayer = null;                       // Leaflet layer group for tile outlines
+var _mgrsCache = { folder: undefined, data: null };  // folder-stable tile data
 
 export function getMvStatMode() { return _mvStatMode; }
 export function getStatBinMap() { return _statBinMap; }
 
+// Modes that recolor the job polygons (and dim the basemap). 'normal' and 'mgrs'
+// leave jobs in their own colours so they read against the tile/basemap.
+export function statModeColorsJobs() {
+  return _mvStatMode !== 'normal' && _mvStatMode !== 'mgrs';
+}
+
 export function getMvStatColor(props) {
-  return _mvStatMode === 'normal' ? (props.color || '#3b82f6') : (_statBinMap[props.path] || _ND_COL);
+  return statModeColorsJobs() ? (_statBinMap[props.path] || _ND_COL) : (props.color || '#3b82f6');
 }
 
 export function onStatModeChange() {
@@ -30,6 +43,10 @@ export function renderStatPanel(allFeatures, mvSelected) {
   _statBinMap = {};
   var body = document.getElementById('mv-stat-body');
   if (!body) return;
+
+  // MGRS mode draws a tile overlay + legend (async, folder-keyed); other modes clear it.
+  if (_mvStatMode === 'mgrs') { _stMgrs(body); return; }
+  clearMgrsLayer();
 
   var sel = mvSelected && mvSelected.size > 0 ? mvSelected : null;
   var active = sel ? allFeatures.filter(function(f) { return sel.has(f.properties.path); }) : allFeatures;
@@ -106,6 +123,79 @@ function _fmtMin(m) {
 
 export function _mvStatJobClick(path) {
   import('./map-view.js').then(function(m){ m._mvStatJobClickInternal(path); });
+}
+
+// ── MGRS tiles mode ───────────────────────────────────────────────────────────
+
+export function clearMgrsLayer() {
+  if (_mgrsLayer) { _mgrsLayer.remove(); _mgrsLayer = null; }
+}
+
+function _tileColor(i) { return _MGRS_PAL[i % _MGRS_PAL.length]; }
+
+async function _stMgrs(body) {
+  var mv = await import('./map-view.js');
+  var folder = mv.getMvCurrentFolder();
+  if (_mgrsCache.folder === folder && _mgrsCache.data) {
+    body.innerHTML = _mgrsLegend(_mgrsCache.data);
+    if (_mgrsCache.data.grid_ok) _drawMgrsTiles(_mgrsCache.data.tiles);
+    return;
+  }
+  body.innerHTML = '<div class="mv-st-nodata">Loading tiles…</div>';
+  try {
+    var url = '/api/mgrs_tiles' + (folder ? '?folder=' + encodeURIComponent(folder) : '');
+    var data = await apiGet(url);
+    if (_mvStatMode !== 'mgrs') return;  // mode changed while loading
+    _mgrsCache = { folder: folder, data: data };
+    body.innerHTML = _mgrsLegend(data);
+    if (data.grid_ok) _drawMgrsTiles(data.tiles);
+  } catch (e) {
+    console.error('[mgrs]', e);
+    body.innerHTML = '<div class="mv-st-nodata">MGRS tiles unavailable</div>';
+  }
+}
+
+function _mgrsLegend(data) {
+  if (!data.grid_ok || !data.tiles.length) {
+    return '<div class="mv-st-nodata">' + escHtml(data.grid_msg || 'MGRS grid not available') + '</div>';
+  }
+  var r = '<div class="mv-st-div">Job tiles + neighbours</div>';
+  data.tiles.forEach(function (t, i) {
+    var col = _tileColor(i);
+    var note = t.is_job ? (t.job_count + (t.job_count === 1 ? ' job' : ' jobs')) : 'neighbour';
+    var swCls = t.is_job ? 'mv-st-sw' : 'mv-st-sw mv-st-sw-nb';
+    r += '<div class="mv-st-brow"><span class="' + swCls + '" style="background:' + col
+      + '"></span><span class="mv-st-bl">' + escHtml(t.id) + '</span>'
+      + '<span class="mv-st-bc">' + note + '</span></div>';
+  });
+  return r;
+}
+
+function _drawMgrsTiles(tiles) {
+  import('./map-init.js').then(function (m) {
+    clearMgrsLayer();
+    var grp = L.layerGroup();
+    tiles.forEach(function (t, i) {
+      if (!t.geometry) return;
+      var col = _tileColor(i);
+      L.geoJSON(t.geometry, { style: {
+        color: col, weight: t.is_job ? 2.5 : 1.5, opacity: 0.95,
+        dashArray: t.is_job ? null : '5,5',
+        fill: true, fillColor: col, fillOpacity: t.is_job ? 0.14 : 0.05,
+      } }).addTo(grp);
+      if (t.center) {
+        L.marker([t.center[0], t.center[1]], {
+          interactive: false,
+          icon: L.divIcon({
+            className: 'mgrs-tile-label' + (t.is_job ? ' mgrs-job' : ''),
+            html: t.id, iconSize: [0, 0],
+          }),
+        }).addTo(grp);
+      }
+    });
+    grp.addTo(m.map);
+    _mgrsLayer = grp;
+  });
 }
 
 function _stNormal(active) {

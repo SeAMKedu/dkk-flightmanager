@@ -3,13 +3,154 @@
 Read/write job_params.json, thumbnail.svg, and scan the output directory tree.
 No FastAPI or server-level globals — all functions are pure I/O, fully testable
 in isolation.
+
+Two files per job, deliberately separate:
+  * ``job_params.json`` — **editable intent** (the recipe): inputs, requested
+    drone/height/subcategory, polygon knobs, takeoff, colour, template settings.
+    Web-UI-only. ``GET /api/jobs`` returns this raw so the editor can restore the form.
+  * ``manifest.json`` — **immutable provenance** (the receipt): resolved stats, areas,
+    battery, attributions, source-tile lineage, review flags. Written by ``export_job``
+    itself, so CLI/Airflow jobs have only a manifest.
+
+They are merged in exactly one place — ``_build_job_card()`` — which produces the
+read-only summary used by job lists, the map view, and (via ``read_job_card``) the MCP
+job-details tool. Nothing else reconciles the two files: the ``GET /api/jobs/{path}``
+editor endpoint returns raw ``job_params`` (intent), and ``params_from_manifest`` only
+*synthesises* intent for CLI jobs that have no job_params. Field precedence in the merge:
+resolved provenance from the manifest wins for display (areas, drone, height, battery,
+flags); ``job_params`` fills intent-only gaps (e.g. subcategory before a job is exported).
+
+Field-ownership audit (2026-06): the split is clean — every ``job_params`` field is
+editable intent, every ``manifest`` field is computed provenance. Values that appear in
+both (``drone``, ``height``, ``subcategory``, parcel/property IDs) are deliberate
+intent-vs-resolved pairs that *can* legitimately differ, not accidental duplication, so
+none were moved. Safety flags (``flight_ready``/``needs_review``) live only in the manifest
+and reach callers through the card.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+# ---------------------------------------------------------------------------
+# Job params storage — single read/write surface
+# ---------------------------------------------------------------------------
+
+# Bump when the on-disk job_params.json shape changes in a way that needs
+# migration.  v1: dropped the embedded ``last_preview_geojson`` blob in favour
+# of a small ``survey_outline`` polygon (map view + instant first-paint).
+SCHEMA_VERSION = 1
+
+# Douglas-Peucker tolerance for the stored map-view outline, in degrees
+# (~5 m at Finnish latitudes).  The outline is display-only; the exact survey
+# geometry is always recomputed from inputs on preview/export.
+_OUTLINE_SIMPLIFY_DEG = 0.00005
+
+
+class JobParams(BaseModel):
+    """Schema for a job's ``job_params.json``.
+
+    ``extra="allow"`` keeps any forward/unknown keys on round-trip so older or
+    newer writers don't lose data.  All fields are optional with defaults so
+    partial dicts (merges, manifest reconstruction) validate cleanly.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: int = SCHEMA_VERSION
+    job_name: str | None = None
+    saved_at: str | None = None
+    inputs: dict = Field(default_factory=lambda: {"parcel_ids": [], "property_ids": []})
+    flight: dict = Field(default_factory=dict)
+    polygon: dict = Field(default_factory=dict)
+    safety: dict = Field(default_factory=dict)
+    template_settings: dict = Field(default_factory=dict)
+    custom_polygon_4326: dict | None = None
+    survey_outline: dict | None = None  # simplified survey polygon for map view / instant paint
+    takeoff_point_4326: list | None = None
+    color: str | None = None
+    sort_order: int | None = None
+    skipped: bool = False
+    batch_created: bool = False
+    merge_strategy: str | None = None
+
+
+def write_json_atomic(path: Path, obj: Any) -> None:
+    """Write *obj* as pretty JSON to *path* atomically (temp file → fsync → rename)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, ensure_ascii=False, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)  # atomic on POSIX/Windows
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def make_survey_outline(geom: dict | None) -> dict | None:
+    """Simplify a GeoJSON geometry to a small display-only outline polygon."""
+    if not geom:
+        return None
+    try:
+        from shapely.geometry import mapping, shape
+
+        g = shape(geom).simplify(_OUTLINE_SIMPLIFY_DEG, preserve_topology=True)
+        if g.is_empty:
+            return geom
+        return dict(mapping(g))
+    except Exception:
+        return geom
+
+
+def load_params(job_dir: Path) -> dict | None:
+    """Read ``job_params.json`` from *job_dir*; return the dict or None."""
+    p = job_dir / "job_params.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def save_params(job_dir: Path, params: dict) -> None:
+    """Write ``job_params.json`` atomically through the JobParams schema.
+
+    Stamps ``schema_version``, drops the legacy ``last_preview_geojson`` blob,
+    and derives ``survey_outline`` from the preview survey / custom polygon when
+    a caller hasn't supplied one.
+    """
+    data = JobParams.model_validate(params).model_dump()
+    legacy = data.pop("last_preview_geojson", None)
+    data["schema_version"] = SCHEMA_VERSION
+    if not data.get("survey_outline"):
+        src = legacy.get("survey") if isinstance(legacy, dict) else None
+        src = src or data.get("custom_polygon_4326")
+        data["survey_outline"] = make_survey_outline(src)
+    write_json_atomic(job_dir / "job_params.json", data)
+
+
+def card_polygon(params: dict) -> dict | None:
+    """Best display polygon for a job: custom polygon, else outline, else legacy survey."""
+    return (
+        params.get("custom_polygon_4326")
+        or params.get("survey_outline")
+        or (params.get("last_preview_geojson") or {}).get("survey")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,20 +235,8 @@ def resolve_job_dir(output_dir: Path, path: str) -> tuple[str | None, str, Path]
 
 def best_polygon(job_dir: Path) -> dict | None:
     """Return the best available GeoJSON polygon for a job directory."""
-    params_path = job_dir / "job_params.json"
-    if params_path.exists():
-        try:
-            params = json.loads(params_path.read_text(encoding="utf-8"))
-            geom = params.get("custom_polygon_4326")
-            if geom:
-                return geom
-            preview = params.get("last_preview_geojson") or {}
-            geom = preview.get("survey")
-            if geom:
-                return geom
-        except Exception:
-            pass
-    return None
+    params = load_params(job_dir)
+    return card_polygon(params) if params else None
 
 
 # ---------------------------------------------------------------------------
@@ -115,8 +244,79 @@ def best_polygon(job_dir: Path) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
-    """Build a summary card dict for one job directory."""
+# Per-job card cache, keyed by (job_dir, with_polygon).  Invalidated by an
+# mtime/size signature of the source files so a saved job is re-parsed but
+# untouched siblings are served from memory.  This is what makes returning to
+# the map view fast when the output dir holds many large job_params.json files.
+_CARD_CACHE: dict[tuple[str, bool], tuple[tuple, dict]] = {}
+
+
+def _card_signature(job_dir: Path) -> tuple:
+    """Cheap (mtime, size) signature of a job's source files for cache keying."""
+    sig = []
+    for fn in ("job_params.json", "manifest.json", "thumbnail.svg"):
+        try:
+            stt = (job_dir / fn).stat()
+            sig.append((stt.st_mtime_ns, stt.st_size))
+        except OSError:
+            sig.append(None)
+    sig.append(any(job_dir.glob("*.kmz")))
+    return tuple(sig)
+
+
+def read_job_card(
+    job_dir: Path, folder: str | None = None, with_polygon: bool = False
+) -> dict:
+    """Build a summary card dict for one job directory.
+
+    Results are cached per job and invalidated when any source file's
+    (mtime, size) changes.  Set *with_polygon* to also embed the job's best
+    GeoJSON polygon under ``_geometry`` (used by the map-view endpoint so it
+    need not parse ``job_params.json`` a second time via ``best_polygon``).
+    """
+    key = (str(job_dir), with_polygon)
+    sig = _card_signature(job_dir)
+    cached = _CARD_CACHE.get(key)
+    if cached is not None and cached[0] == sig:
+        # Return a shallow copy: callers (e.g. _adjust_sibling_area_lost)
+        # mutate the card in place, which must not poison the cache.
+        return dict(cached[1])
+    card = _build_job_card(job_dir, folder, with_polygon)
+    _CARD_CACHE[key] = (sig, card)
+    return dict(card)
+
+
+def _battery_summary(bat: dict) -> dict:
+    """Flatten a manifest ``battery`` block to card fields, regardless of its shape.
+
+    Single-piece jobs store the stats at top level; multi-piece (split) jobs store a
+    ``pieces`` list. Returns ``{flight_time_min, photo_count, over_one_battery,
+    battery_count}`` with ``None``/falsey defaults when no battery data is present.
+    """
+    if "estimated_flight_time_min" in bat:
+        over = bat.get("over_one_battery", False)
+        return {
+            "flight_time_min": bat["estimated_flight_time_min"],
+            "photo_count": bat.get("estimated_photo_count"),
+            "over_one_battery": over,
+            "battery_count": 2 if over else 1,
+        }
+    if "pieces" in bat:
+        pieces = bat["pieces"]
+        return {
+            "flight_time_min": sum(p.get("estimated_flight_time_min", 0) for p in pieces),
+            "photo_count": sum(p.get("estimated_photo_count", 0) for p in pieces),
+            "over_one_battery": bat.get("over_any_battery", False),
+            "battery_count": sum(2 if p.get("over_one_battery", False) else 1 for p in pieces),
+        }
+    return {"flight_time_min": None, "photo_count": None,
+            "over_one_battery": False, "battery_count": None}
+
+
+def _build_job_card(
+    job_dir: Path, folder: str | None, with_polygon: bool
+) -> dict:
+    """Parse a job directory into a summary card dict (uncached)."""
     name = job_dir.name
     path = f"{folder}/{name}" if folder else name
     manifest_path = job_dir / "manifest.json"
@@ -124,7 +324,7 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
     thumb_path = job_dir / "thumbnail.svg"
 
     if not manifest_path.exists() and not params_path.exists():
-        return {
+        card = {
             "name": name,
             "folder": folder,
             "path": path,
@@ -136,6 +336,9 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
             "untouched": False,
             "color": None,
         }
+        if with_polygon:
+            card["_geometry"] = None
+        return card
 
     manifest: dict = {}
     if manifest_path.exists():
@@ -164,25 +367,11 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
 
     g = manifest.get("geometry", {})
     f = manifest.get("flight", {})
-    bat = manifest.get("battery") or {}
-    if "estimated_flight_time_min" in bat:
-        flight_time_min: float | None = bat["estimated_flight_time_min"]
-        photo_count: int | None = bat.get("estimated_photo_count")
-        over_one_battery: bool = bat.get("over_one_battery", False)
-        battery_count: int | None = 2 if over_one_battery else 1
-    elif "pieces" in bat:
-        flight_time_min = sum(p.get("estimated_flight_time_min", 0) for p in bat["pieces"])
-        photo_count = sum(p.get("estimated_photo_count", 0) for p in bat["pieces"])
-        over_one_battery = bat.get("over_any_battery", False)
-        battery_count = sum(2 if p.get("over_one_battery", False) else 1 for p in bat["pieces"])
-    else:
-        flight_time_min = None
-        photo_count = None
-        over_one_battery = False
-        battery_count = None
+    bat = _battery_summary(manifest.get("battery") or {})
+    safety = manifest.get("home_safety", {})
 
     inputs = params.get("inputs", {})
-    return {
+    card = {
         "name": name,
         "folder": folder,
         "path": path,
@@ -194,7 +383,10 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "area_lost_pct": g.get("area_lost_pct"),
         "parcel_ids": inputs.get("parcel_ids") or [],
         "property_ids": inputs.get("property_ids") or [],
-        "subcategory": params.get("subcategory") or manifest.get("home_safety", {}).get("operating_subcategory"),
+        # Subcategory: prefer the manifest's resolved value (provenance), fall back to
+        # the job_params intent (flight.subcategory) for not-yet-exported jobs.
+        "subcategory": safety.get("operating_subcategory")
+                       or (params.get("flight") or {}).get("subcategory"),
         "vertex_count": g.get("survey_vertex_count"),
         "drone": f.get("drone"),
         "drone_label": f.get("drone_label"),
@@ -203,10 +395,10 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "adv_min_height_m": (params.get("template_settings") or {}).get("adv_min_height_m"),
         "adv_max_height_m": (params.get("template_settings") or {}).get("adv_max_height_m"),
         "strip_speed_ms": f.get("strip_speed_ms"),
-        "flight_time_min": flight_time_min,
-        "photo_count": photo_count,
-        "over_one_battery": over_one_battery,
-        "battery_count": battery_count,
+        "flight_time_min": bat["flight_time_min"],
+        "photo_count": bat["photo_count"],
+        "over_one_battery": bat["over_one_battery"],
+        "battery_count": bat["battery_count"],
         "flight_ready": manifest.get("flight_ready"),
         "needs_review": manifest.get("needs_review"),
         "untouched": untouched,
@@ -216,6 +408,9 @@ def read_job_card(job_dir: Path, folder: str | None = None) -> dict:
         "takeoff_point_4326": params.get("takeoff_point_4326"),
         "skipped": params.get("skipped", False),
     }
+    if with_polygon:
+        card["_geometry"] = card_polygon(params)
+    return card
 
 
 def _tier_sort_key(j: dict) -> tuple:
@@ -281,8 +476,12 @@ def _adjust_sibling_area_lost(groups: list[dict]) -> None:
             card["area_lost_pct"] = combined_lost_pct
 
 
-def scan_jobs(output_dir: Path) -> list[dict]:
-    """Scan *output_dir*; return groups ``[{name, jobs}]`` with one-level folder support."""
+def scan_jobs(output_dir: Path, with_polygon: bool = False) -> list[dict]:
+    """Scan *output_dir*; return groups ``[{name, jobs}]`` with one-level folder support.
+
+    *with_polygon* is forwarded to :func:`read_job_card` so each card embeds its
+    best GeoJSON polygon under ``_geometry`` (used by the map-view endpoint).
+    """
     if not output_dir.is_dir():
         return []
 
@@ -297,13 +496,15 @@ def scan_jobs(output_dir: Path) -> list[dict]:
             try:
                 for sub in sorted(entry.iterdir()):
                     if sub.is_dir():
-                        folder_jobs.append(read_job_card(sub, folder=entry.name))
+                        folder_jobs.append(
+                            read_job_card(sub, folder=entry.name, with_polygon=with_polygon)
+                        )
             except PermissionError:
                 pass
             folder_jobs.sort(key=_tier_sort_key)
             folder_groups.append({"name": entry.name, "jobs": folder_jobs})
         else:
-            root_jobs.append(read_job_card(entry, folder=None))
+            root_jobs.append(read_job_card(entry, folder=None, with_polygon=with_polygon))
 
     root_jobs.sort(key=_tier_sort_key)
 
@@ -348,7 +549,7 @@ def params_from_manifest(name: str, manifest: dict) -> dict:
             "preview_radius_m": safety.get("preview_radius_m"),
         },
         "custom_polygon_4326": None,
-        "last_preview_geojson": None,
+        "survey_outline": None,
     }
 
 
@@ -363,3 +564,36 @@ def check_cache_staleness(manifest: dict, cache_config) -> list[str]:
             if not check_tile_exists(cache_config, dataset, tile_id):
                 stale.append(f"{dataset}/{tile_id}")
     return stale
+
+
+def refresh_status(manifest: dict, cache_config, current_pipeline_version: int) -> dict:
+    """Decide whether a completed job should be re-computed (recompute-only refresh).
+
+    Signals (per the 2026-06-17 plan): the job's recorded ``pipeline_version`` is
+    older than the running code, or the local cache holds a newer copy of a source
+    tile than the job used. Returns
+    ``{"needs_refresh": bool, "reasons": [str], "missing_tiles": [str]}``.
+    ``missing_tiles`` is informational — refresh re-fetches those from the network.
+    """
+    from flightmanager.cache import newest_tile_fetch
+
+    reasons: list[str] = []
+    pv = manifest.get("pipeline_version", 0)
+    if pv < current_pipeline_version:
+        reasons.append(f"pipeline updated (v{pv} → v{current_pipeline_version})")
+
+    provenance = manifest.get("cache_provenance", {})
+    for dataset in ("dem", "buildings"):
+        d = provenance.get(dataset, {})
+        used_max = d.get("fetch_date_max")
+        tile_ids = d.get("tile_ids", [])
+        if used_max and tile_ids:
+            newest = newest_tile_fetch(cache_config, dataset, tile_ids)
+            if newest and newest > used_max:
+                reasons.append(f"{dataset} source data updated")
+
+    return {
+        "needs_refresh": bool(reasons),
+        "reasons": reasons,
+        "missing_tiles": check_cache_staleness(manifest, cache_config),
+    }
