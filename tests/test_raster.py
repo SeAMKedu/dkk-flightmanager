@@ -13,7 +13,12 @@ from rasterio.transform import from_bounds
 from shapely.geometry import box
 
 from flightmanager.geo.crs import CRSError
-from flightmanager.geo.raster import _NODATA, _stats, build_site_dsm
+from flightmanager.geo.raster import (
+    _NODATA,
+    _stats,
+    build_preview_dsm_thumbnail,
+    build_site_dsm,
+)
 
 # Real 1km DEM tile fetched during Phase 4 development
 _REAL_TILE = Path("/tmp/test_tile.tif")
@@ -193,6 +198,49 @@ class TestMosaic:
             "geoid correction not applied"
         )
         assert 88.0 < stats["elevation_min_m"] < 98.0
+
+
+# ---------------------------------------------------------------------------
+# Preview DSM thumbnail (display-only viridis PNG)
+# ---------------------------------------------------------------------------
+
+
+class TestPreviewThumbnail:
+    def _decode(self, b64):
+        import base64
+        import io
+
+        from PIL import Image
+
+        return np.array(Image.open(io.BytesIO(base64.b64decode(b64))))
+
+    def test_nodata_pixels_are_white(self, tmp_path):
+        """No-data pixels get alpha=0 (transparent for the web overlay) AND white
+        RGB, so the PDF report - which flattens the alpha - prints clean white
+        instead of dark viridis."""
+        tile = _make_synthetic_tile(tmp_path)  # covers ~lon 22.973-22.991
+        # Survey hugging the tile's east edge: the 150 m margin pushes the thumbnail
+        # bbox past the tile, leaving a no-data strip on the right.
+        survey = box(22.985, 62.840, 22.990, 62.846)
+        b64, bounds = build_preview_dsm_thumbnail([tile], survey, margin_m=150)
+        assert b64 is not None
+        arr = self._decode(b64)
+        assert arr.shape[2] == 4  # RGBA
+        invalid = arr[:, :, 3] == 0
+        assert invalid.any(), "expected a no-data region beyond the tile edge"
+        nodata_rgb = arr[invalid][:, :3]
+        assert (nodata_rgb == 255).all(), "no-data pixels must be white"
+
+    def test_valid_pixels_keep_viridis(self, tmp_path):
+        """Covered pixels stay opaque and are not whitewashed."""
+        tile = _make_synthetic_tile(tmp_path)
+        survey = box(22.976, 62.840, 22.988, 62.846)  # well inside the tile
+        b64, _ = build_preview_dsm_thumbnail([tile], survey, margin_m=0)
+        arr = self._decode(b64)
+        valid = arr[:, :, 3] == 255
+        assert valid.any()
+        # A flat synthetic tile maps to a single viridis colour, not white.
+        assert not (arr[valid][:, :3] == 255).all()
 
 
 # ---------------------------------------------------------------------------

@@ -148,6 +148,11 @@ def build_preview_dsm_thumbnail(
         norm[valid_mask] = 0.5
 
     rgb = _colorize_viridis(norm)  # (H, W, 3) uint8
+    # No-data pixels: paint white. The web overlay still hides them via alpha=0,
+    # but the PDF report flattens the alpha channel (fpdf2 embeds the thumbnail as
+    # 3-channel RGB), so a white no-data background prints clean instead of dark
+    # viridis - no wasted ink outside the surveyed extent.
+    rgb[~valid_mask] = 255
     rgba = np.zeros((4, th, tw), dtype=np.uint8)
     rgba[0] = rgb[:, :, 0]
     rgba[1] = rgb[:, :, 1]
