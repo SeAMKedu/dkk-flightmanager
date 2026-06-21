@@ -2,7 +2,8 @@
 
 import { st } from '../core/state.js';
 import { escHtml } from '../core/utils.js';
-import { apiGet } from '../core/api.js';
+import { apiGet, apiPost } from '../core/api.js';
+import { showError, updateFolderHint } from '../editor/form-controls.js';
 // Circular — only called at runtime:
 import { toggleJobSelection, _updateSelBar, _selectedJobs, _selectedMeta } from './multi-select.js';
 import { toggleCardMenu } from './card-menu.js';
@@ -128,6 +129,16 @@ function buildFolderSection(group) {
     hdr.querySelector('.jfolder-caret').classList.toggle('open', isOpen);
   });
 
+  // Double-click the name to rename the folder (real folders only, not root).
+  if (!isRoot) {
+    var nameEl = hdr.querySelector('.jfolder-name');
+    nameEl.title = 'Double-click to rename';
+    nameEl.addEventListener('dblclick', function(e) {
+      e.stopPropagation();
+      _startFolderRename(group.name, nameEl);
+    });
+  }
+
   jobs.addEventListener('dragover', function(e) { e.preventDefault(); });
   jobs.addEventListener('drop', function(e) {
     e.preventDefault();
@@ -140,6 +151,47 @@ function buildFolderSection(group) {
   container.appendChild(jobs);
   frag.appendChild(container);
   return frag;
+}
+
+function _startFolderRename(oldName, nameEl) {
+  var input = document.createElement('input');
+  input.className = 'jcard-rename-input';
+  input.value = oldName;
+  // The header swallows single clicks to toggle; keep them off the input.
+  input.addEventListener('click', function(e){ e.stopPropagation(); });
+  nameEl.replaceWith(input);
+  input.focus(); input.select();
+  var committed = false;
+  function commit() {
+    if (committed) return; committed = true;
+    var newName = input.value.trim();
+    if (!newName || newName === oldName) { loadJobsList(); return; }
+    _doFolderRename(oldName, newName);
+  }
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', function(e) {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { committed = true; loadJobsList(); }
+  });
+}
+
+async function _doFolderRename(oldName, newName) {
+  try {
+    await apiPost('/api/folders/' + encodeURIComponent(oldName) + '/rename', { new_name: newName });
+    // If the open job lives in the renamed folder, repoint its path + breadcrumb.
+    if (st._activeJob && st._activeJob.indexOf(oldName + '/') === 0) {
+      st._activeJob = newName + st._activeJob.slice(oldName.length);
+    }
+    if (st._activeJobFolder === oldName) {
+      st._activeJobFolder = newName;
+      updateFolderHint();
+    }
+    await loadJobsList();
+  } catch (e) {
+    showError(e.detail || ('Folder rename failed: ' + e.message));
+    await loadJobsList();
+  }
 }
 
 export function buildJobCard(j, group, folderKey) {
