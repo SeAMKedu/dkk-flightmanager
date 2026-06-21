@@ -15,22 +15,32 @@ from pathlib import Path
 
 _lock = threading.Lock()
 
-_downloads: dict[str, int] = {}   # source → network fetches this process
-_bytes: dict[str, int] = {}       # source → bytes downloaded this process
-_hits: dict[str, int] = {}        # source → cache hits this process
+_downloads: dict[str, int] = {}  # source → network fetches this process
+_bytes: dict[str, int] = {}  # source → bytes downloaded this process
+_hits: dict[str, int] = {}  # source → cache hits this process
 
-_SOURCES = ("dem", "buildings", "powerlines", "pylons", "parcels", "properties", "zones", "satellites", "weather")
+_SOURCES = (
+    "dem",
+    "buildings",
+    "powerlines",
+    "pylons",
+    "parcels",
+    "properties",
+    "zones",
+    "satellites",
+    "weather",
+)
 
 _LABELS: dict[str, str] = {
-    "dem":        "DEM tiles   ",
-    "buildings":  "Buildings   ",
+    "dem": "DEM tiles   ",
+    "buildings": "Buildings   ",
     "powerlines": "Power lines ",
-    "pylons":     "Pylons      ",
-    "parcels":    "Parcels     ",
+    "pylons": "Pylons      ",
+    "parcels": "Parcels     ",
     "properties": "Properties  ",
-    "zones":      "UAS zones   ",
+    "zones": "UAS zones   ",
     "satellites": "Satellites  ",
-    "weather":    "Weather     ",
+    "weather": "Weather     ",
 }
 
 
@@ -54,8 +64,8 @@ def get() -> dict:
         for src in _SOURCES:
             result[src] = {
                 "downloads": _downloads.get(src, 0),
-                "bytes":     _bytes.get(src, 0),
-                "hits":      _hits.get(src, 0),
+                "bytes": _bytes.get(src, 0),
+                "hits": _hits.get(src, 0),
             }
         return result
 
@@ -81,8 +91,8 @@ def _fmt_bytes(n: int) -> str:
 def print_summary(cache_dir: "str | Path | None" = None) -> None:
     """Print a session statistics table to stdout. No-op if nothing was tracked."""
     s = get()
-    total_dl    = sum(v["downloads"] for v in s.values())
-    total_hits  = sum(v["hits"] for v in s.values())
+    total_dl = sum(v["downloads"] for v in s.values())
+    total_hits = sum(v["hits"] for v in s.values())
     total_bytes = sum(v["bytes"] for v in s.values())
 
     if total_dl == 0 and total_hits == 0:
@@ -116,7 +126,8 @@ def print_summary(cache_dir: "str | Path | None" = None) -> None:
     lines.append(f"  {'Total':12}{summary}")
 
     if cache_dir is not None:
-        from flightmanager.cache import query_disk_size
+        from flightmanager.storage.cache import query_disk_size
+
         disk_bytes = query_disk_size(cache_dir)
         if disk_bytes:
             lines.append(f"  {'Cache on disk':14}{_fmt_bytes(disk_bytes)}")

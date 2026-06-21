@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 from flightmanager.config import CacheConfig
-from flightmanager.geo_cache import (
+from flightmanager.storage.geo_cache import (
     get_parcel_cache,
     get_property_cache,
     put_parcel_cache,
@@ -73,7 +73,7 @@ class TestParcelCacheTTL:
         assert get_parcel_cache(cfg, "P001", 2024) is not None
 
     def test_expired_record_returns_none(self, tmp_path):
-        from flightmanager.cache import _db_path
+        from flightmanager.storage.cache import _db_path
         import sqlite3
 
         cfg = _cache_config(tmp_path, parcels_ttl_days=1)
@@ -100,7 +100,9 @@ class TestParcelCacheTTL:
 class TestPropertyCacheRoundTrip:
     def test_put_then_get_returns_record(self, tmp_path):
         cfg = _cache_config(tmp_path)
-        put_property_cache(cfg, "39989100010001", "399-891-1-1", area_ha=15.5, geometry_wkt=_WKT)
+        put_property_cache(
+            cfg, "39989100010001", "399-891-1-1", area_ha=15.5, geometry_wkt=_WKT
+        )
         record = get_property_cache(cfg, "39989100010001")
         assert record is not None
         assert record.property_id == "39989100010001"
@@ -114,16 +116,24 @@ class TestPropertyCacheRoundTrip:
 
     def test_replace_updates_record(self, tmp_path):
         cfg = _cache_config(tmp_path)
-        put_property_cache(cfg, "39989100010001", "399-891-1-1", area_ha=15.5, geometry_wkt=_WKT)
-        put_property_cache(cfg, "39989100010001", "399-891-1-1", area_ha=20.0, geometry_wkt=_WKT)
+        put_property_cache(
+            cfg, "39989100010001", "399-891-1-1", area_ha=15.5, geometry_wkt=_WKT
+        )
+        put_property_cache(
+            cfg, "39989100010001", "399-891-1-1", area_ha=20.0, geometry_wkt=_WKT
+        )
         record = get_property_cache(cfg, "39989100010001")
         assert record is not None
         assert abs(record.area_ha - 20.0) < 0.001
 
     def test_different_ids_stored_independently(self, tmp_path):
         cfg = _cache_config(tmp_path)
-        put_property_cache(cfg, "00000000000001", "0-0-0-1", area_ha=1.0, geometry_wkt=_WKT)
-        put_property_cache(cfg, "00000000000002", "0-0-0-2", area_ha=2.0, geometry_wkt=_WKT)
+        put_property_cache(
+            cfg, "00000000000001", "0-0-0-1", area_ha=1.0, geometry_wkt=_WKT
+        )
+        put_property_cache(
+            cfg, "00000000000002", "0-0-0-2", area_ha=2.0, geometry_wkt=_WKT
+        )
         r1 = get_property_cache(cfg, "00000000000001")
         r2 = get_property_cache(cfg, "00000000000002")
         assert r1 is not None and abs(r1.area_ha - 1.0) < 0.001
@@ -132,11 +142,13 @@ class TestPropertyCacheRoundTrip:
 
 class TestPropertyCacheTTL:
     def test_expired_property_returns_none(self, tmp_path):
-        from flightmanager.cache import _db_path
+        from flightmanager.storage.cache import _db_path
         import sqlite3
 
         cfg = _cache_config(tmp_path, properties_ttl_days=1)
-        put_property_cache(cfg, "39989100010001", "399-891-1-1", area_ha=1.0, geometry_wkt=_WKT)
+        put_property_cache(
+            cfg, "39989100010001", "399-891-1-1", area_ha=1.0, geometry_wkt=_WKT
+        )
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
         db = _db_path(Path(cfg.cache_dir))
@@ -152,6 +164,8 @@ class TestPropertyCacheTTL:
     def test_parcels_and_properties_in_same_db(self, tmp_path):
         cfg = _cache_config(tmp_path)
         put_parcel_cache(cfg, "P001", 2024, tunnus=1, area_ha=1.0, geometry_wkt=_WKT)
-        put_property_cache(cfg, "39989100010001", "399-891-1-1", area_ha=2.0, geometry_wkt=_WKT)
+        put_property_cache(
+            cfg, "39989100010001", "399-891-1-1", area_ha=2.0, geometry_wkt=_WKT
+        )
         assert get_parcel_cache(cfg, "P001", 2024) is not None
         assert get_property_cache(cfg, "39989100010001") is not None

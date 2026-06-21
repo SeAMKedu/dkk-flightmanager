@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from flightmanager import report
+from flightmanager.reporting import report
 
 
 def test_t_sanitizes_dashes_keeps_finnish():
-    assert report._t("a—b–c") == "a-b-c"          # em/en dashes -> hyphen
+    assert report._t("a—b–c") == "a-b-c"  # em/en dashes -> hyphen
     assert report._t("Jalasjärvi pönttö") == "Jalasjärvi pönttö"  # latin-1 ok
-    assert "?" in report._t("emoji \U0001F600")   # outside latin-1 -> replacement
+    assert "?" in report._t("emoji \U0001f600")  # outside latin-1 -> replacement
 
 
 def test_mf_nested_lookup():
@@ -44,7 +44,7 @@ def test_bbox_of():
 
 def test_edge_and_circle_extent():
     edge = report._edge_point([22.0, 62.0], 100.0)
-    assert edge[1] == 62.0 and edge[0] > 22.0           # due east
+    assert edge[1] == 62.0 and edge[0] > 22.0  # due east
     sw, ne = report._circle_extent([22.0, 62.0], 100.0)
     assert sw[0] < 22.0 < ne[0] and sw[1] < 62.0 < ne[1]
 
@@ -53,7 +53,12 @@ def test_sorted_routable_orders_and_excludes():
     cards = [
         {"name": "b", "sort_order": 1, "takeoff_point_4326": [0, 0]},
         {"name": "a", "sort_order": 0, "takeoff_point_4326": [0, 0]},
-        {"name": "skip", "sort_order": 2, "takeoff_point_4326": [0, 0], "skipped": True},
+        {
+            "name": "skip",
+            "sort_order": 2,
+            "takeoff_point_4326": [0, 0],
+            "skipped": True,
+        },
         {"name": "noto", "sort_order": 3, "takeoff_point_4326": None},
     ]
     out = report._sorted_routable(cards)

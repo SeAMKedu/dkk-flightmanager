@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from flightmanager.kml_export import build_jobs_kml, hex_to_kml_color, ordered_takeoffs
+from flightmanager.routing.kml_export import (
+    build_jobs_kml,
+    hex_to_kml_color,
+    ordered_takeoffs,
+)
 
 _SQUARE = {
     "type": "Polygon",
-    "coordinates": [[[25.0, 62.0], [25.1, 62.0], [25.1, 62.1], [25.0, 62.1], [25.0, 62.0]]],
+    "coordinates": [
+        [[25.0, 62.0], [25.1, 62.0], [25.1, 62.1], [25.0, 62.1], [25.0, 62.0]]
+    ],
 }
 
 
@@ -34,12 +40,14 @@ class TestOrderedTakeoffs:
 
 class TestBuildJobsKml:
     def test_polygon_and_takeoff_emitted(self):
-        jobs = [{
-            "job_name": "field-1",
-            "custom_polygon_4326": _SQUARE,
-            "takeoff_point_4326": [25.05, 62.05],
-            "color": "#3b82f6",
-        }]
+        jobs = [
+            {
+                "job_name": "field-1",
+                "custom_polygon_4326": _SQUARE,
+                "takeoff_point_4326": [25.05, 62.05],
+                "color": "#3b82f6",
+            }
+        ]
         kml = build_jobs_kml(jobs)
         assert kml.startswith("<?xml")
         assert "<Folder><name>field-1</name>" in kml
@@ -49,7 +57,13 @@ class TestBuildJobsKml:
 
     def test_id_job_uses_survey_outline(self):
         # No custom polygon — falls back to survey_outline via card_polygon.
-        jobs = [{"job_name": "parcel-1", "custom_polygon_4326": None, "survey_outline": _SQUARE}]
+        jobs = [
+            {
+                "job_name": "parcel-1",
+                "custom_polygon_4326": None,
+                "survey_outline": _SQUARE,
+            }
+        ]
         kml = build_jobs_kml(jobs)
         assert "<Polygon>" in kml
 
@@ -61,3 +75,24 @@ class TestBuildJobsKml:
         kml = build_jobs_kml([{"job_name": "empty"}])
         assert "<Folder><name>empty</name>" in kml
         assert "<Polygon>" not in kml
+
+    def test_launch_points_pins_only_no_polygons(self):
+        # Overview-zoom export: only launch markers, no survey polygons (keeps
+        # the file small enough for Google My Maps).
+        jobs = [
+            {
+                "job_name": "field-1",
+                "custom_polygon_4326": _SQUARE,
+                "takeoff_point_4326": [25.05, 62.05],
+            }
+        ]
+        kml = build_jobs_kml(
+            jobs, launch_points=[{"name": "Launch 1", "lon": 25.06, "lat": 62.06}]
+        )
+        assert "<Folder><name>Launch sites</name>" in kml
+        assert "<name>Launch 1</name>" in kml
+        assert "<Point><coordinates>25.06,62.06,0</coordinates>" in kml
+        # No polygons and no per-job takeoff markers.
+        assert "<Polygon>" not in kml
+        assert "<Folder><name>field-1</name>" not in kml
+        assert "25.05,62.05,0" not in kml

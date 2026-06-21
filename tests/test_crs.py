@@ -3,11 +3,11 @@
 import pytest
 from shapely.geometry import Point, Polygon
 
-from flightmanager.crs import CRSError, assert_crs, require_3067, require_4326
+from flightmanager.geo.crs import CRSError, assert_crs, require_3067, require_4326
 
 # A real Finnish field centroid in each CRS
-POINT_3067 = Point(305_000, 6_900_000)   # ETRS-TM35FIN, near Seinäjoki
-POINT_4326 = Point(22.66, 62.55)          # WGS84, same area
+POINT_3067 = Point(305_000, 6_900_000)  # ETRS-TM35FIN, near Seinäjoki
+POINT_4326 = Point(22.66, 62.55)  # WGS84, same area
 
 
 class TestAssertCrs:
@@ -46,15 +46,23 @@ class TestConvenienceWrappers:
             require_3067(POINT_4326)
 
     def test_polygon_3067(self):
-        poly = Polygon([
-            (300_000, 6_895_000), (310_000, 6_895_000),
-            (310_000, 6_905_000), (300_000, 6_905_000),
-        ])
+        poly = Polygon(
+            [
+                (300_000, 6_895_000),
+                (310_000, 6_895_000),
+                (310_000, 6_905_000),
+                (300_000, 6_905_000),
+            ]
+        )
         require_3067(poly)
 
     def test_polygon_4326(self):
-        poly = Polygon([
-            (22.60, 62.50), (22.70, 62.50),
-            (22.70, 62.60), (22.60, 62.60),
-        ])
+        poly = Polygon(
+            [
+                (22.60, 62.50),
+                (22.70, 62.50),
+                (22.70, 62.60),
+                (22.60, 62.60),
+            ]
+        )
         require_4326(poly)

@@ -6,7 +6,7 @@ import pytest
 from shapely.geometry import Polygon
 from unittest.mock import MagicMock
 
-from flightmanager.properties import (
+from flightmanager.geo.properties import (
     PropertyNotFoundError,
     _normalise,
     _to_property,
@@ -58,11 +58,15 @@ class TestNormalise:
 # ---------------------------------------------------------------------------
 
 
-_POLY_3067 = Polygon([
-    (300_000, 6_900_000), (301_000, 6_900_000),
-    (301_000, 6_901_000), (300_000, 6_901_000),
-    (300_000, 6_900_000),
-])
+_POLY_3067 = Polygon(
+    [
+        (300_000, 6_900_000),
+        (301_000, 6_900_000),
+        (301_000, 6_901_000),
+        (300_000, 6_901_000),
+        (300_000, 6_900_000),
+    ]
+)
 
 _CRS_3067_URI = "http://www.opengis.net/def/crs/EPSG/0/3067"
 
@@ -99,11 +103,15 @@ class TestToProperty:
 
     def test_two_palstat_unioned(self):
         p1 = _POLY_3067
-        p2 = Polygon([
-            (302_000, 6_900_000), (303_000, 6_900_000),
-            (303_000, 6_901_000), (302_000, 6_901_000),
-            (302_000, 6_900_000),
-        ])
+        p2 = Polygon(
+            [
+                (302_000, 6_900_000),
+                (303_000, 6_900_000),
+                (303_000, 6_901_000),
+                (302_000, 6_901_000),
+                (302_000, 6_900_000),
+            ]
+        )
         features = [_make_feature(p1), _make_feature(p2)]
         prop = _to_property("39989100010001", features)
         # Union area ≤ sum of individual areas (no overlap)
@@ -160,13 +168,16 @@ class TestFetchPropertiesMocked:
 
     def test_cache_hit_skips_network(self, tmp_path):
         from flightmanager.config import CacheConfig
-        from flightmanager.geo_cache import put_property_cache
+        from flightmanager.storage.geo_cache import put_property_cache
         from shapely.wkt import dumps as wkt_dumps
 
         cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))
         put_property_cache(
-            cfg, "39989100010001", "399-891-1-1",
-            area_ha=100.0, geometry_wkt=wkt_dumps(_POLY_3067),
+            cfg,
+            "39989100010001",
+            "399-891-1-1",
+            area_ha=100.0,
+            geometry_wkt=wkt_dumps(_POLY_3067),
         )
 
         mock_sess = MagicMock()

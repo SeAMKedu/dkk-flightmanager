@@ -125,6 +125,10 @@ max_cache_size_mb = 0         # 0 = unlimited; set e.g. 2000 to cap tile cache a
 
 [output]
 output_dir = "output"
+# Desktop-only filesystem actions: "reveal in file manager" and "export to a
+# local directory". Safe on a single-user localhost box. Set false for any
+# multi-user / hosted deployment so those endpoints return 403.
+allow_local_fs = true
 # Colour palette shown in the job editor for quick colour selection.
 # Provide any number of CSS hex colours; 8–10 is a good range.
 color_palette = [

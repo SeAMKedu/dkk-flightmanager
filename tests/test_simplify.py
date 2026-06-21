@@ -7,10 +7,17 @@ import math
 from shapely.geometry import MultiPolygon, Point, Polygon
 
 from flightmanager.config import PolygonConfig
-from flightmanager.simplify import _auto_simplify, _simplify_within, simplify_pieces, vertex_count
+from flightmanager.geo.simplify import (
+    _auto_simplify,
+    _simplify_within,
+    simplify_pieces,
+    vertex_count,
+)
 
 
-def _dense_polygon(cx: float = 300_000, cy: float = 6_900_000, r: float = 500, n: int = 200) -> Polygon:
+def _dense_polygon(
+    cx: float = 300_000, cy: float = 6_900_000, r: float = 500, n: int = 200
+) -> Polygon:
     """Regular n-gon centred at (cx, cy) — gives n+1 vertices (closed ring)."""
     coords = [
         (cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n))
@@ -112,11 +119,15 @@ class TestAutoSimplify:
         assert result.is_valid
 
     def test_already_simple_polygon_unchanged(self):
-        simple = Polygon([
-            (300_000, 6_900_000), (300_500, 6_900_000),
-            (300_500, 6_900_500), (300_000, 6_900_500),
-            (300_000, 6_900_000),
-        ])
+        simple = Polygon(
+            [
+                (300_000, 6_900_000),
+                (300_500, 6_900_000),
+                (300_500, 6_900_500),
+                (300_000, 6_900_500),
+                (300_000, 6_900_000),
+            ]
+        )
         result = _auto_simplify(simple, max_vertices=15)
         assert vertex_count(result) == vertex_count(simple)
 

@@ -11,18 +11,23 @@ import pytest
 from shapely.geometry import Polygon
 
 from flightmanager.config import ZonesConfig
-from flightmanager.crs import CRSError
-from flightmanager.zones import AltitudeLimits, check_zones
+from flightmanager.geo.crs import CRSError
+from flightmanager.geo.zones import AltitudeLimits, check_zones
 
 # ---------------------------------------------------------------------------
 # Survey polygon in EPSG:4326 — Finnish field area
 # ---------------------------------------------------------------------------
 
-SURVEY_4326 = Polygon([
-    (22.60, 62.50), (22.70, 62.50),
-    (22.70, 62.60), (22.60, 62.60),
-    (22.60, 62.50),
-])
+SURVEY_4326 = Polygon(
+    [
+        (22.60, 62.50),
+        (22.70, 62.50),
+        (22.70, 62.60),
+        (22.60, 62.60),
+        (22.60, 62.50),
+    ]
+)
+
 
 # Traficom API response format
 def _api_response(features: list[dict]) -> dict:
@@ -41,8 +46,15 @@ def _zone_feature(
 ) -> dict:
     if coords is None:
         # Overlapping with SURVEY_4326
-        coords = [[[22.55, 62.45], [22.75, 62.45],
-                   [22.75, 62.65], [22.55, 62.65], [22.55, 62.45]]]
+        coords = [
+            [
+                [22.55, 62.45],
+                [22.75, 62.45],
+                [22.75, 62.65],
+                [22.55, 62.65],
+                [22.55, 62.45],
+            ]
+        ]
     geom_entry: dict = {
         "uomDimensions": upper_uom,
         "upperVerticalReference": upper_ref,
@@ -64,9 +76,17 @@ def _zone_feature(
 
 def _away_zone() -> dict:
     return _zone_feature(
-        identifier="EFAWAY", name="Helsinki TMA",
-        coords=[[[24.90, 60.30], [25.10, 60.30],
-                 [25.10, 60.50], [24.90, 60.50], [24.90, 60.30]]],
+        identifier="EFAWAY",
+        name="Helsinki TMA",
+        coords=[
+            [
+                [24.90, 60.30],
+                [25.10, 60.30],
+                [25.10, 60.50],
+                [24.90, 60.50],
+                [24.90, 60.30],
+            ]
+        ],
     )
 
 
@@ -86,10 +106,14 @@ def _mock_session(features: list[dict]) -> MagicMock:
 
 class TestCrsGuard:
     def test_rejects_3067_input(self, tmp_path):
-        survey_3067 = Polygon([
-            (300_000, 6_900_000), (301_000, 6_900_000),
-            (301_000, 6_901_000), (300_000, 6_901_000),
-        ])
+        survey_3067 = Polygon(
+            [
+                (300_000, 6_900_000),
+                (301_000, 6_900_000),
+                (301_000, 6_901_000),
+                (300_000, 6_901_000),
+            ]
+        )
         cfg = ZonesConfig()
         with pytest.raises(CRSError):
             check_zones(survey_3067, cfg, cache_dir=tmp_path)
@@ -238,10 +262,14 @@ class TestCaching:
 class TestOverrideFile:
     def test_zones_file_overrides_api(self, tmp_path):
         override = tmp_path / "custom_zones.geojson"
-        override.write_text(json.dumps({
-            "type": "FeatureCollection",
-            "features": [_zone_feature()],
-        }))
+        override.write_text(
+            json.dumps(
+                {
+                    "type": "FeatureCollection",
+                    "features": [_zone_feature()],
+                }
+            )
+        )
         cfg = ZonesConfig(zones_file=str(override))
         # No session provided — would fail if API were called
         result = check_zones(SURVEY_4326, cfg, cache_dir=tmp_path)
@@ -306,8 +334,9 @@ class TestAltitudeLimits:
         zone = _zone_feature(upper_limit=50, upper_uom="M", upper_ref="AGL")
         sess = _mock_session([zone])
         cfg = ZonesConfig()
-        result = check_zones(SURVEY_4326, cfg, flight_height_m=100.0,
-                             cache_dir=tmp_path, session=sess)
+        result = check_zones(
+            SURVEY_4326, cfg, flight_height_m=100.0, cache_dir=tmp_path, session=sess
+        )
         hit = result.intersecting_zones[0]
         assert hit.altitude.upper_limit == 50
         assert "above" in result.reasons[0].lower()
@@ -317,8 +346,9 @@ class TestAltitudeLimits:
         zone = _zone_feature(upper_limit=120, upper_uom="M", upper_ref="AGL")
         sess = _mock_session([zone])
         cfg = ZonesConfig()
-        result = check_zones(SURVEY_4326, cfg, flight_height_m=100.0,
-                             cache_dir=tmp_path, session=sess)
+        result = check_zones(
+            SURVEY_4326, cfg, flight_height_m=100.0, cache_dir=tmp_path, session=sess
+        )
         assert "within" in result.reasons[0] or "inside" in result.reasons[0]
 
 
@@ -333,6 +363,7 @@ def test_live_zone_check():
     """Verify the Traficom API is reachable and returns parseable zones."""
     from shapely.geometry import Point
     import tempfile
+
     # A point in rural South Ostrobothnia — should be outside all restricted zones
     rural_survey = Point(22.66, 62.55).buffer(0.01)
     with tempfile.TemporaryDirectory() as tmp:

@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 
 
 from flightmanager.config import SatellitesConfig, WeatherConfig
-from flightmanager import forecast as fc
-from flightmanager import satellites as sat
-from flightmanager import weather as wx
-from flightmanager.satellites import Overpass, OverpassResult
-from flightmanager.weather import DayWeather, WeatherResult
+from flightmanager.forecasting import forecast as fc
+from flightmanager.forecasting import satellites as sat
+from flightmanager.forecasting import weather as wx
+from flightmanager.forecasting.satellites import Overpass, OverpassResult
+from flightmanager.forecasting.weather import DayWeather, WeatherResult
 
 PTS = [(62.79, 22.84)]
 NOW = datetime(2026, 6, 15, tzinfo=timezone.utc)
@@ -19,8 +19,15 @@ NOW = datetime(2026, 6, 15, tzinfo=timezone.utc)
 def _fake_overpass_result():
     return OverpassResult(
         tile_ids=["34VEQ"],
-        overpasses=[Overpass(39084, "Landsat 8", "34VEQ",
-                             datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc), 70.0)],
+        overpasses=[
+            Overpass(
+                39084,
+                "Landsat 8",
+                "34VEQ",
+                datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc),
+                70.0,
+            )
+        ],
         grid_ok=True,
     )
 
@@ -39,8 +46,8 @@ def _fake_weather():
 
 def test_fingerprint_stable_and_sensitive():
     a = fc._fingerprint(PTS, "2026-06-15")
-    assert a == fc._fingerprint(PTS, "2026-06-15")            # stable
-    assert a != fc._fingerprint(PTS, "2026-06-16")            # date matters
+    assert a == fc._fingerprint(PTS, "2026-06-15")  # stable
+    assert a != fc._fingerprint(PTS, "2026-06-16")  # date matters
     assert a != fc._fingerprint([(60.0, 24.0)], "2026-06-15")  # points matter
     # Order-independent.
     two = [(62.79, 22.84), (60.0, 24.0)]
@@ -56,6 +63,7 @@ def test_cache_roundtrip_and_mismatch(tmp_path):
     # Expired TTL → miss.
     import os
     import time
+
     old = time.time() - 4 * 3600
     os.utime(p, (old, old))
     assert fc._read_cache(p, "fp1", 3) is None
@@ -73,14 +81,19 @@ def test_build_forecast_empty_centroids(tmp_path):
 
 
 def test_build_forecast_composes_and_caches(tmp_path, monkeypatch):
-    monkeypatch.setattr(sat, "overpasses_for_points",
-                        lambda *a, **k: _fake_overpass_result())
+    monkeypatch.setattr(
+        sat, "overpasses_for_points", lambda *a, **k: _fake_overpass_result()
+    )
     monkeypatch.setattr(sat, "load_grid", lambda *a, **k: None)
     monkeypatch.setattr(wx, "fetch_forecast", lambda *a, **k: _fake_weather())
 
     res = fc.build_forecast(
-        PTS, SatellitesConfig(), WeatherConfig(), tmp_path,
-        folder_dir=tmp_path, now=NOW,
+        PTS,
+        SatellitesConfig(),
+        WeatherConfig(),
+        tmp_path,
+        folder_dir=tmp_path,
+        now=NOW,
     )
     assert res["tile_ids"] == ["34VEQ"]
     assert res["grid_ok"] is True
@@ -95,7 +108,7 @@ def test_forecast_endpoint_routes_and_gathers_centroids(tmp_path, monkeypatch):
     """The /api/forecast handler resolves centroids and delegates to build_forecast."""
     from fastapi.testclient import TestClient
     from flightmanager.config import load_config
-    from flightmanager.server import create_app
+    from flightmanager.web.server import create_app
 
     cfg = load_config("config.example.toml")
     cfg.output.output_dir = str(tmp_path)  # empty → no centroids, no network
@@ -107,7 +120,7 @@ def test_forecast_endpoint_routes_and_gathers_centroids(tmp_path, monkeypatch):
         captured["folder_dir"] = kw.get("folder_dir")
         return {"grid_ok": True, "tile_ids": [], "days": []}
 
-    monkeypatch.setattr("flightmanager.forecast.build_forecast", fake_build)
+    monkeypatch.setattr("flightmanager.forecasting.forecast.build_forecast", fake_build)
 
     app = create_app(cfg)
     with TestClient(app) as client:
@@ -131,7 +144,11 @@ def test_build_forecast_cache_short_circuits(tmp_path, monkeypatch):
     monkeypatch.setattr(wx, "fetch_forecast", _boom)
 
     res = fc.build_forecast(
-        PTS, SatellitesConfig(), WeatherConfig(), tmp_path,
-        folder_dir=tmp_path, now=NOW,
+        PTS,
+        SatellitesConfig(),
+        WeatherConfig(),
+        tmp_path,
+        folder_dir=tmp_path,
+        now=NOW,
     )
     assert res["tile_ids"] == ["CACHED"]

@@ -19,6 +19,7 @@ def _version_from_git() -> str:
 
 try:
     from importlib.metadata import version as _pkg_version
+
     __version__ = _pkg_version("dkk-flightmanager")
 except Exception:
     __version__ = _version_from_git()

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flightmanager.cache import (
+from flightmanager.storage.cache import (
     CacheMissError,
     TileBbox,
     TileRecord,
@@ -31,7 +31,9 @@ from flightmanager.config import CacheConfig
 # ---------------------------------------------------------------------------
 
 
-def make_config(tmp_path: Path, *, offline: bool = False, tile_size_m: int = 1000) -> CacheConfig:
+def make_config(
+    tmp_path: Path, *, offline: bool = False, tile_size_m: int = 1000
+) -> CacheConfig:
     return CacheConfig(
         cache_dir=str(tmp_path),
         tile_size_m=tile_size_m,
@@ -43,9 +45,11 @@ def make_config(tmp_path: Path, *, offline: bool = False, tile_size_m: int = 100
 
 def fake_fetcher(content: bytes = b"TILEDATA") -> MagicMock:
     """Returns a mock fetcher that writes *content* to dest_path."""
+
     def _fetch(tile_id: str, bbox: TileBbox, dest: Path) -> tuple[str, str | None]:
         dest.write_bytes(content)
         return (f"https://example.com/{tile_id}", "v1.0")
+
     m = MagicMock(side_effect=_fetch)
     return m
 
@@ -61,11 +65,15 @@ def make_tile_record(
     tile_file.write_bytes(b"DATA")
     fetch_ts = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
     return TileRecord(
-        tile_id=tile_id, dataset=dataset,
+        tile_id=tile_id,
+        dataset=dataset,
         bbox=(300_000.0, 6_900_000.0, 301_000.0, 6_901_000.0),
-        path=tile_file, source_url="https://example.com/tile",
-        fetch_timestamp=fetch_ts, dataset_version="v1",
-        checksum="abc123", byte_size=4,
+        path=tile_file,
+        source_url="https://example.com/tile",
+        fetch_timestamp=fetch_ts,
+        dataset_version="v1",
+        checksum="abc123",
+        byte_size=4,
     )
 
 
@@ -360,7 +368,7 @@ class TestTileLocks:
     growing unboundedly across the long-lived serve process."""
 
     def test_same_tile_returns_same_lock_while_held(self):
-        from flightmanager.cache import _tile_lock
+        from flightmanager.storage.cache import _tile_lock
 
         a = _tile_lock("dem", "E1_N1")
         b = _tile_lock("dem", "E1_N1")
@@ -371,7 +379,7 @@ class TestTileLocks:
     def test_unused_locks_are_garbage_collected(self):
         import gc
 
-        from flightmanager.cache import _tile_lock, _tile_locks
+        from flightmanager.storage.cache import _tile_lock, _tile_locks
 
         # Touch several distinct tiles, holding no references afterwards.
         for i in range(20):
@@ -383,7 +391,7 @@ class TestTileLocks:
     def test_held_lock_survives_collection(self):
         import gc
 
-        from flightmanager.cache import _tile_lock, _tile_locks
+        from flightmanager.storage.cache import _tile_lock, _tile_locks
 
         held = _tile_lock("buildings", "E9_N9")
         gc.collect()

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flightmanager.elevation import tile_fetcher, validate_tile
+from flightmanager.geo.elevation import tile_fetcher, validate_tile
 
 # Real tile downloaded during development — used as a fixture if present.
 _REAL_TILE = Path("/tmp/test_tile.tif")
@@ -30,7 +30,9 @@ def _mock_xml_error_response() -> MagicMock:
     resp = MagicMock()
     resp.raise_for_status = MagicMock()
     resp.headers = {"Content-Type": "text/xml"}
-    resp.content = b"<ExceptionReport><Exception>Invalid parameter</Exception></ExceptionReport>"
+    resp.content = (
+        b"<ExceptionReport><Exception>Invalid parameter</Exception></ExceptionReport>"
+    )
     resp.iter_content = MagicMock(return_value=iter([resp.content]))
     return resp
 
@@ -45,8 +47,11 @@ class TestTileFetcherRequest:
         sess = MagicMock()
         sess.get.return_value = _mock_tiff_response()
         fetcher = tile_fetcher("test-key", session=sess)
-        fetcher("E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
-                tmp_path / "tile.tif")
+        fetcher(
+            "E295000_N6974000",
+            (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
+            tmp_path / "tile.tif",
+        )
         url = sess.get.call_args[0][0]
         assert "avoin-karttakuva.maanmittauslaitos.fi" in url
 
@@ -54,8 +59,11 @@ class TestTileFetcherRequest:
         sess = MagicMock()
         sess.get.return_value = _mock_tiff_response()
         fetcher = tile_fetcher("my-secret", session=sess)
-        fetcher("E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
-                tmp_path / "tile.tif")
+        fetcher(
+            "E295000_N6974000",
+            (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
+            tmp_path / "tile.tif",
+        )
         params = sess.get.call_args[1]["params"]
         assert params["api-key"] == "my-secret"
 
@@ -63,8 +71,11 @@ class TestTileFetcherRequest:
         sess = MagicMock()
         sess.get.return_value = _mock_tiff_response()
         fetcher = tile_fetcher("key", session=sess)
-        fetcher("E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
-                tmp_path / "tile.tif")
+        fetcher(
+            "E295000_N6974000",
+            (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
+            tmp_path / "tile.tif",
+        )
         params = sess.get.call_args[1]["params"]
         assert params["CoverageID"] == "korkeusmalli_2m"
 
@@ -72,8 +83,11 @@ class TestTileFetcherRequest:
         sess = MagicMock()
         sess.get.return_value = _mock_tiff_response()
         fetcher = tile_fetcher("key", session=sess)
-        fetcher("E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
-                tmp_path / "tile.tif")
+        fetcher(
+            "E295000_N6974000",
+            (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
+            tmp_path / "tile.tif",
+        )
         params = sess.get.call_args[1]["params"]
         subsets = params["SUBSET"]
         assert any("295000" in s and "296000" in s for s in subsets)
@@ -83,9 +97,11 @@ class TestTileFetcherRequest:
         sess = MagicMock()
         sess.get.return_value = _mock_tiff_response()
         fetcher = tile_fetcher("key", session=sess)
-        url, version = fetcher("E295000_N6974000",
-                               (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
-                               tmp_path / "tile.tif")
+        url, version = fetcher(
+            "E295000_N6974000",
+            (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
+            tmp_path / "tile.tif",
+        )
         assert url.startswith("https://")
         assert version is None  # WCS doesn't expose a dataset version string
 
@@ -95,7 +111,9 @@ class TestTileFetcherRequest:
         sess.get.return_value = _mock_tiff_response(content)
         fetcher = tile_fetcher("key", session=sess)
         dest = tmp_path / "dem" / "E295000_N6974000.tif"
-        fetcher("E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0), dest)
+        fetcher(
+            "E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0), dest
+        )
         assert dest.exists()
         assert dest.read_bytes() == content
 
@@ -104,8 +122,11 @@ class TestTileFetcherRequest:
         sess.get.return_value = _mock_xml_error_response()
         fetcher = tile_fetcher("key", session=sess)
         with pytest.raises(RuntimeError, match="unexpected Content-Type"):
-            fetcher("E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
-                    tmp_path / "tile.tif")
+            fetcher(
+                "E295000_N6974000",
+                (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
+                tmp_path / "tile.tif",
+            )
 
     def test_http_error_propagates(self, tmp_path):
         sess = MagicMock()
@@ -115,8 +136,11 @@ class TestTileFetcherRequest:
         sess.get.return_value = resp
         fetcher = tile_fetcher("bad-key", session=sess)
         with pytest.raises(Exception, match="403"):
-            fetcher("E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
-                    tmp_path / "tile.tif")
+            fetcher(
+                "E295000_N6974000",
+                (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0),
+                tmp_path / "tile.tif",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +185,14 @@ class TestValidateTile:
         fake = tmp_path / "wrong_crs.tif"
         transform = from_bounds(22.0, 62.0, 22.1, 62.1, 100, 100)
         with rasterio.open(
-            fake, "w", driver="GTiff", height=100, width=100,
-            count=1, dtype="float32", crs=CRS.from_epsg(4326),
+            fake,
+            "w",
+            driver="GTiff",
+            height=100,
+            width=100,
+            count=1,
+            dtype="float32",
+            crs=CRS.from_epsg(4326),
             transform=transform,
         ) as ds:
             ds.write(np.ones((1, 100, 100), dtype="float32"))
@@ -177,16 +207,20 @@ class TestValidateTile:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Hits live MML WCS — run with -m integration and set MML_API_KEY")
+@pytest.mark.skip(
+    reason="Hits live MML WCS — run with -m integration and set MML_API_KEY"
+)
 def test_live_fetch_tile():
     import os
     import tempfile
+
     api_key = os.environ["MML_API_KEY"]
     fetcher = tile_fetcher(api_key)
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp) / "E295000_N6974000.tif"
-        url, _ = fetcher("E295000_N6974000",
-                         (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0), dest)
+        url, _ = fetcher(
+            "E295000_N6974000", (295_000.0, 6_974_000.0, 296_000.0, 6_975_000.0), dest
+        )
         assert dest.exists()
         assert dest.stat().st_size > 100_000  # should be ~750 KB
         stats = validate_tile(dest)

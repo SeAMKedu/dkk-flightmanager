@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import MultiPolygon, Point, Polygon
 
-from flightmanager.buildings import Building
+from flightmanager.geo.buildings import Building
 from flightmanager.config import HomeSafetyConfig, PolygonConfig
-from flightmanager.crs import CRSError
-from flightmanager.geometry import (
+from flightmanager.geo.crs import CRSError
+from flightmanager.geo.geometry import (
     SurveyGeometry,
     _apply_edge_buffer,
     _apply_keepout,
@@ -24,7 +24,7 @@ from flightmanager.geometry import (
     suggest_takeoff_point,
     process_survey,
 )
-from flightmanager.parcels import Parcel
+from flightmanager.geo.parcels import Parcel
 
 # ---------------------------------------------------------------------------
 # Helper factories — all in EPSG:3067 (Finnish range)
@@ -32,13 +32,13 @@ from flightmanager.parcels import Parcel
 
 
 def make_parcel(
-    x: float = 300_000, y: float = 6_900_000,
-    w: float = 500, h: float = 500,
+    x: float = 300_000,
+    y: float = 6_900_000,
+    w: float = 500,
+    h: float = 500,
     parcel_id: str = "P1",
 ) -> Parcel:
-    ring = [
-        (x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)
-    ]
+    ring = [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]
     return Parcel(
         parcel_id=parcel_id,
         tunnus=1,
@@ -49,14 +49,14 @@ def make_parcel(
 
 
 def make_building(
-    x: float = 301_000, y: float = 6_900_250,
-    w: float = 20, h: float = 20,
+    x: float = 301_000,
+    y: float = 6_900_250,
+    w: float = 20,
+    h: float = 20,
     kohdeluokka: int = 42211,
     mtk_id: int = 9001,
 ) -> Building:
-    ring = [
-        (x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)
-    ]
+    ring = [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]
     return Building(
         mtk_id=mtk_id,
         kohdeluokka=kohdeluokka,
@@ -257,10 +257,20 @@ class TestApplyKeeput:
 
 class TestHolePolicy:
     def _polygon_with_hole(self) -> Polygon:
-        outer = [(300_000, 6_900_000), (301_000, 6_900_000),
-                 (301_000, 6_901_000), (300_000, 6_901_000), (300_000, 6_900_000)]
-        inner = [(300_200, 6_900_200), (300_800, 6_900_200),
-                 (300_800, 6_900_800), (300_200, 6_900_800), (300_200, 6_900_200)]
+        outer = [
+            (300_000, 6_900_000),
+            (301_000, 6_900_000),
+            (301_000, 6_901_000),
+            (300_000, 6_901_000),
+            (300_000, 6_900_000),
+        ]
+        inner = [
+            (300_200, 6_900_200),
+            (300_800, 6_900_200),
+            (300_800, 6_900_800),
+            (300_200, 6_900_800),
+            (300_200, 6_900_200),
+        ]
         return Polygon(outer, [inner])
 
     def test_no_holes_returns_unchanged(self):
@@ -295,10 +305,22 @@ class TestHolePolicy:
 
 class TestMultipartPolicy:
     def _make_two_separate_polygons(self) -> MultiPolygon:
-        p1 = Polygon([(300_000, 6_900_000), (300_500, 6_900_000),
-                      (300_500, 6_900_500), (300_000, 6_900_500)])
-        p2 = Polygon([(301_000, 6_900_000), (301_500, 6_900_000),
-                      (301_500, 6_900_500), (301_000, 6_900_500)])
+        p1 = Polygon(
+            [
+                (300_000, 6_900_000),
+                (300_500, 6_900_000),
+                (300_500, 6_900_500),
+                (300_000, 6_900_500),
+            ]
+        )
+        p2 = Polygon(
+            [
+                (301_000, 6_900_000),
+                (301_500, 6_900_000),
+                (301_500, 6_900_500),
+                (301_000, 6_900_500),
+            ]
+        )
         return MultiPolygon([p1, p2])
 
     def test_review_policy_flags_multipart(self):
@@ -309,10 +331,22 @@ class TestMultipartPolicy:
         assert len(pieces) == 2  # both pieces surfaced
 
     def test_largest_policy_keeps_biggest(self):
-        p1 = Polygon([(300_000, 6_900_000), (300_500, 6_900_000),
-                      (300_500, 6_900_500), (300_000, 6_900_500)])
-        p2 = Polygon([(301_000, 6_900_000), (301_200, 6_900_000),
-                      (301_200, 6_900_200), (301_000, 6_900_200)])  # smaller
+        p1 = Polygon(
+            [
+                (300_000, 6_900_000),
+                (300_500, 6_900_000),
+                (300_500, 6_900_500),
+                (300_000, 6_900_500),
+            ]
+        )
+        p2 = Polygon(
+            [
+                (301_000, 6_900_000),
+                (301_200, 6_900_000),
+                (301_200, 6_900_200),
+                (301_000, 6_900_200),
+            ]
+        )  # smaller
         mp = MultiPolygon([p1, p2])
         cfg = PolygonConfig(multipart_policy="largest")
         pieces, reasons = _enforce_policy(mp, cfg)
@@ -343,17 +377,20 @@ class TestFixWinding:
     def test_exterior_is_ccw(self):
         # Create CW exterior and verify _fix_winding corrects it
         from shapely import orient_polygons as _orient
+
         cw_poly = _orient(make_parcel().geometry, exterior_cw=True)
         fixed = _fix_winding(cw_poly)
         # In shapely, CCW exterior has positive signed area
         import shapely
+
         assert shapely.get_coordinate_dimension(fixed) >= 0
         # Verify exterior coords are in CCW order by checking area sign
         coords = list(fixed.exterior.coords)
         # Shoelace formula
         n = len(coords)
         area = sum(
-            coords[i][0] * coords[(i + 1) % n][1] - coords[(i + 1) % n][0] * coords[i][1]
+            coords[i][0] * coords[(i + 1) % n][1]
+            - coords[(i + 1) % n][0] * coords[i][1]
             for i in range(n)
         )
         assert area > 0  # positive = CCW
@@ -376,6 +413,7 @@ class TestReproject:
     def test_coordinate_order_is_lon_lat(self):
         # A point at known 3067 location near Seinäjoki
         from shapely.geometry import Point
+
         pt_3067 = Point(300_000, 6_900_000)
         pt_4326 = reproject_to_4326(pt_3067)
         lon, lat = pt_4326.x, pt_4326.y
@@ -411,7 +449,9 @@ class TestProcessSurvey:
         parcel = make_parcel(x=300_000, y=6_900_000, w=1000, h=1000)
         # Building well inside the parcel
         b = make_building(x=300_100, y=6_900_100, w=30, h=30)
-        cfg = HomeSafetyConfig(home_buffer_m=150, offset_enabled=True, max_area_loss_pct=50)
+        cfg = HomeSafetyConfig(
+            home_buffer_m=150, offset_enabled=True, max_area_loss_pct=50
+        )
         result = process_survey([parcel], [b], cfg, _DEFAULT_POLY_CFG)
         assert result.area_lost_pct > 0
         assert result.offset_applied
@@ -420,7 +460,9 @@ class TestProcessSurvey:
         parcel = make_parcel(x=300_000, y=6_900_000, w=300, h=300)
         # Building whose buffer covers most of the small parcel
         b = make_building(x=300_150, y=6_900_150, w=20, h=20)
-        cfg = HomeSafetyConfig(home_buffer_m=150, offset_enabled=True, max_area_loss_pct=10)
+        cfg = HomeSafetyConfig(
+            home_buffer_m=150, offset_enabled=True, max_area_loss_pct=10
+        )
         result = process_survey([parcel], [b], cfg, _DEFAULT_POLY_CFG)
         assert result.needs_review
         assert any("area" in r.lower() for r in result.review_reasons)
@@ -428,7 +470,8 @@ class TestProcessSurvey:
     def test_survey_4326_is_valid_wgs84(self):
         parcels = [make_parcel()]
         result = process_survey(parcels, [], _DEFAULT_HOME_SAFETY, _DEFAULT_POLY_CFG)
-        from flightmanager.crs import assert_crs
+        from flightmanager.geo.crs import assert_crs
+
         assert_crs(result.survey_4326, 4326)
 
     def test_bbox_3067_covers_survey(self):
@@ -442,7 +485,10 @@ class TestProcessSurvey:
     def test_crs_error_on_non_3067_parcel(self):
         # A parcel with WGS84 coordinates should be caught by the CRS guard
         bad = Parcel(
-            parcel_id="bad", tunnus=1, year=2024, area_ha=1.0,
+            parcel_id="bad",
+            tunnus=1,
+            year=2024,
+            area_ha=1.0,
             geometry=Polygon([(22.6, 62.5), (22.7, 62.5), (22.7, 62.6), (22.6, 62.5)]),
         )
         with pytest.raises(CRSError):

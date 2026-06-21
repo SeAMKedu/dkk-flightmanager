@@ -14,23 +14,35 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 from shapely.geometry import Polygon
 
-from flightmanager.buildings import Building
-from flightmanager.cache import TileRecord
-from flightmanager.config import AppConfig, CacheConfig, FlightConfig, HomeSafetyConfig, ParcelsConfig, PolygonConfig, ZonesConfig
-from flightmanager.parcels import Parcel
+from flightmanager.geo.buildings import Building
+from flightmanager.storage.cache import TileRecord
+from flightmanager.config import (
+    AppConfig,
+    CacheConfig,
+    FlightConfig,
+    HomeSafetyConfig,
+    ParcelsConfig,
+    PolygonConfig,
+    ZonesConfig,
+)
+from flightmanager.geo.parcels import Parcel
 from flightmanager.pipeline import export_job
-from flightmanager.zones import ZoneCheckResult
+from flightmanager.geo.zones import ZoneCheckResult
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
 # A small field polygon in EPSG:3067 near Seinäjoki
-_PARCEL_POLY = Polygon([
-    (300_000, 6_900_000), (301_000, 6_900_000),
-    (301_000, 6_901_000), (300_000, 6_901_000),
-    (300_000, 6_900_000),
-])
+_PARCEL_POLY = Polygon(
+    [
+        (300_000, 6_900_000),
+        (301_000, 6_900_000),
+        (301_000, 6_901_000),
+        (300_000, 6_901_000),
+        (300_000, 6_900_000),
+    ]
+)
 
 _PARCEL = Parcel(
     parcel_id="TEST001",
@@ -45,10 +57,14 @@ _BUILDING = Building(
     mtk_id=9001,
     kohdeluokka=42211,
     kayttotarkoitus=1,
-    geometry=Polygon([
-        (302_000, 6_900_000), (302_050, 6_900_000),
-        (302_050, 6_900_050), (302_000, 6_900_050),
-    ]),
+    geometry=Polygon(
+        [
+            (302_000, 6_900_000),
+            (302_050, 6_900_000),
+            (302_050, 6_900_050),
+            (302_000, 6_900_050),
+        ]
+    ),
     alkupvm="2025-01-01",
 )
 
@@ -59,7 +75,9 @@ def _make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         home_safety=HomeSafetyConfig(home_buffer_m=50, offset_enabled=True),
         polygon=PolygonConfig(gap_fill_m=0, simplify_tolerance_m=0),
         cache=CacheConfig(cache_dir=str(tmp_path / "cache")),
-        output=overrides.pop("output", type("O", (), {"output_dir": str(tmp_path / "output")})()),
+        output=overrides.pop(
+            "output", type("O", (), {"output_dir": str(tmp_path / "output")})()
+        ),
         parcels=ParcelsConfig(lpis_year=2025),
         zones=ZonesConfig(zones_file=""),  # no zones file → skip check
     )
@@ -71,15 +89,26 @@ def _make_dem_tile(path: Path) -> None:
     transform = from_bounds(298_000, 6_898_000, 304_000, 6_904_000, 100, 100)
     data = np.full((1, 100, 100), 80.0, dtype="float32")
     with rasterio.open(
-        path, "w", driver="GTiff", height=100, width=100,
-        count=1, dtype="float32", crs=CRS.from_epsg(3067),
-        transform=transform, nodata=-9999.0, compress="lzw",
+        path,
+        "w",
+        driver="GTiff",
+        height=100,
+        width=100,
+        count=1,
+        dtype="float32",
+        crs=CRS.from_epsg(3067),
+        transform=transform,
+        nodata=-9999.0,
+        compress="lzw",
     ) as ds:
         ds.write(data)
 
 
-def _tile_record(path: Path, dataset: str = "dem", tile_id: str = "E298000_N6898000") -> TileRecord:
+def _tile_record(
+    path: Path, dataset: str = "dem", tile_id: str = "E298000_N6898000"
+) -> TileRecord:
     from datetime import datetime, timezone
+
     return TileRecord(
         tile_id=tile_id,
         dataset=dataset,
@@ -117,6 +146,7 @@ class TestRunJob:
         )
         # Patch output_dir
         from flightmanager.config import OutputConfig
+
         cfg.output = OutputConfig(output_dir=str(tmp_path / "output"))
         return cfg
 
@@ -132,24 +162,37 @@ class TestRunJob:
         _geojson_tile(p)
         return p
 
-    def _run(self, config, dem_tile, bldg_tile, parcel_ids=None, dry_run=False,
-             zone_result=None):
+    def _run(
+        self,
+        config,
+        dem_tile,
+        bldg_tile,
+        parcel_ids=None,
+        dry_run=False,
+        zone_result=None,
+    ):
         """Run a job with all network calls mocked."""
-        dem_rec  = _tile_record(dem_tile, "dem")
+        dem_rec = _tile_record(dem_tile, "dem")
         bldg_rec = _tile_record(bldg_tile, "buildings", "E249750_N6849750")
         if zone_result is None:
-            zone_result = ZoneCheckResult(checked=False, needs_review=True,
-                                          reasons=["Zone check skipped (no file)"])
+            zone_result = ZoneCheckResult(
+                checked=False,
+                needs_review=True,
+                reasons=["Zone check skipped (no file)"],
+            )
 
         with (
             patch.dict(os.environ, {"MML_API_KEY": "test-key"}),
             patch("flightmanager.pipeline.fetch_parcels", return_value=[_PARCEL]),
-            patch("flightmanager.pipeline.get_tiles", side_effect=[
-                [bldg_rec],   # buildings call
-                [],           # powerlines call
-                [],           # pylons call
-                [dem_rec],    # DEM call
-            ]),
+            patch(
+                "flightmanager.pipeline.get_tiles",
+                side_effect=[
+                    [bldg_rec],  # buildings call
+                    [],  # powerlines call
+                    [],  # pylons call
+                    [dem_rec],  # DEM call
+                ],
+            ),
             patch("flightmanager.pipeline.load_tile", return_value=[_BUILDING]),
             patch("flightmanager.pipeline.check_zones", return_value=zone_result),
         ):
@@ -163,13 +206,24 @@ class TestRunJob:
 
     def test_manifest_has_required_keys(self, config, dem_tile, bldg_tile):
         manifest = self._run(config, dem_tile, bldg_tile)
-        for key in ("tool_version", "job_name", "parcels", "geometry", "flight",
-                    "dsm", "home_safety", "zones", "needs_review",
-                    "flight_ready", "cache_provenance"):
+        for key in (
+            "tool_version",
+            "job_name",
+            "parcels",
+            "geometry",
+            "flight",
+            "dsm",
+            "home_safety",
+            "zones",
+            "needs_review",
+            "flight_ready",
+            "cache_provenance",
+        ):
             assert key in manifest, f"Missing manifest key: {key}"
 
     def test_tool_version_stamped(self, config, dem_tile, bldg_tile):
         from flightmanager import tool_version
+
         manifest = self._run(config, dem_tile, bldg_tile)
         assert manifest["tool_version"] == tool_version()
 
@@ -218,8 +272,10 @@ class TestRunJob:
     def test_attribution_strings_present(self, config, dem_tile, bldg_tile):
         manifest = self._run(config, dem_tile, bldg_tile)
         assert "National Land Survey" in manifest["dsm"]["attribution"]
-        assert "Ruokavirasto"         in manifest["parcels"]["attribution"]
-        assert "National Land Survey" in manifest["home_safety"]["buildings_attribution"]
+        assert "Ruokavirasto" in manifest["parcels"]["attribution"]
+        assert (
+            "National Land Survey" in manifest["home_safety"]["buildings_attribution"]
+        )
 
     def test_cache_provenance_recorded(self, config, dem_tile, bldg_tile):
         manifest = self._run(config, dem_tile, bldg_tile)
@@ -255,6 +311,7 @@ def test_live_export_job(tmp_path):
         zones=ZonesConfig(),
     )
     from flightmanager.config import OutputConfig
+
     cfg.output = OutputConfig(output_dir=str(tmp_path / "output"))
 
     manifest, _route = export_job(

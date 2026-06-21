@@ -12,8 +12,13 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 from shapely.geometry import box
 
-from flightmanager.crs import CRSError
-from flightmanager.raster import _NODATA, _stats, build_site_dsm
+from flightmanager.geo.crs import CRSError
+from flightmanager.geo.raster import (
+    _NODATA,
+    _stats,
+    build_preview_dsm_thumbnail,
+    build_site_dsm,
+)
 
 # Real 1km DEM tile fetched during Phase 4 development
 _REAL_TILE = Path("/tmp/test_tile.tif")
@@ -35,7 +40,10 @@ def real_tile(tmp_path) -> Path:
 
 def _make_synthetic_tile(
     tmp_path: Path,
-    xmin=295_000, ymin=6_974_000, xmax=296_000, ymax=6_975_000,
+    xmin=295_000,
+    ymin=6_974_000,
+    xmax=296_000,
+    ymax=6_975_000,
     elevation=75.0,
 ) -> Path:
     p = tmp_path / "dem" / f"E{xmin}_N{ymin}.tif"
@@ -43,9 +51,16 @@ def _make_synthetic_tile(
     tr = from_bounds(xmin, ymin, xmax, ymax, 10, 10)
     data = np.full((1, 10, 10), elevation, dtype="float32")
     with rasterio.open(
-        p, "w", driver="GTiff", height=10, width=10,
-        count=1, dtype="float32", crs=CRS.from_epsg(3067),
-        transform=tr, nodata=_NODATA,
+        p,
+        "w",
+        driver="GTiff",
+        height=10,
+        width=10,
+        count=1,
+        dtype="float32",
+        crs=CRS.from_epsg(3067),
+        transform=tr,
+        nodata=_NODATA,
     ) as ds:
         ds.write(data)
     return p
@@ -63,7 +78,9 @@ class TestInputValidation:
 
     def test_missing_tile_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            build_site_dsm([tmp_path / "nonexistent.tif"], _SURVEY, tmp_path / "out.tif")
+            build_site_dsm(
+                [tmp_path / "nonexistent.tif"], _SURVEY, tmp_path / "out.tif"
+            )
 
     def test_non_4326_survey_raises(self, tmp_path, real_tile):
         survey_3067 = box(295_000, 6_974_000, 295_500, 6_974_500)
@@ -177,8 +194,53 @@ class TestMosaic:
         assert stats["crs"] == "EPSG:4326"
         # After FIN2023N2000 geoid correction, N2000 75.0 m → WGS-84 ~92-94 m
         # at this location in Finland (undulation ≈ 17.9 m).
-        assert abs(stats["elevation_min_m"] - 75.0) > 10.0, "geoid correction not applied"
+        assert abs(stats["elevation_min_m"] - 75.0) > 10.0, (
+            "geoid correction not applied"
+        )
         assert 88.0 < stats["elevation_min_m"] < 98.0
+
+
+# ---------------------------------------------------------------------------
+# Preview DSM thumbnail (display-only viridis PNG)
+# ---------------------------------------------------------------------------
+
+
+class TestPreviewThumbnail:
+    def _decode(self, b64):
+        import base64
+        import io
+
+        from PIL import Image
+
+        return np.array(Image.open(io.BytesIO(base64.b64decode(b64))))
+
+    def test_nodata_pixels_are_white(self, tmp_path):
+        """No-data pixels get alpha=0 (transparent for the web overlay) AND white
+        RGB, so the PDF report - which flattens the alpha - prints clean white
+        instead of dark viridis."""
+        tile = _make_synthetic_tile(tmp_path)  # covers ~lon 22.973-22.991
+        # Survey hugging the tile's east edge: the 150 m margin pushes the thumbnail
+        # bbox past the tile, leaving a no-data strip on the right.
+        survey = box(22.985, 62.840, 22.990, 62.846)
+        b64, bounds = build_preview_dsm_thumbnail([tile], survey, margin_m=150)
+        assert b64 is not None
+        arr = self._decode(b64)
+        assert arr.shape[2] == 4  # RGBA
+        invalid = arr[:, :, 3] == 0
+        assert invalid.any(), "expected a no-data region beyond the tile edge"
+        nodata_rgb = arr[invalid][:, :3]
+        assert (nodata_rgb == 255).all(), "no-data pixels must be white"
+
+    def test_valid_pixels_keep_viridis(self, tmp_path):
+        """Covered pixels stay opaque and are not whitewashed."""
+        tile = _make_synthetic_tile(tmp_path)
+        survey = box(22.976, 62.840, 22.988, 62.846)  # well inside the tile
+        b64, _ = build_preview_dsm_thumbnail([tile], survey, margin_m=0)
+        arr = self._decode(b64)
+        valid = arr[:, :, 3] == 255
+        assert valid.any()
+        # A flat synthetic tile maps to a single viridis colour, not white.
+        assert not (arr[valid][:, :3] == 255).all()
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +254,16 @@ class TestStats:
         tr = from_bounds(21.0, 62.0, 22.0, 63.0, 10, 10)
         data = np.full((1, 10, 10), _NODATA, dtype="float32")
         with rasterio.open(
-            p, "w", driver="GTiff", height=10, width=10, count=1,
-            dtype="float32", crs=CRS.from_epsg(4326), transform=tr, nodata=_NODATA,
+            p,
+            "w",
+            driver="GTiff",
+            height=10,
+            width=10,
+            count=1,
+            dtype="float32",
+            crs=CRS.from_epsg(4326),
+            transform=tr,
+            nodata=_NODATA,
         ) as ds:
             ds.write(data)
         with pytest.raises(ValueError, match="no valid pixels"):
@@ -204,8 +274,16 @@ class TestStats:
         tr = from_bounds(295_000, 6_974_000, 296_000, 6_975_000, 10, 10)
         data = np.ones((1, 10, 10), dtype="float32") * 75.0
         with rasterio.open(
-            p, "w", driver="GTiff", height=10, width=10, count=1,
-            dtype="float32", crs=CRS.from_epsg(3067), transform=tr, nodata=_NODATA,
+            p,
+            "w",
+            driver="GTiff",
+            height=10,
+            width=10,
+            count=1,
+            dtype="float32",
+            crs=CRS.from_epsg(3067),
+            transform=tr,
+            nodata=_NODATA,
         ) as ds:
             ds.write(data)
         with pytest.raises(ValueError, match="EPSG:4326"):
@@ -218,12 +296,14 @@ class TestStats:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Hits live MML WCS — run with -m integration and set MML_API_KEY")
+@pytest.mark.skip(
+    reason="Hits live MML WCS — run with -m integration and set MML_API_KEY"
+)
 def test_live_build_site_dsm(tmp_path):
     import os
-    from flightmanager.cache import get_tiles
+    from flightmanager.storage.cache import get_tiles
     from flightmanager.config import CacheConfig
-    from flightmanager.elevation import tile_fetcher
+    from flightmanager.geo.elevation import tile_fetcher
 
     api_key = os.environ["MML_API_KEY"]
     cfg = CacheConfig(cache_dir=str(tmp_path / "cache"))

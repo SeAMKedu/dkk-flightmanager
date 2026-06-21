@@ -471,21 +471,34 @@ Use the full absolute path to the `.venv` binary so Claude Desktop finds the rig
 | `list_jobs` | List jobs with filters: folder, needs\_review, flight\_ready, untouched. Each card includes area, flight time, photo count, battery count, height, drone, lost area %, and more |
 | `get_job` | Full details for one job — inputs, flight params, zone hits, flight status, and a `stats` block with all numeric fields |
 | `job_stats` | Aggregate stats across all jobs or a folder: total area, total flight time, total photo count, total battery count, lost area, and review/ready/untouched counts |
+| `scan_stale` | List exported jobs that should be recomputed (older pipeline version or newer cached source data); pass the paths to `refresh_jobs` |
+| `flight_forecast` | Satellite-overpass + weather day-slots for a folder/path set: golden (flyable + clear-sky) days, daytime-averaged weather, Sentinel/Landsat passes (needs network) |
 | `jobs://list` | All jobs as a resource (same as list\_jobs with no filters) |
 | `jobs://{path}` | Raw params + manifest for one job |
 | `config://current` | Active drone, GSD, flight and safety settings |
 | `drones://list` | All drone profiles with GSD at 50/80/100 m |
+| `launch_sites` | Cluster a folder's route jobs into physical launch sites (drone parking spots) in flight order: Flyk operating-area centre/radius, total flight time, max altitude, and member jobs per site |
 
 **Write (pipeline operations):**
 
 | Tool | Description |
 |---|---|
 | `create_folder` | Create a named job group folder |
+| `rename_folder` | Rename a group folder (route); a single directory rename, jobs follow automatically |
+| `rename_job` | Rename a single job (directory + name-prefixed files), keeping its folder |
+| `move_job` | Move a job to another folder (or root); auto-removes the empty source folder |
+| `clone_job` | Clone a job's params + thumbnail into the same folder (no KMZ/DSM until re-exported) |
+| `set_job_color` | Set or clear a job's map-display color |
+| `set_job_skipped` | Mark a job skipped (excluded from route flights) or active |
 | `delete_job` | Delete a job and all its output files; auto-removes empty parent folder |
+| `reorder_route` | Set the flight order of jobs within one folder (assigns `sort_order`); reshapes launch-site clustering |
+| `route_rename` | Rename an ordered list of route jobs to `YYYYMMDD-NN-base` flight-order names; idempotent prefix strip, collision-safe two-phase rename |
+| `refresh_jobs` | Recompute jobs in place from stored params (cache-first); reports before/after flight-ready & review flips |
 | `create_preview` | Run geometry + UAS zone check without writing files (~10–30 s) |
 | `create_batch` | Create skeleton jobs from parcel/property IDs (no KMZ) |
 | `export_existing_job` | Export a job that already exists on disk — reads stored polygon and params from `job_params.json`, no need to re-supply IDs (~30–120 s) |
 | `run_export` | Full pipeline from scratch — KMZ, DSM, homes KML, manifest written to disk (~30–120 s) |
+| `generate_report` | Render a PDF flight card (one job) or mission packet (several) to disk |
 
 Pipeline tools are serialised against the web UI: if a browser job is already running, the MCP tool returns an error immediately rather than colliding on the shared tile cache.
 
@@ -500,6 +513,11 @@ Create batch jobs for parcel IDs 5241087453, 5241087454, 5241087455 in folder Se
 Export all untouched jobs in folder Seinäjoki
 What drone should I use for a 12 ha field at 3 cm GSD?
 Run a preview for parcel 5241087453 and tell me if there are any zone issues
+Order the jobs in folder Seinäjoki by takeoff proximity, then rename them in flight order
+How many launch sites does folder Vaasa-2026 cluster into, and what's each one's radius?
+Which jobs are stale, and refresh them all
+When's the next golden (flyable + clear-sky satellite pass) day for folder Vaasa-2026?
+Generate a mission packet PDF for folder Seinäjoki
 Delete all jobs in folder test
 ```
 
