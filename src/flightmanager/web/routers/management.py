@@ -96,8 +96,18 @@ class SplitRequest(BaseModel):
     polygon_b: dict  # GeoJSON for the new sibling job
 
 
+class LaunchPoint(BaseModel):
+    name: str
+    lon: float
+    lat: float
+
+
 class ExportKmlRequest(BaseModel):
     paths: list[str]
+    # When the map view is at overview zoom (jobs collapsed into launch sites)
+    # the client sends launch-site centroids here; the KML then carries a single
+    # "Launch sites" folder instead of per-job takeoff markers.
+    launch_points: list[LaunchPoint] | None = None
 
 
 class MergeRequest(BaseModel):
@@ -507,7 +517,10 @@ async def export_kml(req: ExportKmlRequest):
             p.get("job_name") or "",
         )
     )
-    kml = build_jobs_kml(jobs)
+    launch_points = (
+        [lp.model_dump() for lp in req.launch_points] if req.launch_points else None
+    )
+    kml = build_jobs_kml(jobs, launch_points=launch_points)
     return Response(content=kml, media_type="application/vnd.google-earth.kml+xml")
 
 

@@ -290,6 +290,36 @@ export function drawLaunchSites(map, sites) {
   return _group;
 }
 
+/**
+ * Collapse a selection of job paths to launch-site centroids, in flight order.
+ * Returns `[{name, lon, lat}, …]` — one entry per launch site that contains a
+ * selected job — or `null` when launch sites aren't currently shown or the map
+ * is zoomed into per-job *detail* (≥ DETAIL_ZOOM, where each takeoff is drawn
+ * individually). A `null` return tells callers to fall back to per-job takeoff
+ * points, so exports/navigation always match what's drawn on the map. Shared by
+ * the Google Maps directions link and the KML export.
+ */
+export function launchSitePoints(selectedPaths) {
+  if (!_map || !_sites || !_sites.length) return null;
+  if (_map.getZoom() >= DETAIL_ZOOM) return null;       // detail view → per-job takeoffs
+  var sel = new Set(selectedPaths || []);
+  var out = [];
+  _sites.forEach(function (s) {                          // _sites is already in flight order
+    var hit = (s.job_paths || []).some(function (p) { return sel.has(p); });
+    if (hit && s.dot_4326) {
+      var label = s.first_route_index != null ? s.first_route_index : (out.length + 1);
+      out.push({ name: 'Launch ' + label, lon: s.dot_4326[0], lat: s.dot_4326[1] });
+    }
+  });
+  return out.length ? out : null;
+}
+
+/** Launch-site centroids as ordered "lat,lon" strings for a Maps directions URL. */
+export function launchSiteNavPoints(selectedPaths) {
+  var pts = launchSitePoints(selectedPaths);
+  return pts ? pts.map(function (p) { return p.lat + ',' + p.lon; }) : null;
+}
+
 /** Remove all launch-site layers and detach map handlers (call on map-view exit). */
 export function clearLaunchSites(map) {
   var m = map || _map;

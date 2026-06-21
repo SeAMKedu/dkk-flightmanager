@@ -12,6 +12,7 @@ import { openDeleteModal, openMoveModal, openRouteRenameModal } from '../panels/
 import { getMvMode, getMvSelected, getMvCurrentFolder,
          mvMerge, mvBulkMove, mvBulkDelete, mvClearSel, mvReload } from '../map/map-view.js';
 import { setForecastBarPdf } from '../forecast/forecast-bar.js';
+import { launchSiteNavPoints, launchSitePoints } from '../forecast/launch-sites.js';
 
 export function bulkMove() {
   if (!_selectedJobs.size) return;
@@ -132,9 +133,16 @@ export async function exportKml() {
   if (!result) return;
   var paths = result.paths;
 
+  // At overview zoom the map collapses jobs into launch sites; export those
+  // centroids as the launch markers instead of per-job takeoffs (zoomed-in /
+  // launch layer off → per-job takeoffs, the build_jobs_kml default).
+  var body = {paths: paths};
+  var launchPts = launchSitePoints(paths);
+  if (launchPts) body.launch_points = launchPts;
+
   var r = await fetch('/api/export/kml', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({paths: paths})
+    body: JSON.stringify(body)
   });
   if (!r.ok) { showError('KML export failed (HTTP ' + r.status + ')'); return; }
   var kmlText = await r.text();
@@ -156,11 +164,18 @@ export async function openGoogleMaps() {
   if (!result) return;
   var jobs = result.jobs;
 
-  var navPoints = [];
-  jobs.forEach(function(job) {
-    var tp = job.params.takeoff_point_4326;
-    if (tp) navPoints.push(tp[1] + ',' + tp[0]);
-  });
+  // At overview zoom the map collapses jobs into launch sites (one parking spot
+  // per consecutive-flight-order group); navigate to those centroids so the
+  // route matches what's drawn and more jobs fit under Google's ~10-stop cap.
+  // Zoomed into per-job detail (or launch-site layer off) → per-job takeoffs.
+  var navPoints = launchSiteNavPoints(result.paths);
+  if (!navPoints) {
+    navPoints = [];
+    jobs.forEach(function(job) {
+      var tp = job.params.takeoff_point_4326;
+      if (tp) navPoints.push(tp[1] + ',' + tp[0]);
+    });
+  }
 
   if (navPoints.length === 1) {
     window.open('https://www.google.com/maps/search/?api=1&query=' + navPoints[0], '_blank');

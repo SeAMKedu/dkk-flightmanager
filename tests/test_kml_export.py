@@ -75,3 +75,24 @@ class TestBuildJobsKml:
         kml = build_jobs_kml([{"job_name": "empty"}])
         assert "<Folder><name>empty</name>" in kml
         assert "<Polygon>" not in kml
+
+    def test_launch_points_pins_only_no_polygons(self):
+        # Overview-zoom export: only launch markers, no survey polygons (keeps
+        # the file small enough for Google My Maps).
+        jobs = [
+            {
+                "job_name": "field-1",
+                "custom_polygon_4326": _SQUARE,
+                "takeoff_point_4326": [25.05, 62.05],
+            }
+        ]
+        kml = build_jobs_kml(
+            jobs, launch_points=[{"name": "Launch 1", "lon": 25.06, "lat": 62.06}]
+        )
+        assert "<Folder><name>Launch sites</name>" in kml
+        assert "<name>Launch 1</name>" in kml
+        assert "<Point><coordinates>25.06,62.06,0</coordinates>" in kml
+        # No polygons and no per-job takeoff markers.
+        assert "<Polygon>" not in kml
+        assert "<Folder><name>field-1</name>" not in kml
+        assert "25.05,62.05,0" not in kml
