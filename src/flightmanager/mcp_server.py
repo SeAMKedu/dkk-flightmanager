@@ -689,6 +689,80 @@ def delete_job(path: str) -> str:
     return json.dumps({"ok": True, "deleted": path})
 
 
+def _reexport_stored_job(  # noqa: C901
+    path: str,
+    *,
+    drone: str | None = None,
+    height_m: float | None = None,
+    subcategory: str | None = None,
+    offset_m: float | None = None,
+    keepout: bool | None = None,
+    simplify: str | None = None,
+):
+    """Recompute one on-disk job from its stored params. Caller holds the guard.
+
+    Returns ``(manifest, job_dir, folder, name, stored_params)``. Stored flight
+    and polygon settings are used as defaults; any explicit override replaces
+    them. Raises :class:`ValueError` when the job cannot be recomputed (no
+    params, or no IDs/polygon to derive geometry from). Shared by
+    ``export_existing_job`` and ``refresh_jobs`` so the config-building lives
+    in one place.
+    """
+    from flightmanager.pipeline import export_job
+    from flightmanager.storage.job_store import resolve_job_dir
+
+    folder, name, job_dir = resolve_job_dir(_output_dir(), path)
+    if not job_dir.exists():
+        raise ValueError(f"Job not found: {path}")
+
+    params_path = job_dir / "job_params.json"
+    if not params_path.exists():
+        raise ValueError(f"No job_params.json found for {path} — cannot re-export.")
+    try:
+        stored = json.loads(params_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise ValueError(f"Could not read job_params.json: {e}")
+
+    inputs = stored.get("inputs", {})
+    parcel_ids = inputs.get("parcel_ids") or None
+    property_ids = inputs.get("property_ids") or None
+    custom_polygon = stored.get("custom_polygon_4326")
+    if not parcel_ids and not property_ids and not custom_polygon:
+        raise ValueError("Stored job has no parcel IDs or polygon — cannot re-export.")
+
+    stored_flight = stored.get("flight", {})
+    stored_poly = stored.get("polygon", {})
+    stored_ts = stored.get("template_settings") or {}
+
+    cfg = _prepare_config(
+        drone=drone or stored_flight.get("drone"),
+        height_m=height_m if height_m is not None else stored_flight.get("height_m"),
+        subcategory=subcategory or stored_flight.get("subcategory"),
+        offset_m=offset_m if offset_m is not None else stored_poly.get("offset_m"),
+        simplify=simplify or stored_poly.get("simplify"),
+        keepout=keepout if keepout is not None else stored_poly.get("keepout", True),
+    )
+
+    # Apply stored template settings (overlap, safety, advanced mode)
+    if stored_ts:
+        from flightmanager.web.routers.execution import _apply_template_settings
+
+        _apply_template_settings(cfg, stored_ts)
+
+    cfg.output.output_dir = (
+        str(_output_dir() / folder) if folder else str(_output_dir())
+    )
+
+    manifest, _route_geojson = export_job(
+        name,
+        cfg,
+        parcel_ids=parcel_ids,
+        property_ids=property_ids,
+        custom_polygon_4326=custom_polygon,
+    )
+    return manifest, job_dir, folder, name, stored
+
+
 @mcp.tool()
 def export_existing_job(  # noqa: C901
     path: str,
@@ -721,67 +795,19 @@ def export_existing_job(  # noqa: C901
 
     Returns job path, output files, flight status, and key stats.
     """
-    from flightmanager.pipeline import export_job
-    from flightmanager.storage.job_store import resolve_job_dir
-
-    folder, name, job_dir = resolve_job_dir(_output_dir(), path)
-    if not job_dir.exists():
-        return json.dumps({"error": f"Job not found: {path}"})
-
-    params_path = job_dir / "job_params.json"
-    if not params_path.exists():
-        return json.dumps(
-            {"error": f"No job_params.json found for {path} — cannot re-export."}
-        )
-
-    try:
-        stored = json.loads(params_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        return json.dumps({"error": f"Could not read job_params.json: {e}"})
-
-    inputs = stored.get("inputs", {})
-    parcel_ids = inputs.get("parcel_ids") or None
-    property_ids = inputs.get("property_ids") or None
-    custom_polygon = stored.get("custom_polygon_4326")
-
-    if not parcel_ids and not property_ids and not custom_polygon:
-        return json.dumps(
-            {"error": "Stored job has no parcel IDs or polygon — cannot re-export."}
-        )
-
-    stored_flight = stored.get("flight", {})
-    stored_poly = stored.get("polygon", {})
-    stored_ts = stored.get("template_settings") or {}
-
-    cfg = _prepare_config(
-        drone=drone or stored_flight.get("drone"),
-        height_m=height_m if height_m is not None else stored_flight.get("height_m"),
-        subcategory=subcategory or stored_flight.get("subcategory"),
-        offset_m=offset_m if offset_m is not None else stored_poly.get("offset_m"),
-        simplify=simplify or stored_poly.get("simplify"),
-        keepout=keepout if keepout is not None else stored_poly.get("keepout", True),
-    )
-
-    # Apply stored template settings (overlap, safety, advanced mode)
-    if stored_ts:
-        from flightmanager.web.routers.execution import _apply_template_settings
-
-        _apply_template_settings(cfg, stored_ts)
-
-    if folder:
-        cfg.output.output_dir = str(_output_dir() / folder)
-    else:
-        cfg.output.output_dir = str(_output_dir())
-
     try:
         with _pipeline_guard():
-            manifest, _route_geojson = export_job(
-                name,
-                cfg,
-                parcel_ids=parcel_ids,
-                property_ids=property_ids,
-                custom_polygon_4326=custom_polygon,
+            manifest, job_dir, _folder, _name, stored = _reexport_stored_job(
+                path,
+                drone=drone,
+                height_m=height_m,
+                subcategory=subcategory,
+                offset_m=offset_m,
+                keepout=keepout,
+                simplify=simplify,
             )
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
     except RuntimeError as e:
         return json.dumps({"error": str(e)})
     except Exception as e:
@@ -830,6 +856,425 @@ def export_existing_job(  # noqa: C901
         },
         ensure_ascii=False,
         indent=2,
+    )
+
+
+@mcp.tool()
+def scan_stale(folder: str | None = None) -> str:
+    """List exported jobs that should be recomputed (no recompute performed).
+
+    A job is stale when its recorded pipeline_version is older than the running
+    code, or the local tile cache holds newer source data than the job used.
+    Skips untouched batch skeletons (nothing built yet). Pass the returned paths
+    to refresh_jobs to bring them current.
+
+    Args:
+        folder: Limit to this folder. None = all jobs.
+
+    Returns the current pipeline_version and a list of stale jobs with reasons.
+    """
+    from flightmanager.storage.job_store import (
+        refresh_status,
+        resolve_job_dir,
+        scan_jobs,
+    )
+    from flightmanager.storage.manifest import PIPELINE_VERSION
+
+    cfg = _config()
+    output_dir = _output_dir()
+    stale: list[dict] = []
+    for group in scan_jobs(output_dir):
+        if folder is not None and group["name"] != folder:
+            continue
+        for card in group["jobs"]:
+            if card.get("untouched"):
+                continue
+            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
+            manifest_path = job_dir / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            status = refresh_status(manifest, cfg.cache, PIPELINE_VERSION)
+            if status["needs_refresh"]:
+                stale.append(
+                    {
+                        "path": card["path"],
+                        "name": card["name"],
+                        "folder": card["folder"],
+                        "reasons": status["reasons"],
+                        "missing_tiles": status["missing_tiles"],
+                    }
+                )
+    return json.dumps(
+        {"pipeline_version": PIPELINE_VERSION, "stale_count": len(stale), "stale": stale},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def refresh_jobs(paths: list[str]) -> str:
+    """Recompute jobs in place with the current pipeline (recompute-only).
+
+    Re-runs the export from each job's stored params (cache-first), keeping the
+    edited/ID-derived geometry, and rewrites KMZ/DSM/manifest/job_params. Use
+    scan_stale first to find which jobs need it.
+
+    Args:
+        paths: Job paths to recompute.
+
+    Returns a per-job result with before/after flight_ready & needs_review flags
+    and any status flips. Untouched skeletons and unrecomputable jobs are skipped.
+    """
+    from flightmanager.storage.job_store import load_params, resolve_job_dir
+
+    if not paths:
+        return json.dumps({"refreshed": 0, "results": []})
+
+    def _flags(m: dict) -> dict:
+        return {
+            "flight_ready": m.get("flight_ready", False),
+            "needs_review": m.get("needs_review", False),
+        }
+
+    results: list[dict] = []
+    try:
+        with _pipeline_guard():
+            for path in paths:
+                _, _, job_dir = resolve_job_dir(_output_dir(), path)
+                params = load_params(job_dir) if job_dir.is_dir() else None
+                if params is None or params.get("batch_created"):
+                    results.append(
+                        {
+                            "path": path,
+                            "status": "skipped",
+                            "reason": "no exported job to recompute",
+                        }
+                    )
+                    continue
+                before: dict = {}
+                manifest_path = job_dir / "manifest.json"
+                if manifest_path.exists():
+                    try:
+                        before = _flags(
+                            json.loads(manifest_path.read_text(encoding="utf-8"))
+                        )
+                    except Exception:
+                        before = {}
+                try:
+                    manifest, *_ = _reexport_stored_job(path)
+                except ValueError as e:
+                    results.append(
+                        {"path": path, "status": "skipped", "reason": str(e)}
+                    )
+                    continue
+                after = _flags(manifest)
+                flips = [
+                    f"{k}: {before.get(k)} -> {after.get(k)}"
+                    for k in ("flight_ready", "needs_review")
+                    if before.get(k) != after.get(k)
+                ]
+                results.append(
+                    {
+                        "path": path,
+                        "status": "ok",
+                        "before": before,
+                        "after": after,
+                        "flips": flips,
+                    }
+                )
+    except RuntimeError as e:
+        return json.dumps({"error": str(e)})
+
+    ok = sum(1 for r in results if r["status"] == "ok")
+    return json.dumps(
+        {"refreshed": ok, "results": results}, ensure_ascii=False, indent=2
+    )
+
+
+@mcp.tool()
+def rename_job(path: str, new_name: str) -> str:
+    """Rename a single job (directory + name-prefixed files), keeping its folder.
+
+    Args:
+        path: Job path as 'name' or 'folder/name'.
+        new_name: New job name (no slashes).
+
+    Returns the new path on success.
+    """
+    from flightmanager.storage.job_store import (
+        JobRenameError,
+        rename_job_dir,
+        resolve_job_dir,
+        safe_path_segment,
+    )
+
+    folder, name, job_dir = resolve_job_dir(_output_dir(), path)
+    if not job_dir.is_dir():
+        return json.dumps({"error": f"Job not found: {path}"})
+    try:
+        safe_path_segment(new_name)
+    except Exception:
+        return json.dumps({"error": "Invalid job name."})
+    if new_name == name:
+        return json.dumps({"ok": True, "path": path, "name": name})
+    try:
+        info = rename_job_dir(job_dir, name, new_name, folder)
+    except JobRenameError as e:
+        return json.dumps({"error": str(e)})
+    info["ok"] = True
+    return json.dumps(info, ensure_ascii=False)
+
+
+@mcp.tool()
+def move_job(path: str, folder: str | None = None) -> str:
+    """Move a job to a different folder (or to root when folder is null).
+
+    The source folder is removed if it becomes empty. Fails if a job of the same
+    name already exists in the destination.
+
+    Args:
+        path: Job path as 'name' or 'folder/name'.
+        folder: Destination folder name, or null/empty for root.
+
+    Returns the new path on success.
+    """
+    import shutil
+
+    from flightmanager.storage.job_store import resolve_folder_dir, resolve_job_dir
+
+    src_folder, name, src_dir = resolve_job_dir(_output_dir(), path)
+    if not src_dir.is_dir():
+        return json.dumps({"error": f"Job not found: {path}"})
+    to_folder = folder or None
+    if to_folder == src_folder:
+        return json.dumps({"ok": True, "path": path, "folder": src_folder})
+    if to_folder:
+        dest_parent = resolve_folder_dir(_output_dir(), to_folder)
+        dest_parent.mkdir(parents=True, exist_ok=True)
+        marker = dest_parent / ".dkk-folder"
+        if not marker.exists():
+            marker.write_text("", encoding="utf-8")
+    else:
+        dest_parent = _output_dir()
+    dest_dir = dest_parent / name
+    if dest_dir.exists():
+        return json.dumps(
+            {"error": f"A job named '{name}' already exists in the target location."}
+        )
+    src_dir.rename(dest_dir)
+    if src_folder:
+        src_parent = _output_dir() / src_folder
+        if src_parent.is_dir():
+            remaining = [d for d in src_parent.iterdir() if not d.name.startswith(".")]
+            if not remaining:
+                shutil.rmtree(src_parent)
+    new_path = f"{to_folder}/{name}" if to_folder else name
+    return json.dumps({"ok": True, "path": new_path, "folder": to_folder})
+
+
+@mcp.tool()
+def clone_job(path: str) -> str:
+    """Clone a job into the same folder (params + thumbnail, no KMZ/DSM).
+
+    The clone is named '<name>-copy' (deduplicated). Re-export it to build outputs.
+
+    Args:
+        path: Job path as 'name' or 'folder/name'.
+
+    Returns the new clone path.
+    """
+    import shutil
+
+    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+
+    folder, name, src_dir = resolve_job_dir(_output_dir(), path)
+    if not src_dir.is_dir():
+        return json.dumps({"error": f"Job not found: {path}"})
+    params = load_params(src_dir)
+    if params is None:
+        return json.dumps({"error": f"Job '{path}' has no job_params.json to clone."})
+
+    parent = src_dir.parent
+    base = f"{name}-copy"
+    clone_name = base
+    counter = 2
+    while (parent / clone_name).exists():
+        clone_name = f"{base}{counter}"
+        counter += 1
+    clone_dir = parent / clone_name
+    clone_dir.mkdir(parents=True, exist_ok=True)
+    params["job_name"] = clone_name
+    params["saved_at"] = datetime.now(timezone.utc).isoformat()
+    save_params(clone_dir, params)
+    thumb = src_dir / "thumbnail.svg"
+    if thumb.exists():
+        shutil.copy2(thumb, clone_dir / "thumbnail.svg")
+
+    clone_path = f"{folder}/{clone_name}" if folder else clone_name
+    return json.dumps({"ok": True, "path": clone_path, "name": clone_name})
+
+
+@mcp.tool()
+def set_job_color(path: str, color: str | None) -> str:
+    """Set a job's map-display color.
+
+    Args:
+        path: Job path as 'name' or 'folder/name'.
+        color: Hex color (e.g. '#3b82f6'), or null to reset to default.
+
+    Returns ok on success.
+    """
+    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+
+    _, _, job_dir = resolve_job_dir(_output_dir(), path)
+    params = load_params(job_dir) if job_dir.is_dir() else None
+    if params is None:
+        return json.dumps({"error": f"Job not found: {path}"})
+    params["color"] = color or None
+    save_params(job_dir, params)
+    return json.dumps({"ok": True, "path": path, "color": color or None})
+
+
+@mcp.tool()
+def set_job_skipped(path: str, skipped: bool) -> str:
+    """Mark a job as skipped (excluded from route flights) or active.
+
+    Args:
+        path: Job path as 'name' or 'folder/name'.
+        skipped: True to skip the job, False to include it.
+
+    Returns ok on success.
+    """
+    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+
+    _, _, job_dir = resolve_job_dir(_output_dir(), path)
+    params = load_params(job_dir) if job_dir.is_dir() else None
+    if params is None:
+        return json.dumps({"error": f"Job not found: {path}"})
+    params["skipped"] = bool(skipped)
+    save_params(job_dir, params)
+    return json.dumps({"ok": True, "path": path, "skipped": bool(skipped)})
+
+
+@mcp.tool()
+def flight_forecast(folder: str | None = None, paths: list[str] | None = None) -> str:
+    """Satellite-overpass + weather day-slots to plan when to fly.
+
+    Resolves job centroids (a folder's jobs and/or an explicit path list; root
+    jobs otherwise) and returns a per-day forecast: golden (drone-flyable +
+    clear-sky pass) flag, daytime-averaged weather, and Sentinel/Landsat passes
+    with clear-sky flags. Needs network (weather + orbital elements).
+
+    Args:
+        folder: Limit to this folder's jobs.
+        paths: Explicit job paths to use instead of / in addition to a folder.
+
+    Returns the forecast dict, or an error if no centroids resolve.
+    """
+    from shapely.geometry import shape
+
+    from flightmanager.forecasting.forecast import build_forecast
+    from flightmanager.storage.job_store import (
+        best_polygon,
+        resolve_folder_dir,
+        resolve_job_dir,
+        scan_jobs,
+    )
+
+    cfg = _config()
+    output_dir = _output_dir()
+    if paths:
+        job_dirs = [resolve_job_dir(output_dir, p)[2] for p in paths]
+    else:
+        job_dirs = []
+        for group in scan_jobs(output_dir):
+            if folder is not None and group["name"] != folder:
+                continue
+            for card in group["jobs"]:
+                job_dirs.append(resolve_job_dir(output_dir, card["path"])[2])
+
+    centroids: list[tuple[float, float]] = []
+    for jd in job_dirs:
+        geom = best_polygon(jd)
+        if geom:
+            c = shape(geom).centroid
+            centroids.append((c.y, c.x))
+    if not centroids:
+        return json.dumps({"error": "No jobs with geometry found for forecast."})
+
+    folder_dir = resolve_folder_dir(output_dir, folder)
+    try:
+        result = build_forecast(
+            centroids,
+            cfg.satellites,
+            cfg.weather,
+            cfg.cache.cache_dir,
+            folder_dir=folder_dir,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"Forecast failed: {e}"})
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def generate_report(
+    paths: list[str],
+    out_path: str | None = None,
+    basemap: str = "mml",
+    include_job_cards: bool = True,
+) -> str:
+    """Render a PDF flight card (one job) or mission packet (several) to disk.
+
+    One path → a one-page card; multiple paths → a mission packet (cover +
+    overview + per-launch-site pages + member cards).
+
+    Args:
+        paths: Job paths to include.
+        out_path: Destination PDF path. Defaults to '<output_dir>/dkk-report.pdf'.
+        basemap: 'mml' (orthophoto) or 'osm'.
+        include_job_cards: Include per-job detail cards in a packet.
+
+    Returns the written file path and size.
+    """
+    from flightmanager.reporting import report
+    from flightmanager.web.routers.management import _load_job_entry
+
+    if not paths:
+        return json.dumps({"error": "paths list is empty."})
+
+    cfg = _config()
+    output_dir = _output_dir()
+    entries = [e for p in paths if (e := _load_job_entry(output_dir, p))]
+    if not entries:
+        return json.dumps({"error": "No matching jobs found."})
+
+    try:
+        if len(entries) > 1:
+            pdf = report.render_packet(
+                cfg, entries, basemap=basemap, include_job_cards=include_job_cards
+            )
+            default_name = "dkk-report.pdf"
+        else:
+            e = entries[0]
+            pdf = report.render_job_report(
+                cfg, e["params"], e["manifest"], basemap=basemap
+            )
+            default_name = f"{e['params'].get('job_name') or 'job'}.pdf"
+    except Exception as e:
+        return json.dumps({"error": f"Report failed: {e}"})
+
+    dest = Path(out_path).expanduser() if out_path else (output_dir / default_name)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(pdf)
+    except OSError as e:
+        return json.dumps({"error": f"Could not write PDF: {e}"})
+    return json.dumps(
+        {"ok": True, "path": str(dest), "size_kb": len(pdf) // 1024, "jobs": len(entries)}
     )
 
 
