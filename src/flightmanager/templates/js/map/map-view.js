@@ -165,6 +165,18 @@ export async function _mvRefreshRouteData() {
   } catch(e) { console.error('[mv-refresh-route]', e); }
 }
 
+// Re-fetch features and rebuild the per-job layers for the current folder,
+// keeping the current view (no re-fit). Call after an in-place mutation that
+// changes job *paths* (route rename, reorder): otherwise _mvLayers keeps the
+// old paths and selection silently no-ops (_mvToggleSel can't find the layer)
+// until a full page refresh.
+export async function mvReload() {
+  if (!_mvMode) return;
+  _mvSelected.clear();
+  await _mvLoad(_mvCurrentFolder, true);   // skipFit → preserve the current view
+  _mvUpdateSelBar();
+}
+
 function _mvApplyFilter(folderFilter, skipFit) {
   _mvClearLayers();
   var bounds = [];

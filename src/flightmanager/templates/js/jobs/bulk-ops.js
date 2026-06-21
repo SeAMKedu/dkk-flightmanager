@@ -10,7 +10,7 @@ import { closeCardMenu } from './card-menu.js';
 import { openDeleteModal, openMoveModal, openRouteRenameModal } from '../panels/modal-utils.js';
 // Circular — only called at runtime:
 import { getMvMode, getMvSelected, getMvCurrentFolder,
-         mvMerge, mvBulkMove, mvBulkDelete, mvClearSel } from '../map/map-view.js';
+         mvMerge, mvBulkMove, mvBulkDelete, mvClearSel, mvReload } from '../map/map-view.js';
 import { setForecastBarPdf } from '../forecast/forecast-bar.js';
 
 export function bulkMove() {
@@ -195,6 +195,9 @@ async function _doRouteRename(jobs) {
   }
   clearSelection();
   await loadJobsList();
+  // Rename changed job paths; in map mode the layer cache (_mvLayers) still
+  // holds the old paths, so rebuild it or folder select-all silently no-ops.
+  if (getMvMode()) await mvReload();
 }
 
 export function exportRoute() {
