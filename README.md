@@ -475,13 +475,17 @@ Use the full absolute path to the `.venv` binary so Claude Desktop finds the rig
 | `jobs://{path}` | Raw params + manifest for one job |
 | `config://current` | Active drone, GSD, flight and safety settings |
 | `drones://list` | All drone profiles with GSD at 50/80/100 m |
+| `launch_sites` | Cluster a folder's route jobs into physical launch sites (drone parking spots) in flight order: Flyk operating-area centre/radius, total flight time, max altitude, and member jobs per site |
 
 **Write (pipeline operations):**
 
 | Tool | Description |
 |---|---|
 | `create_folder` | Create a named job group folder |
+| `rename_folder` | Rename a group folder (route); a single directory rename, jobs follow automatically |
 | `delete_job` | Delete a job and all its output files; auto-removes empty parent folder |
+| `reorder_route` | Set the flight order of jobs within one folder (assigns `sort_order`); reshapes launch-site clustering |
+| `route_rename` | Rename an ordered list of route jobs to `YYYYMMDD-NN-base` flight-order names; idempotent prefix strip, collision-safe two-phase rename |
 | `create_preview` | Run geometry + UAS zone check without writing files (~10–30 s) |
 | `create_batch` | Create skeleton jobs from parcel/property IDs (no KMZ) |
 | `export_existing_job` | Export a job that already exists on disk — reads stored polygon and params from `job_params.json`, no need to re-supply IDs (~30–120 s) |
@@ -500,6 +504,8 @@ Create batch jobs for parcel IDs 5241087453, 5241087454, 5241087455 in folder Se
 Export all untouched jobs in folder Seinäjoki
 What drone should I use for a 12 ha field at 3 cm GSD?
 Run a preview for parcel 5241087453 and tell me if there are any zone issues
+Order the jobs in folder Seinäjoki by takeoff proximity, then rename them in flight order
+How many launch sites does folder Vaasa-2026 cluster into, and what's each one's radius?
 Delete all jobs in folder test
 ```
 

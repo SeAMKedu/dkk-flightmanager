@@ -30,6 +30,9 @@ mcp = FastMCP(
         "create_preview to check geometry and UAS zones before committing, "
         "create_batch to create skeleton jobs from parcel/property IDs, "
         "and run_export to run the full pipeline (KMZ + DSM). "
+        "To organize a flight route: reorder_route sets the flight sequence, "
+        "route_rename stamps YYYYMMDD-NN- flight-order names, rename_folder names "
+        "the route, and launch_sites reports the resulting drone parking spots. "
         "Parcel IDs (peruslohkotunnus) are 10-digit numbers. "
         "Property IDs (kiinteistötunnus) look like '214-407-3-22'."
     ),
@@ -430,6 +433,213 @@ def job_stats(folder: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 # Tools — write operations
 # ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def launch_sites(folder: str | None = None) -> str:
+    """Cluster route jobs into physical launch sites (drone parking spots).
+
+    Walks the jobs in flight order and groups consecutive takeoffs that fall
+    within ~50 m of the running takeoff centroid. Each site reports the Flyk
+    operating-area centre/radius (smallest enclosing circle over member
+    polygons + takeoffs), total flight time, max altitude, and members.
+
+    Args:
+        folder: Limit to this folder. None = root-level jobs.
+
+    Returns JSON list of launch sites, or an error if shapely clustering fails.
+    """
+    from flightmanager.forecasting.launch_sites import cluster_jobs
+    from flightmanager.storage.job_store import scan_jobs
+
+    groups = scan_jobs(_output_dir(), with_polygon=True)
+    cards: list[dict] = []
+    for group in groups:
+        if folder is None:
+            if group["name"] is None:
+                cards.extend(group["jobs"])
+        elif group["name"] == folder:
+            cards.extend(group["jobs"])
+
+    try:
+        sites = cluster_jobs(cards)
+    except Exception as e:
+        return json.dumps({"error": f"Clustering failed: {e}"})
+
+    out = [s.to_dict() for s in sites]
+    return json.dumps(
+        {"folder": folder, "site_count": len(out), "sites": out},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def reorder_route(paths: list[str]) -> str:
+    """Set the flight order of jobs within one folder.
+
+    Assigns sort_order 0..n-1 to the supplied ordered list of job paths; any
+    sibling not in the list has its sort_order cleared. All paths must be in the
+    same folder. Reordering reshapes launch-site clustering (which walks jobs in
+    flight order) — call launch_sites afterwards to see the result.
+
+    Args:
+        paths: Ordered list of job paths ('name' or 'folder/name'), flight order.
+
+    Returns ok and the count of jobs ordered.
+    """
+    from flightmanager.storage.job_store import (
+        load_params,
+        resolve_job_dir,
+        save_params,
+    )
+
+    if not paths:
+        return json.dumps({"ok": True, "ordered": 0})
+
+    output_dir = _output_dir()
+    folder0, _, _ = resolve_job_dir(output_dir, paths[0])
+    for p in paths[1:]:
+        f, _, _ = resolve_job_dir(output_dir, p)
+        if f != folder0:
+            return json.dumps({"error": "All paths must be in the same folder."})
+
+    parent = output_dir / folder0 if folder0 else output_dir
+    ordered_set = {p: i for i, p in enumerate(paths)}
+
+    siblings = [d for d in parent.iterdir() if d.is_dir()] if parent.exists() else []
+    for job_dir in siblings:
+        data = load_params(job_dir)
+        if data is None:
+            continue
+        job_path = f"{folder0}/{job_dir.name}" if folder0 else job_dir.name
+        new_so = ordered_set.get(job_path)
+        if data.get("sort_order") != new_so:
+            data["sort_order"] = new_so
+            save_params(job_dir, data)
+
+    return json.dumps({"ok": True, "folder": folder0, "ordered": len(paths)})
+
+
+@mcp.tool()
+def route_rename(paths: list[str], date: str | None = None) -> str:  # noqa: C901
+    """Rename an ordered list of route jobs to YYYYMMDD-NN-base flight names.
+
+    Paths are taken in flight order; NN is the 1-based index (3 digits if >=100
+    jobs). Any existing route prefix is stripped first, so re-running is
+    idempotent. All paths must be in the same folder. Renaming is two-phase
+    (temp names first) so order swaps cannot collide mid-way.
+
+    Args:
+        paths: Ordered list of job paths in flight order.
+        date: 'YYYYMMDD' override; defaults to today (UTC).
+
+    Returns the per-path rename result.
+    """
+    from flightmanager.storage.job_store import (
+        JobRenameError,
+        rename_job_dir,
+        resolve_job_dir,
+        route_rename_name,
+    )
+
+    if not paths:
+        return json.dumps({"ok": True, "renamed": []})
+
+    date_str = (date or "").strip() or datetime.now(timezone.utc).strftime("%Y%m%d")
+    if not (len(date_str) == 8 and date_str.isdigit()):
+        return json.dumps({"error": "date must be 'YYYYMMDD'."})
+
+    output_dir = _output_dir()
+    folder0, _, _ = resolve_job_dir(output_dir, paths[0])
+    total = len(paths)
+    plan: list[tuple[Path, str, str]] = []
+    seen: set[str] = set()
+    for i, p in enumerate(paths, start=1):
+        folder, name, job_dir = resolve_job_dir(output_dir, p)
+        if folder != folder0:
+            return json.dumps({"error": "All paths must be in the same folder."})
+        if not job_dir.is_dir():
+            return json.dumps({"error": f"Job not found: {p}"})
+        if p in seen:
+            return json.dumps({"error": f"Duplicate path: {p}"})
+        seen.add(p)
+        plan.append((job_dir, name, route_rename_name(date_str, i, total, name)))
+
+    batch_dirs = {jd for jd, _, _ in plan}
+    for job_dir, _old, new_name in plan:
+        target = job_dir.parent / new_name
+        if target.exists() and target not in batch_dirs:
+            return json.dumps(
+                {"error": f"Target name '{new_name}' already exists in this folder."}
+            )
+
+    try:
+        staged: dict[int, tuple[Path, str, str]] = {}
+        for idx, (job_dir, old_name, new_name) in enumerate(plan):
+            if new_name == old_name:
+                continue
+            tmp_name = f"__rr_tmp_{idx}__"
+            rename_job_dir(job_dir, old_name, tmp_name, folder0)
+            staged[idx] = (job_dir.parent / tmp_name, tmp_name, new_name)
+
+        renamed: list[dict] = []
+        for idx, (orig_path, (job_dir, old_name, new_name)) in enumerate(
+            zip(paths, plan)
+        ):
+            if idx in staged:
+                tmp_dir, tmp_name, final_name = staged[idx]
+                info = rename_job_dir(tmp_dir, tmp_name, final_name, folder0)
+                info["old_path"] = orig_path
+                info["changed"] = True
+                renamed.append(info)
+            else:
+                renamed.append(
+                    {"old_path": orig_path, "path": orig_path, "changed": False}
+                )
+    except JobRenameError as e:
+        return json.dumps({"error": str(e)})
+
+    return json.dumps(
+        {"ok": True, "date": date_str, "renamed": renamed},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def rename_folder(name: str, new_name: str) -> str:
+    """Rename a group folder (route).
+
+    Folder membership is derived from the directory, so this is a single
+    directory rename; contained jobs resolve under the new name automatically.
+
+    Args:
+        name: Current folder name.
+        new_name: New folder name (no slashes; must not already exist).
+
+    Returns the new name on success.
+    """
+    from flightmanager.storage.job_store import is_folder_dir, resolve_folder_dir
+
+    if not new_name.strip() or "/" in new_name or new_name.startswith("."):
+        return json.dumps({"error": "Invalid folder name."})
+    output_dir = _output_dir()
+    src_dir = resolve_folder_dir(output_dir, name)
+    if not src_dir.is_dir():
+        return json.dumps({"error": f"Folder not found: {name}"})
+    if not is_folder_dir(src_dir):
+        return json.dumps({"error": f"'{name}' is not a group folder."})
+    if new_name == name:
+        return json.dumps({"ok": True, "name": new_name})
+    dst_dir = resolve_folder_dir(output_dir, new_name)
+    if dst_dir.exists():
+        return json.dumps({"error": f"Folder '{new_name}' already exists."})
+    try:
+        src_dir.rename(dst_dir)
+    except OSError as e:
+        return json.dumps({"error": f"Folder rename failed: {e}"})
+    return json.dumps({"ok": True, "name": new_name, "previous_name": name})
 
 
 @mcp.tool()

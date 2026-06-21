@@ -2,7 +2,7 @@
 
 import { st } from '../core/state.js';
 import { jobApiUrl } from '../core/utils.js';
-import { apiGet, apiPost, apiPatch, apiDelete } from '../core/api.js';
+import { apiGet, apiPost, apiDelete } from '../core/api.js';
 import { showError } from '../editor/form-controls.js';
 import { loadJobsList } from './jobs-panel.js';
 import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal } from './multi-select.js';
@@ -170,8 +170,6 @@ export async function openGoogleMaps() {
   }
 }
 
-var _ROUTE_PREFIX_RE = /^\d{8}-\d{2,}-/;
-
 export async function routeRename() {
   var result = await _loadSelectedJobs();
   if (!result) return;
@@ -183,24 +181,17 @@ export async function routeRename() {
 }
 
 async function _doRouteRename(jobs) {
-  var today = new Date();
-  var dd = today.getFullYear().toString()
-    + String(today.getMonth() + 1).padStart(2, '0')
-    + String(today.getDate()).padStart(2, '0');
-  var digits = jobs.length >= 100 ? 3 : 2;
-
-  for (var i = 0; i < jobs.length; i++) {
-    var job = jobs[i];
-    var baseName = (job.params.job_name || job.path.replace(/^.*\//, ''))
-      .replace(_ROUTE_PREFIX_RE, '');
-    var idx = String(i + 1).padStart(digits, '0');
-    var newName = dd + '-' + idx + '-' + baseName;
-    if (newName === baseName) continue;
-    try {
-      var data = await apiPatch(jobApiUrl(job.path), {new_name: newName});
-      if (st._activeJob === job.path) { st._activeJob = data.path; }
-      job.path = data.path;
-    } catch(err) { showError('Rename failed for ' + baseName + ': ' + (err.detail || err.message)); }
+  // Naming convention (YYYYMMDD-NN- prefix, idempotent strip) lives server-side
+  // in POST /api/jobs/route_rename so the UI and MCP share one implementation.
+  var paths = jobs.map(function(j) { return j.path; });
+  var activeIdx = jobs.findIndex(function(j) { return st._activeJob === j.path; });
+  try {
+    var data = await apiPost('/api/jobs/route_rename', {paths: paths});
+    if (activeIdx >= 0 && data.renamed && data.renamed[activeIdx]) {
+      st._activeJob = data.renamed[activeIdx].path;
+    }
+  } catch(err) {
+    showError('Route rename failed: ' + (err.detail || err.message));
   }
   clearSelection();
   await loadJobsList();

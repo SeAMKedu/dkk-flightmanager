@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -238,6 +239,85 @@ class UnsafePathError(ValueError):
     """
 
 
+class JobRenameError(Exception):
+    """A job rename could not complete. ``status`` maps to an HTTP code."""
+
+    def __init__(self, message: str, status: int = 500):
+        super().__init__(message)
+        self.status = status
+
+
+def rename_job_dir(  # noqa: C901
+    job_dir: Path, old_name: str, new_name: str, folder: str | None
+) -> dict:
+    """Rename a job directory and all name-prefixed files inside it (pure I/O).
+
+    File renames are applied first with rollback, then manifest/params
+    ``job_name`` is updated, then the directory itself is renamed (rolling the
+    file renames back on failure). Returns ``{path, name, folder}``. Raises
+    :class:`JobRenameError` on conflict (409) or OS failure (500).
+
+    Shared by the web route (``_rename_job``) and the MCP route-rename tool so
+    the rename mechanics live in one place.
+    """
+    new_dir = job_dir.parent / new_name
+    if new_dir.exists():
+        raise JobRenameError(
+            f"Job '{new_name}' already exists in this location", status=409
+        )
+
+    renames: list[tuple[Path, Path]] = []
+    for f in job_dir.iterdir():
+        if f.name.startswith(f"{old_name}.") or f.name.startswith(f"{old_name}_"):
+            suffix = f.name[len(old_name) :]
+            renames.append((f, job_dir / f"{new_name}{suffix}"))
+
+    done: list[tuple[Path, Path]] = []
+    try:
+        for src, dst in renames:
+            src.rename(dst)
+            done.append((src, dst))
+    except OSError as exc:
+        for src, dst in reversed(done):
+            try:
+                dst.rename(src)
+            except OSError:
+                pass
+        raise JobRenameError(f"Rename failed mid-way, rolled back: {exc}")
+
+    manifest_file = job_dir / "manifest.json"
+    if manifest_file.exists():
+        try:
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            if "job_name" in data:
+                data["job_name"] = new_name
+            manifest_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+    params = load_params(job_dir)
+    if params is not None:
+        try:
+            params["job_name"] = new_name
+            save_params(job_dir, params)
+        except Exception:
+            pass
+
+    try:
+        job_dir.rename(new_dir)
+    except OSError as exc:
+        for src, dst in reversed(done):
+            try:
+                dst.rename(src)
+            except OSError:
+                pass
+        raise JobRenameError(f"Directory rename failed, rolled back: {exc}")
+
+    new_path = f"{folder}/{new_name}" if folder else new_name
+    return {"path": new_path, "name": new_name, "folder": folder}
+
+
 def safe_path_segment(seg: str) -> str:
     """Validate one untrusted path segment (a folder or job name).
 
@@ -248,6 +328,27 @@ def safe_path_segment(seg: str) -> str:
     if not seg or seg in (".", "..") or "/" in seg or "\\" in seg or "\x00" in seg:
         raise UnsafePathError(f"unsafe path segment: {seg!r}")
     return seg
+
+
+# A route-rename prefix is ``YYYYMMDD-NN-`` (2+ index digits). Mirrors the old
+# client-side regex in bulk-ops.js so the convention now lives server-side.
+_ROUTE_PREFIX_RE = re.compile(r"^\d{8}-\d{2,}-")
+
+
+def strip_route_prefix(name: str) -> str:
+    """Remove an existing ``YYYYMMDD-NN-`` route prefix so renames are idempotent."""
+    return _ROUTE_PREFIX_RE.sub("", name)
+
+
+def route_rename_name(date_str: str, index: int, total: int, original_name: str) -> str:
+    """Build the flight-order name ``YYYYMMDD-NN-base`` for one job.
+
+    *index* is 1-based; the index is zero-padded to 3 digits when *total* >= 100,
+    else 2. Any existing route prefix on *original_name* is stripped first.
+    """
+    base = strip_route_prefix(original_name)
+    digits = 3 if total >= 100 else 2
+    return f"{date_str}-{str(index).zfill(digits)}-{base}"
 
 
 def _require_within(base: Path, target: Path) -> None:

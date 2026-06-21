@@ -1,164 +1,216 @@
-"""
-Tests for the client-side route-rename logic (bulk-ops.js: routeRename).
+"""Tests for the route-rename + folder-rename backend features.
 
-The JS uses:
-    _ROUTE_PREFIX_RE = /^\\d{8}-\\d{2,}-/
-    newName = dd + '-' + idx + '-' + baseName
-
-We mirror that here so regressions are caught without a JS runtime.
+The naming convention (``YYYYMMDD-NN-base`` prefix, idempotent strip) now lives
+server-side in ``job_store`` and is exercised end-to-end through the
+``POST /api/jobs/route_rename`` and ``POST /api/folders/{name}/rename`` routes.
 """
 
-import re
+from __future__ import annotations
 
-# Mirror of JS _ROUTE_PREFIX_RE
-_ROUTE_PREFIX_RE = re.compile(r"^\d{8}-\d{2,}-")  # mirrors JS: /^\d{8}-\d{2,}-/
+import json
 
+from fastapi.testclient import TestClient
 
-def strip_prefix(name: str) -> str:
-    return _ROUTE_PREFIX_RE.sub("", name)
-
-
-def is_routed(params: dict) -> bool:
-    """Mirror of the skeleton-job filter in routeRename().
-
-    JS: j.params.sort_order != null || j.params.takeoff_point_4326 != null
-    Skeleton jobs have neither and are excluded from the rename sequence.
-    """
-    return (
-        params.get("sort_order") is not None
-        or params.get("takeoff_point_4326") is not None
-    )
+from flightmanager.config import load_config
+from flightmanager.storage.job_store import (
+    route_rename_name,
+    save_params,
+    strip_route_prefix,
+)
+from flightmanager.web.server import create_app
 
 
-def route_name(date_str: str, index: int, total: int, original_name: str) -> str:
-    """Equivalent of the new-name construction in routeRename()."""
-    base = strip_prefix(original_name)
-    digits = 3 if total >= 100 else 2
-    idx = str(index).zfill(digits)
-    return f"{date_str}-{idx}-{base}"
+def _client(tmp_path):
+    cfg = load_config("config.example.toml")
+    cfg.output.output_dir = str(tmp_path)
+    return TestClient(create_app(cfg))
 
 
-# ── strip_prefix ──────────────────────────────────────────────────────────────
+def _make_job(output_dir, folder, name, **params):
+    """Create a job dir with a job_params.json and return its 'folder/name' path."""
+    if folder:
+        fdir = output_dir / folder
+        fdir.mkdir(parents=True, exist_ok=True)
+        (fdir / ".dkk-folder").write_text("", encoding="utf-8")
+        job_dir = fdir / name
+    else:
+        job_dir = output_dir / name
+    job_dir.mkdir(parents=True, exist_ok=True)
+    doc = {"job_name": name}
+    doc.update(params)
+    save_params(job_dir, doc)
+    return f"{folder}/{name}" if folder else name
+
+
+# ── strip_route_prefix (shared pure helper) ───────────────────────────────────
 
 
 class TestStripPrefix:
     def test_strips_two_digit_index(self):
-        assert strip_prefix("20260608-01-myfarm") == "myfarm"
-
-    def test_strips_two_digit_index_high(self):
-        assert strip_prefix("20260608-99-fieldA") == "fieldA"
+        assert strip_route_prefix("20260608-01-myfarm") == "myfarm"
 
     def test_strips_three_digit_index(self):
-        assert strip_prefix("20260608-001-bigfield") == "bigfield"
-
-    def test_strips_three_digit_index_high(self):
-        assert strip_prefix("20260608-123-parcel") == "parcel"
+        assert strip_route_prefix("20260608-001-bigfield") == "bigfield"
 
     def test_does_not_strip_one_digit_index(self):
-        # single digit is not matched by \d{2,}
-        assert strip_prefix("20260608-1-name") == "20260608-1-name"
+        assert strip_route_prefix("20260608-1-name") == "20260608-1-name"
 
     def test_does_not_strip_non_date_prefix(self):
-        assert strip_prefix("job-01-name") == "job-01-name"
+        assert strip_route_prefix("job-01-name") == "job-01-name"
 
     def test_does_not_strip_short_date(self):
-        assert strip_prefix("2026060-01-name") == "2026060-01-name"
+        assert strip_route_prefix("2026060-01-name") == "2026060-01-name"
 
     def test_no_prefix_unchanged(self):
-        assert strip_prefix("plainname") == "plainname"
+        assert strip_route_prefix("plainname") == "plainname"
 
     def test_preserves_hyphens_in_base(self):
-        assert strip_prefix("20260608-03-my-field-name") == "my-field-name"
-
-    def test_different_date_stripped(self):
-        assert strip_prefix("20251231-12-oldname") == "oldname"
+        assert strip_route_prefix("20260608-03-my-field-name") == "my-field-name"
 
 
-# ── route_name ────────────────────────────────────────────────────────────────
+# ── route_rename_name (shared pure helper) ────────────────────────────────────
 
 
 class TestRouteName:
     def test_basic_two_digit(self):
-        assert route_name("20260608", 1, 5, "myfarm") == "20260608-01-myfarm"
-
-    def test_two_digit_padding(self):
-        assert route_name("20260608", 9, 10, "field") == "20260608-09-field"
+        assert route_rename_name("20260608", 1, 5, "myfarm") == "20260608-01-myfarm"
 
     def test_two_digit_boundary(self):
-        # 99 jobs → still 2-digit padding
-        assert route_name("20260608", 99, 99, "x") == "20260608-99-x"
+        assert route_rename_name("20260608", 99, 99, "x") == "20260608-99-x"
 
     def test_three_digit_at_100(self):
-        assert route_name("20260608", 1, 100, "field") == "20260608-001-field"
+        assert route_rename_name("20260608", 1, 100, "field") == "20260608-001-field"
 
-    def test_three_digit_padding(self):
-        assert route_name("20260608", 42, 150, "field") == "20260608-042-field"
-
-    def test_rerename_two_digit_replaces_prefix(self):
-        # already has a 2-digit prefix from a previous run
-        original = "20260601-03-farmA"
-        assert route_name("20260608", 1, 3, original) == "20260608-01-farmA"
-
-    def test_rerename_three_digit_replaces_prefix(self):
-        original = "20260601-042-bigfield"
-        assert route_name("20260608", 5, 10, original) == "20260608-05-bigfield"
-
-    def test_rerename_preserves_inner_hyphens(self):
-        original = "20260601-02-my-complex-name"
-        assert route_name("20260608", 2, 5, original) == "20260608-02-my-complex-name"
-
-    def test_no_existing_prefix_untouched_base(self):
-        assert route_name("20260608", 3, 5, "plainfield") == "20260608-03-plainfield"
-
-
-# ── is_routed (skeleton filter) ───────────────────────────────────────────────
-
-
-class TestIsRouted:
-    def test_sort_order_alone_is_routed(self):
-        assert is_routed({"sort_order": 1, "takeoff_point_4326": None}) is True
-
-    def test_takeoff_point_alone_is_routed(self):
-        assert (
-            is_routed({"sort_order": None, "takeoff_point_4326": [25.0, 60.0]}) is True
+    def test_rerename_replaces_prefix(self):
+        assert route_rename_name("20260608", 1, 3, "20260601-03-farmA") == (
+            "20260608-01-farmA"
         )
 
-    def test_both_present_is_routed(self):
-        assert is_routed({"sort_order": 0, "takeoff_point_4326": [25.0, 60.0]}) is True
 
-    def test_neither_is_skeleton(self):
-        assert is_routed({"sort_order": None, "takeoff_point_4326": None}) is False
+# ── POST /api/jobs/route_rename ───────────────────────────────────────────────
 
-    def test_missing_keys_is_skeleton(self):
-        # batch skeleton jobs have no keys at all
-        assert is_routed({}) is False
 
-    def test_sort_order_zero_is_routed(self):
-        # 0 is a valid sort_order — must not be treated as falsy
-        assert is_routed({"sort_order": 0}) is True
+class TestRouteRenameEndpoint:
+    def test_renames_in_flight_order(self, tmp_path):
+        a = _make_job(tmp_path, "trip", "alpha", sort_order=0)
+        b = _make_job(tmp_path, "trip", "bravo", sort_order=1)
+        c = _make_job(tmp_path, "trip", "charlie", sort_order=2)
+        with _client(tmp_path) as client:
+            r = client.post(
+                "/api/jobs/route_rename",
+                json={"paths": [a, b, c], "date": "20260608"},
+            )
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert [e["path"] for e in data["renamed"]] == [
+                "trip/20260608-01-alpha",
+                "trip/20260608-02-bravo",
+                "trip/20260608-03-charlie",
+            ]
+        assert (tmp_path / "trip" / "20260608-01-alpha").is_dir()
+        assert (tmp_path / "trip" / "20260608-03-charlie").is_dir()
+        assert not (tmp_path / "trip" / "alpha").exists()
 
-    def test_mixed_selection_only_routed_jobs_renamed(self):
-        # Simulate routeRename filtering a mixed selection.
-        jobs = [
-            {
-                "name": "field-A",
-                "params": {"sort_order": 1, "takeoff_point_4326": [25.0, 60.0]},
-            },
-            {
-                "name": "skeleton-1",
-                "params": {"sort_order": None, "takeoff_point_4326": None},
-            },
-            {
-                "name": "field-B",
-                "params": {"sort_order": 2, "takeoff_point_4326": [25.1, 60.1]},
-            },
-            {"name": "skeleton-2", "params": {}},
-        ]
-        routed = [j for j in jobs if is_routed(j["params"])]
-        assert [j["name"] for j in routed] == ["field-A", "field-B"]
-        # Index sequence is 1..n of routed jobs only
-        names = [
-            route_name("20260608", i + 1, len(routed), j["name"])
-            for i, j in enumerate(routed)
-        ]
-        assert names == ["20260608-01-field-A", "20260608-02-field-B"]
+    def test_idempotent_rerun_keeps_names_stable(self, tmp_path):
+        a = _make_job(tmp_path, "trip", "alpha", sort_order=0)
+        b = _make_job(tmp_path, "trip", "bravo", sort_order=1)
+        with _client(tmp_path) as client:
+            first = client.post(
+                "/api/jobs/route_rename",
+                json={"paths": [a, b], "date": "20260608"},
+            ).json()
+            paths = [e["path"] for e in first["renamed"]]
+            second = client.post(
+                "/api/jobs/route_rename",
+                json={"paths": paths, "date": "20260608"},
+            ).json()
+        assert [e["path"] for e in second["renamed"]] == paths
+        assert all(e["changed"] is False for e in second["renamed"])
+
+    def test_order_swap_does_not_collide(self, tmp_path):
+        # Both already carry today's date prefix and the same base, so a swap
+        # makes each job's target equal the OTHER's current name — a 409 in the
+        # old per-job loop. The two-phase temp rename must avoid it.
+        x1 = _make_job(tmp_path, "trip", "20260608-01-foo", sort_order=0, color="#aaa")
+        x2 = _make_job(tmp_path, "trip", "20260608-02-foo", sort_order=1, color="#bbb")
+        with _client(tmp_path) as client:
+            r = client.post(
+                "/api/jobs/route_rename",
+                json={"paths": [x2, x1], "date": "20260608"},
+            )
+            assert r.status_code == 200, r.text
+        # Net swap: the job that was 02 is now 01, and vice versa.
+        c1 = json.loads(
+            (tmp_path / "trip" / "20260608-01-foo" / "job_params.json").read_text()
+        )
+        c2 = json.loads(
+            (tmp_path / "trip" / "20260608-02-foo" / "job_params.json").read_text()
+        )
+        assert c1["color"] == "#bbb"
+        assert c2["color"] == "#aaa"
+
+    def test_cross_folder_paths_rejected(self, tmp_path):
+        a = _make_job(tmp_path, "trip1", "alpha", sort_order=0)
+        b = _make_job(tmp_path, "trip2", "bravo", sort_order=0)
+        with _client(tmp_path) as client:
+            r = client.post("/api/jobs/route_rename", json={"paths": [a, b]})
+            assert r.status_code == 400
+
+    def test_missing_job_404(self, tmp_path):
+        with _client(tmp_path) as client:
+            r = client.post("/api/jobs/route_rename", json={"paths": ["trip/ghost"]})
+            assert r.status_code == 404
+
+    def test_bad_date_400(self, tmp_path):
+        a = _make_job(tmp_path, "trip", "alpha", sort_order=0)
+        with _client(tmp_path) as client:
+            r = client.post(
+                "/api/jobs/route_rename", json={"paths": [a], "date": "2026-6-8"}
+            )
+            assert r.status_code == 400
+
+    def test_empty_paths_noop(self, tmp_path):
+        with _client(tmp_path) as client:
+            r = client.post("/api/jobs/route_rename", json={"paths": []})
+            assert r.status_code == 200
+            assert r.json()["renamed"] == []
+
+
+# ── POST /api/folders/{name}/rename ───────────────────────────────────────────
+
+
+class TestRenameFolderEndpoint:
+    def test_renames_folder_and_keeps_jobs(self, tmp_path):
+        _make_job(tmp_path, "alpha", "field1", sort_order=0)
+        with _client(tmp_path) as client:
+            r = client.post("/api/folders/alpha/rename", json={"new_name": "beta"})
+            assert r.status_code == 200, r.text
+            assert r.json()["name"] == "beta"
+        assert not (tmp_path / "alpha").exists()
+        assert (tmp_path / "beta" / "field1" / "job_params.json").exists()
+        assert (tmp_path / "beta" / ".dkk-folder").exists()
+
+    def test_target_exists_409(self, tmp_path):
+        _make_job(tmp_path, "alpha", "f1")
+        _make_job(tmp_path, "beta", "f2")
+        with _client(tmp_path) as client:
+            r = client.post("/api/folders/alpha/rename", json={"new_name": "beta"})
+            assert r.status_code == 409
+
+    def test_missing_folder_404(self, tmp_path):
+        with _client(tmp_path) as client:
+            r = client.post("/api/folders/ghost/rename", json={"new_name": "beta"})
+            assert r.status_code == 404
+
+    def test_invalid_new_name_400(self, tmp_path):
+        _make_job(tmp_path, "alpha", "f1")
+        with _client(tmp_path) as client:
+            r = client.post("/api/folders/alpha/rename", json={"new_name": "bad/name"})
+            assert r.status_code == 400
+
+    def test_traversal_new_name_rejected(self, tmp_path):
+        _make_job(tmp_path, "alpha", "f1")
+        with _client(tmp_path) as client:
+            r = client.post("/api/folders/alpha/rename", json={"new_name": ".."})
+            assert r.status_code == 400
+        assert (tmp_path / "alpha").exists()

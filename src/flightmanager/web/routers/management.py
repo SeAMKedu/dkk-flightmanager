@@ -21,13 +21,16 @@ from flightmanager.storage.job_store import (
     best_polygon,
     card_polygon,
     check_cache_staleness,
+    JobRenameError,
     is_folder_dir,
     load_params,
     params_from_manifest,
     read_job_card,
     refresh_status,
+    rename_job_dir,
     resolve_folder_dir,
     resolve_job_dir,
+    route_rename_name,
     safe_path_segment,
     save_params,
     scan_jobs,
@@ -562,6 +565,91 @@ async def reorder_jobs(body: dict):
     return {"ok": True}
 
 
+@router.post("/api/jobs/route_rename")
+async def route_rename(body: dict):  # noqa: C901
+    """Rename an ordered list of route jobs to ``YYYYMMDD-NN-base`` flight names.
+
+    Body: ``{paths: ["folder/a", "folder/b", ...], date?: "YYYYMMDD"}``.
+    Paths are taken in the supplied (flight) order; index ``NN`` is 1-based.
+    Any existing route prefix on a name is stripped first, so re-running is
+    idempotent. All paths must belong to the same folder.
+
+    Renaming runs in two phases (every job to a unique temp name, then to its
+    final name) so order swaps that reuse a sibling's current name cannot
+    collide mid-way — the failure mode of the old client-side per-job loop.
+    """
+    paths: list[str] = body.get("paths") or []
+    if not paths:
+        return {"ok": True, "renamed": []}
+
+    date_str: str = (body.get("date") or "").strip() or datetime.now(
+        timezone.utc
+    ).strftime("%Y%m%d")
+    if not (len(date_str) == 8 and date_str.isdigit()):
+        raise HTTPException(400, detail="date must be 'YYYYMMDD'")
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+
+    folder0, _, _ = resolve_job_dir(output_dir, paths[0])
+    total = len(paths)
+    plan: list[tuple[Path, str, str]] = []  # (job_dir, old_name, new_name)
+    seen: set[str] = set()
+    for i, p in enumerate(paths, start=1):
+        folder, name, job_dir = resolve_job_dir(output_dir, p)
+        if folder != folder0:
+            raise HTTPException(400, detail="All paths must be in the same folder")
+        if not job_dir.is_dir():
+            raise HTTPException(404, detail=f"Job '{p}' not found")
+        if p in seen:
+            raise HTTPException(400, detail=f"Duplicate path: {p}")
+        seen.add(p)
+        new_name = route_rename_name(date_str, i, total, name)
+        plan.append((job_dir, name, new_name))
+
+    # Reject a target that already exists as a sibling not part of this batch.
+    batch_dirs = {job_dir for job_dir, _, _ in plan}
+    for job_dir, _old, new_name in plan:
+        target = job_dir.parent / new_name
+        if target.exists() and target not in batch_dirs:
+            raise HTTPException(
+                409, detail=f"Target name '{new_name}' already exists in this folder"
+            )
+
+    # Phase 1 — move every changing job to a unique temp name.
+    staged: dict[int, tuple[Path, str, str]] = {}  # idx -> (tmp_dir, tmp_name, final)
+    for idx, (job_dir, old_name, new_name) in enumerate(plan):
+        if new_name == old_name:
+            continue
+        tmp_name = f"__rr_tmp_{idx}__"
+        _rename_job(job_dir, old_name, tmp_name, folder0)
+        staged[idx] = (job_dir.parent / tmp_name, tmp_name, new_name)
+
+    # Phase 2 — move each temp name to its final flight name; build a result
+    # aligned 1:1 with the input paths so callers can remap reliably.
+    renamed: list[dict] = []
+    for idx, (orig_path, (job_dir, old_name, new_name)) in enumerate(
+        zip(paths, plan)
+    ):
+        if idx in staged:
+            tmp_dir, tmp_name, final_name = staged[idx]
+            info = _rename_job(tmp_dir, tmp_name, final_name, folder0)
+            info["old_path"] = orig_path
+            info["changed"] = True
+            renamed.append(info)
+        else:
+            renamed.append(
+                {
+                    "old_path": orig_path,
+                    "path": orig_path,
+                    "name": old_name,
+                    "folder": folder0,
+                    "changed": False,
+                }
+            )
+
+    return {"ok": True, "date": date_str, "renamed": renamed}
+
+
 @router.get("/api/jobs/{path:path}")
 async def get_job(path: str):
     output_dir = Path(_st.config.output.output_dir).resolve()
@@ -590,72 +678,14 @@ async def get_job(path: str):
     return {"params": params, "cache_stale": stale, "folder": folder}
 
 
-def _rename_job(  # noqa: C901
+def _rename_job(
     job_dir: Path, old_name: str, new_name: str, folder: str | None
 ) -> dict:
-    """Rename a job directory and all name-prefixed files inside it.
-
-    Applies an atomic rename with rollback: file renames are attempted first;
-    if any fail the already-renamed files are reversed before raising.
-    The directory rename is the final step — if it fails, file renames roll back.
-    Returns the new {path, name, folder} dict.
-    """
-    new_dir = job_dir.parent / new_name
-    if new_dir.exists():
-        raise HTTPException(
-            409, detail=f"Job '{new_name}' already exists in this location"
-        )
-
-    renames: list[tuple[Path, Path]] = []
-    for f in job_dir.iterdir():
-        if f.name.startswith(f"{old_name}.") or f.name.startswith(f"{old_name}_"):
-            suffix = f.name[len(old_name) :]
-            renames.append((f, job_dir / f"{new_name}{suffix}"))
-
-    done: list[tuple[Path, Path]] = []
+    """Web wrapper over job_store.rename_job_dir, mapping errors to HTTP codes."""
     try:
-        for src, dst in renames:
-            src.rename(dst)
-            done.append((src, dst))
-    except OSError as exc:
-        for src, dst in reversed(done):
-            try:
-                dst.rename(src)
-            except OSError:
-                pass
-        raise HTTPException(500, detail=f"Rename failed mid-way, rolled back: {exc}")
-
-    manifest_file = job_dir / "manifest.json"
-    if manifest_file.exists():
-        try:
-            data = json.loads(manifest_file.read_text(encoding="utf-8"))
-            if "job_name" in data:
-                data["job_name"] = new_name
-            manifest_file.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-        except Exception:
-            pass
-    params = load_params(job_dir)
-    if params is not None:
-        try:
-            params["job_name"] = new_name
-            save_params(job_dir, params)
-        except Exception:
-            pass
-
-    try:
-        job_dir.rename(new_dir)
-    except OSError as exc:
-        for src, dst in reversed(done):
-            try:
-                dst.rename(src)
-            except OSError:
-                pass
-        raise HTTPException(500, detail=f"Directory rename failed, rolled back: {exc}")
-
-    new_path = f"{folder}/{new_name}" if folder else new_name
-    return {"path": new_path, "name": new_name, "folder": folder}
+        return rename_job_dir(job_dir, old_name, new_name, folder)
+    except JobRenameError as exc:
+        raise HTTPException(exc.status, detail=str(exc)) from exc
 
 
 @router.patch("/api/jobs/{path:path}")
@@ -1119,6 +1149,35 @@ async def create_folder(body: dict):
     folder_dir.mkdir(parents=True, exist_ok=True)
     (folder_dir / ".dkk-folder").write_text("", encoding="utf-8")
     return {"name": folder_name}
+
+
+@router.post("/api/folders/{folder_name}/rename")
+async def rename_folder(folder_name: str, body: dict):
+    """Rename a group folder (route).
+
+    Folder membership is derived from the directory location, not stored in
+    job_params.json, so a folder rename is a single directory rename — the
+    contained jobs resolve under the new folder automatically.
+    """
+    new_name: str = body.get("new_name", "").strip()
+    if not new_name or "/" in new_name or new_name.startswith("."):
+        raise HTTPException(400, detail="Invalid folder name")
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    src_dir = resolve_folder_dir(output_dir, folder_name)
+    if not src_dir.is_dir():
+        raise HTTPException(404, detail=f"Folder '{folder_name}' not found")
+    if not is_folder_dir(src_dir):
+        raise HTTPException(400, detail=f"'{folder_name}' is not a group folder")
+    if new_name == folder_name:
+        return {"name": new_name}
+    dst_dir = resolve_folder_dir(output_dir, new_name)
+    if dst_dir.exists():
+        raise HTTPException(409, detail=f"Folder '{new_name}' already exists")
+    try:
+        src_dir.rename(dst_dir)
+    except OSError as exc:
+        raise HTTPException(500, detail=f"Folder rename failed: {exc}") from exc
+    return {"name": new_name, "previous_name": folder_name}
 
 
 def _copy_route_job(job_dir: Path, job_name: str, dest_path: Path) -> int:
