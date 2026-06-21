@@ -383,20 +383,8 @@ def _job_overlays(rd: dict) -> dict:
     }
 
 
-def build_job_card(  # noqa: C901
-    pdf: FPDF,
-    params: dict,
-    manifest: dict,
-    rd: dict,
-    mml_key: str | None,
-    basemap: str = "mml",
-    tab=None,
-):
-    """Render one job onto a fresh page."""
-    pdf.add_page()
-    if tab:
-        _section_tab(pdf, **tab)
-    stats = rd.get("stats", {})
+def _card_header(pdf: FPDF, params: dict, manifest: dict, stats: dict):
+    """Title + ready/review badge across the top of the card."""
     name = params.get("job_name") or manifest.get("job_name") or "job"
     so = params.get("sort_order")
     title = f"#{so + 1}  {name}" if so is not None else name
@@ -409,31 +397,32 @@ def build_job_card(  # noqa: C901
     needs = bool(manifest.get("needs_review", stats.get("needs_review")))
     _badge(pdf, A4_W - MARGIN, MARGIN + 1, ready, needs)
 
-    reasons = manifest.get("review_reasons") or stats.get("review_reasons") or []
-    y = MARGIN + 10
 
-    # Map. Frame to the survey + takeoff (tight) so the job fills the view and the
+def _card_map(pdf: FPDF, rd: dict, y: float, mml_key: str | None, basemap: str) -> str:
+    """Survey+takeoff map block. Returns the basemap attribution (or "")."""
+    # Frame to the survey + takeoff (tight) so the job fills the view and the
     # takeoff marker stays visible.
     bbox = _bbox_of([rd.get("survey")], [rd.get("takeoff_point_4326")])
-    map_h = 118.0
-    attribution = ""
-    if bbox:
-        attribution = _draw_map(
-            pdf,
-            MARGIN,
-            y,
-            CONTENT_W,
-            map_h,
-            bbox=bbox,
-            overlays=_job_overlays(rd),
-            mml_key=mml_key,
-            basemap=basemap,
-            pad=0.08,
-        )
-    y += map_h + 5
+    if not bbox:
+        return ""
+    return _draw_map(
+        pdf,
+        MARGIN,
+        y,
+        CONTENT_W,
+        118.0,
+        bbox=bbox,
+        overlays=_job_overlays(rd),
+        mml_key=mml_key,
+        basemap=basemap,
+        pad=0.08,
+    )
 
-    # Flight params (left) + DSM/zones (right).
-    col_w = (CONTENT_W - 8) / 2
+
+def _card_flight_params(
+    pdf: FPDF, manifest: dict, stats: dict, y: float, col_w: float
+) -> float:
+    """Left-column flight-parameters table. Returns the table's bottom y."""
     drone = (
         _mf(manifest, "flight.drone_label")
         or stats.get("drone_label")
@@ -473,63 +462,68 @@ def build_job_card(  # noqa: C901
             ">1 battery" if _mf(manifest, "battery.over_one_battery") else "1 battery",
         ),
     ]
-    left_end = _kv_table(pdf, MARGIN, y, col_w, rows, title="Flight parameters")
+    return _kv_table(pdf, MARGIN, y, col_w, rows, title="Flight parameters")
 
-    rx = MARGIN + col_w + 8
-    ry = y
-    dsm = rd.get("dsm_b64")
-    if dsm:
-        try:
-            img = Image.open(io.BytesIO(base64.b64decode(dsm)))
-            # The DSM thumbnail is rendered in equirectangular EPSG:4326, so its
-            # pixel aspect stretches east-west (cos(lat) at ~62N). Display it at the
-            # **Web-Mercator** aspect of its bounds instead (matching the main map),
-            # which rescales the image to its true shape and makes the survey outline
-            # line up with the map. Letterbox within col_w x 46 mm.
-            db = rd.get("dsm_bounds")
-            if db:
-                west, south, east, north = db
-                mw = math.radians(east - west)
-                mh = tilemap._merc_y(north) - tilemap._merc_y(south)
-                ar = (mh / mw) if mw > 0 else (img.height / img.width)
-            else:
-                ar = img.height / img.width
-            iw, ih = col_w, col_w * ar
-            if ih > 46:
-                ih, iw = 46.0, 46.0 / ar
-            # Header: label left, elevation range right-aligned to the image edge.
-            elev = f"{_fmt(stats.get('elevation_min_m') or _mf(manifest, 'dsm.elevation_min_m'), ' m')} - {_fmt(stats.get('elevation_max_m') or _mf(manifest, 'dsm.elevation_max_m'), ' m')}"
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_text_color(*C_INK)
-            pdf.set_xy(rx, ry)
-            pdf.cell(iw * 0.5, 5.5, "Terrain (DSM)")
-            pdf.set_font("Helvetica", "", 8)
-            pdf.set_text_color(*C_MUTED)
-            pdf.set_xy(rx, ry)
-            pdf.cell(iw, 5.5, _t(elev), align="R")
-            dsm_y = ry + 6.5
-            pdf.image(img, x=rx, y=dsm_y, w=iw, h=ih)
-            # Outline the flight area on the DSM (white). dsm_bounds = (W, S, E, N).
-            db = rd.get("dsm_bounds")
-            survey = rd.get("survey")
-            if db and survey:
-                west, south, east, north = db
-                dw = (east - west) or 1e-9
-                dh = (north - south) or 1e-9
-                pdf.set_draw_color(255, 255, 255)
-                pdf.set_line_width(0.4)
-                for ring in _rings(survey):
-                    pts = [
-                        (rx + (c[0] - west) / dw * iw, dsm_y + (north - c[1]) / dh * ih)
-                        for c in ring
-                    ]
-                    if len(pts) >= 2:
-                        pdf.polygon(pts, style="D")
-            ry = dsm_y + ih + 4
-        except Exception:
-            pass
 
-    # UAS zones: name truncated to fit, floor right-aligned (so the two never overlap).
+def _card_dsm(
+    pdf: FPDF, rd: dict, manifest: dict, stats: dict, rx: float, ry: float, col_w: float
+) -> float:
+    """Right-column DSM thumbnail with survey outline. Returns the next y."""
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(rd["dsm_b64"])))
+        # The DSM thumbnail is rendered in equirectangular EPSG:4326, so its
+        # pixel aspect stretches east-west (cos(lat) at ~62N). Display it at the
+        # **Web-Mercator** aspect of its bounds instead (matching the main map),
+        # which rescales the image to its true shape and makes the survey outline
+        # line up with the map. Letterbox within col_w x 46 mm.
+        db = rd.get("dsm_bounds")
+        if db:
+            west, south, east, north = db
+            mw = math.radians(east - west)
+            mh = tilemap._merc_y(north) - tilemap._merc_y(south)
+            ar = (mh / mw) if mw > 0 else (img.height / img.width)
+        else:
+            ar = img.height / img.width
+        iw, ih = col_w, col_w * ar
+        if ih > 46:
+            ih, iw = 46.0, 46.0 / ar
+        # Header: label left, elevation range right-aligned to the image edge.
+        elev = f"{_fmt(stats.get('elevation_min_m') or _mf(manifest, 'dsm.elevation_min_m'), ' m')} - {_fmt(stats.get('elevation_max_m') or _mf(manifest, 'dsm.elevation_max_m'), ' m')}"
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*C_INK)
+        pdf.set_xy(rx, ry)
+        pdf.cell(iw * 0.5, 5.5, "Terrain (DSM)")
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*C_MUTED)
+        pdf.set_xy(rx, ry)
+        pdf.cell(iw, 5.5, _t(elev), align="R")
+        dsm_y = ry + 6.5
+        pdf.image(img, x=rx, y=dsm_y, w=iw, h=ih)
+        # Outline the flight area on the DSM (white). dsm_bounds = (W, S, E, N).
+        db = rd.get("dsm_bounds")
+        survey = rd.get("survey")
+        if db and survey:
+            west, south, east, north = db
+            dw = (east - west) or 1e-9
+            dh = (north - south) or 1e-9
+            pdf.set_draw_color(255, 255, 255)
+            pdf.set_line_width(0.4)
+            for ring in _rings(survey):
+                pts = [
+                    (rx + (c[0] - west) / dw * iw, dsm_y + (north - c[1]) / dh * ih)
+                    for c in ring
+                ]
+                if len(pts) >= 2:
+                    pdf.polygon(pts, style="D")
+        return dsm_y + ih + 4
+    except Exception:
+        return ry
+
+
+def _card_zones(
+    pdf: FPDF, rd: dict, rx: float, ry: float, col_w: float, has_dsm: bool
+) -> float:
+    """Right-column UAS-zone list (name truncated, floor right-aligned)."""
     zone_hits = rd.get("zone_hits") or []
     direct = [
         z for z in zone_hits if not z.get("context_only") and not z.get("buffer_only")
@@ -555,27 +549,32 @@ def build_job_card(  # noqa: C901
             pdf.set_xy(rx + col_w - fw, ry)
             pdf.cell(fw, 4.6, _t(fl), align="R")
             ry += 4.9
-    elif not dsm:
+    elif not has_dsm:
         pdf.set_xy(rx, ry)
         pdf.set_font("Helvetica", "", 8.5)
         pdf.set_text_color(*C_MUTED)
         pdf.cell(col_w, 5, "No UAS zone intersections.")
+    return ry
 
-    # Review reasons (below both columns) - each on its own line, amber.
-    if reasons:
-        ry2 = max(left_end, ry) + 4
+
+def _card_review_reasons(pdf: FPDF, reasons: list, top_y: float):
+    """Amber 'Needs review' block below both columns, one reason per line."""
+    if not reasons:
+        return
+    ry2 = top_y + 4
+    pdf.set_xy(MARGIN, ry2)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(*C_REVIEW)
+    pdf.cell(CONTENT_W, 5.5, _t("Needs review"))
+    ry2 += 6
+    pdf.set_font("Helvetica", "", 8)
+    for r in reasons:
         pdf.set_xy(MARGIN, ry2)
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(*C_REVIEW)
-        pdf.cell(CONTENT_W, 5.5, _t("Needs review"))
-        ry2 += 6
-        pdf.set_font("Helvetica", "", 8)
-        for r in reasons:
-            pdf.set_xy(MARGIN, ry2)
-            pdf.multi_cell(CONTENT_W, 4, _t("- " + r))
-            ry2 = pdf.get_y() + 1.5
+        pdf.multi_cell(CONTENT_W, 4, _t("- " + r))
+        ry2 = pdf.get_y() + 1.5
 
-    # Footer.
+
+def _card_footer(pdf: FPDF, attribution: str):
     pdf.set_y(A4_H - 14)
     pdf.set_font("Helvetica", "", 6.5)
     pdf.set_text_color(*C_MUTED)
@@ -589,6 +588,42 @@ def build_job_card(  # noqa: C901
             + "Generated by dkk-flightmanager."
         ),
     )
+
+
+def build_job_card(
+    pdf: FPDF,
+    params: dict,
+    manifest: dict,
+    rd: dict,
+    mml_key: str | None,
+    basemap: str = "mml",
+    tab=None,
+):
+    """Render one job onto a fresh page."""
+    pdf.add_page()
+    if tab:
+        _section_tab(pdf, **tab)
+    stats = rd.get("stats", {})
+    _card_header(pdf, params, manifest, stats)
+    reasons = manifest.get("review_reasons") or stats.get("review_reasons") or []
+
+    y = MARGIN + 10
+    attribution = _card_map(pdf, rd, y, mml_key, basemap)
+    y += 118.0 + 5
+
+    # Flight params (left) + DSM/zones (right).
+    col_w = (CONTENT_W - 8) / 2
+    left_end = _card_flight_params(pdf, manifest, stats, y, col_w)
+
+    rx = MARGIN + col_w + 8
+    ry = y
+    has_dsm = bool(rd.get("dsm_b64"))
+    if has_dsm:
+        ry = _card_dsm(pdf, rd, manifest, stats, rx, ry, col_w)
+    ry = _card_zones(pdf, rd, rx, ry, col_w, has_dsm)
+
+    _card_review_reasons(pdf, reasons, max(left_end, ry))
+    _card_footer(pdf, attribution)
 
 
 # ── orchestration (recompute render data from stored params) ──────────────────
