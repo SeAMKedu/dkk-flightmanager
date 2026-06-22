@@ -2,8 +2,8 @@
 
 import { escHtml } from '../core/utils.js';
 import { apiGet } from '../core/api.js';
+import { st } from '../core/state.js';
 
-var _mvStatMode = localStorage.getItem('mv-stat-mode') || 'normal';
 var _statBinMap = {};
 
 var _ALT_PAL  = ['#2563eb','#60a5fa','#93c5fd','#dbeafe'];
@@ -19,13 +19,11 @@ var _MGRS_PAL = ['#06b6d4','#8b5cf6','#ec4899','#f59e0b','#10b981','#ef4444',
 var _mgrsLayer = null;                       // Leaflet layer group for tile outlines
 var _mgrsCache = { folder: undefined, data: null };  // folder-stable tile data
 
-export function getMvStatMode() { return _mvStatMode; }
-export function getStatBinMap() { return _statBinMap; }
 
 // Modes that recolor the job polygons (and dim the basemap). 'normal' and 'mgrs'
 // leave jobs in their own colours so they read against the tile/basemap.
 export function statModeColorsJobs() {
-  return _mvStatMode !== 'normal' && _mvStatMode !== 'mgrs';
+  return st.stat.mode !== 'normal' && st.stat.mode !== 'mgrs';
 }
 
 export function getMvStatColor(props) {
@@ -33,10 +31,10 @@ export function getMvStatColor(props) {
 }
 
 export function onStatModeChange() {
-  _mvStatMode = document.getElementById('mv-stat-mode').value;
-  localStorage.setItem('mv-stat-mode', _mvStatMode);
+  st.stat.mode = document.getElementById('mv-stat-mode').value;
+  localStorage.setItem('mv-stat-mode', st.stat.mode);
   // map-view.js will call renderStatPanel and update layers
-  import('../map/map-view.js').then(function(m){ m._onStatModeChangeInternal(_mvStatMode); });
+  import('../map/map-view.js').then(function(m){ m._onStatModeChangeInternal(st.stat.mode); });
 }
 
 export function renderStatPanel(allFeatures, mvSelected) {
@@ -45,13 +43,13 @@ export function renderStatPanel(allFeatures, mvSelected) {
   if (!body) return;
 
   // MGRS mode draws a tile overlay + legend (async, folder-keyed); other modes clear it.
-  if (_mvStatMode === 'mgrs') { _stMgrs(body); return; }
+  if (st.stat.mode === 'mgrs') { _stMgrs(body); return; }
   clearMgrsLayer();
 
   var sel = mvSelected && mvSelected.size > 0 ? mvSelected : null;
   var active = sel ? allFeatures.filter(function(f) { return sel.has(f.properties.path); }) : allFeatures;
 
-  switch (_mvStatMode) {
+  switch (st.stat.mode) {
     case 'normal':      body.innerHTML = _stNormal(active); break;
     case 'subcategory': body.innerHTML = _stSubcat(allFeatures, active); break;
     case 'altitude':    body.innerHTML = _stBinned(allFeatures, active, _getAlt,  _ALT_PAL,  'm',   0, 'Lowest altitude', null, true); break;
@@ -145,7 +143,7 @@ async function _stMgrs(body) {
   try {
     var url = '/api/mgrs_tiles' + (folder ? '?folder=' + encodeURIComponent(folder) : '');
     var data = await apiGet(url);
-    if (_mvStatMode !== 'mgrs') return;  // mode changed while loading
+    if (st.stat.mode !== 'mgrs') return;  // mode changed while loading
     _mgrsCache = { folder: folder, data: data };
     body.innerHTML = _mgrsLegend(data);
     if (data.grid_ok) _drawMgrsTiles(data.tiles);

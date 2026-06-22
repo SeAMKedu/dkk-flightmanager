@@ -8,7 +8,7 @@ import { showError } from '../editor/form-controls.js';
 import { loadJobsList } from '../jobs/jobs-panel.js';
 import { openDeleteModal, openMoveModal } from '../panels/modal-utils.js';
 import { clearTakeoffForMapView, _hideVlos } from '../editor/takeoff.js';
-import { getMvStatColor, getMvStatMode, statModeColorsJobs, clearMgrsLayer, renderStatPanel } from '../forecast/stat-view.js';
+import { getMvStatColor, statModeColorsJobs, clearMgrsLayer, renderStatPanel } from '../forecast/stat-view.js';
 import { showBatteryTimeline, destroyBatteryTimeline } from '../forecast/battery-timeline.js';
 import { showForecastBar, destroyForecastBar, setForecastBarShifted } from '../forecast/forecast-bar.js';
 import { hideCesiumView } from '../three-d/cesium-view.js';
@@ -70,7 +70,7 @@ export function openMapView(folderFilter) {
   document.getElementById('mv-right-panel').classList.add('visible');
   map.invalidateSize();
   var sel = document.getElementById('mv-stat-mode');
-  if (sel) sel.value = getMvStatMode();
+  if (sel) sel.value = st.stat.mode;
   document.querySelectorAll('.jfolder-map-btn').forEach(function(btn) {
     btn.classList.toggle('active', btn.dataset.folder === (folderFilter || ''));
   });
