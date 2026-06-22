@@ -1,8 +1,15 @@
 // ── Shared application state ──────────────────────────────────────────────────
 // Single mutable object shared by all modules via import { st } from './state.js'.
 // _altCap and _dataAttribution moved here from map-init.js.
+//
+// `st` is wrapped in a tiny reactive store (store.js): reads/writes behave like
+// a plain object, but writes notify subscribers registered via st.subscribe(key,
+// cb). This lets derived UI react to a state change instead of every caller
+// remembering to refresh it (see dirty-tracking.js for the Save-button example).
 
-export const st = {
+import { createStore } from './store.js';
+
+export const st = createStore({
   // App-wide state
   // Per-tab session id — sent with preview/export/route_estimate so the server
   // keeps each client's last-preview obstacle data separate (no cross-clobber).
@@ -23,6 +30,21 @@ export const st = {
   _dirty: false,
   _activeJob: null,       // full path (folder/name or name)
   _activeJobFolder: null, // folder part, null for root
+
+  // Takeoff / landing spot (owned by takeoff.js; Leaflet handles stay local there)
+  takeoff: { auto: null, pt: null, userMoved: false, vlosRange: 300 },
+
+  // Drag-reorder of job cards (owned by jobs-panel.js)
+  drag: { path: null, folder: null },
+
+  // Map-view stat panel mode (owned by stat-view.js; persisted to localStorage)
+  stat: { mode: localStorage.getItem('mv-stat-mode') || 'normal' },
+
+  // Editor auto-preview timer + fit-bounds + last-previewed ids (owned by form-controls.js)
+  editor: { autoTimer: null, fitBounds: false, lastPreviewedIds: '' },
+
+  // Map view working state (owned by map-view.js; other _mv* handles stay local there)
+  mv: { fromEditor: false, currentFolder: null, selected: new Set(), layers: [] },
 
   // Route planner state
   _routeAngleDeg: null,    // null = auto, number = user override
@@ -46,4 +68,4 @@ export const st = {
   // Altitude range from last variable-altitude route estimate (null when uniform)
   _altProfileMin: null,
   _altProfileMax: null,
-};
+});
