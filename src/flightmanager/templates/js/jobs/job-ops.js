@@ -6,8 +6,7 @@ import { escHtml, jobApiUrl } from '../core/utils.js';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../core/api.js';
 import { confirmIfDirty, xbUpdate } from '../core/dirty-tracking.js';
 import { showError, clearError, updateFolderHint, updateGsd, setRadiusLinked,
-         setSub, setSimpAuto, setSimpManual, setAutoTimer,
-         getAutoTimer, setFitBoundsFlag, setLastPreviewedIds, _setEditedPoly,
+         setSub, setSimpAuto, setSimpManual, _setEditedPoly,
          _setSec } from '../editor/form-controls.js';
 import { redrawRings } from '../map/legend.js';
 import { loadJobsList } from './jobs-panel.js';
@@ -37,8 +36,7 @@ export async function _doOpenJob(path) {
     catch (e) { showError('Could not load job: ' + (e.detail || e.message)); return; }
     var p = data.params;
     var name = path.includes('/') ? path.split('/').pop() : path;
-    var autoTimer = getAutoTimer();
-    if (autoTimer) { clearTimeout(autoTimer); setAutoTimer(null); }
+    if (st.editor.autoTimer) { clearTimeout(st.editor.autoTimer); st.editor.autoTimer = null; }
     Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
     resetLrs();
     editLayers.clearLayers();
@@ -60,7 +58,7 @@ export async function _doOpenJob(path) {
     clearError();
     hideExtModifiedNotice();
     document.querySelectorAll('.jcard').forEach(function(c){ c.classList.toggle('active', c.dataset.path === path); });
-    setFitBoundsFlag(true);
+    st.editor.fitBounds = true;
     // Instant first-paint from the stored survey outline (map view + open). The
     // strips/transits/status are filled by the live startPreview() below, which
     // runs on every open to refresh buildings + UAS zones for the current area.
@@ -68,10 +66,9 @@ export async function _doOpenJob(path) {
       || (p.last_preview_geojson || {}).survey);
     if (_outline) {
       st.previewData = {survey: _outline};
-      setLastPreviewedIds(
+      st.editor.lastPreviewedIds =
         ((p.inputs && p.inputs.parcel_ids)||[]).join(',')
-        + '||' + ((p.inputs && p.inputs.property_ids)||[]).join(',')
-      );
+        + '||' + ((p.inputs && p.inputs.property_ids)||[]).join(',');
       try {
         renderMap(st.previewData);
         redrawRings();

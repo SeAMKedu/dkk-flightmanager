@@ -4,7 +4,7 @@ import { st } from '../core/state.js';
 import { map, lrs, editLayers, layerGeom } from '../map/map-init.js';
 import { markDirty } from '../core/dirty-tracking.js';
 import { confirmIfDirty } from '../core/dirty-tracking.js';
-import { _setEditedPoly, _clearEditedPoly, setSimpManual, getAutoTimer, setAutoTimer } from './form-controls.js';
+import { _setEditedPoly, _clearEditedPoly, setSimpManual } from './form-controls.js';
 import { _buildVertexLayer, exitBridgeMode, _enterBridgeModeWithVertex,
          _collectVertsFromEditLayers, _collectVerts, _pickBridgeClick } from './polygon-bridge.js';
 import { geomToPolys } from '../map/map-layers.js';
@@ -235,8 +235,7 @@ function _currentSurveyGeom() {
 export function resetPoly() {
   saveEdit();
   _clearEditedPoly();
-  var autoTimer = getAutoTimer();
-  if (autoTimer) { clearTimeout(autoTimer); setAutoTimer(null); }
+  if (st.editor.autoTimer) { clearTimeout(st.editor.autoTimer); st.editor.autoTimer = null; }
   document.getElementById('offset').value = 0;
   setSimpManual(0, true);
   if (st.isRunning) { st._pendingPreview = true; } else { startPreview(); }

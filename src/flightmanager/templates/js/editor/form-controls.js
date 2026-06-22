@@ -170,16 +170,6 @@ export function _clearEditedPoly() {
 }
 
 // ── Auto-update scheduling ────────────────────────────────────────────────────
-var _autoTimer = null;
-var _lastPreviewedIds = '';
-var _fitBoundsOnNextRender = false;
-
-export function getAutoTimer() { return _autoTimer; }
-export function setAutoTimer(v) { _autoTimer = v; }
-export function getLastPreviewedIds() { return _lastPreviewedIds; }
-export function setLastPreviewedIds(v) { _lastPreviewedIds = v; }
-export function getFitBoundsFlag() { return _fitBoundsOnNextRender; }
-export function setFitBoundsFlag(v) { _fitBoundsOnNextRender = v; }
 
 export function idsKey() {
   return document.getElementById('pids').value.trim() + '||' + document.getElementById('kids').value.trim();
@@ -188,8 +178,8 @@ export function idsKey() {
 export function scheduleAutoUpdate(force) {
   markDirty();
   if (!force && !st.previewData) return;
-  if (_autoTimer) clearTimeout(_autoTimer);
-  _autoTimer = setTimeout(function() { _autoTimer = null; startPreview(); }, 400);
+  if (st.editor.autoTimer) clearTimeout(st.editor.autoTimer);
+  st.editor.autoTimer = setTimeout(function() { st.editor.autoTimer = null; startPreview(); }, 400);
 }
 ['dsel','kochk'].forEach(function(id){
   document.getElementById(id).addEventListener('change', scheduleAutoUpdate);
@@ -199,14 +189,14 @@ document.getElementById('offset').addEventListener('change', scheduleAutoUpdate)
 
 export function onIdBlur() {
   var key = idsKey();
-  if (key.replace('||', '').trim() && key !== _lastPreviewedIds) markDirty();
+  if (key.replace('||', '').trim() && key !== st.editor.lastPreviewedIds) markDirty();
   setTimeout(function() {
     var active = document.activeElement;
     if (active === document.getElementById('pids') || active === document.getElementById('kids')) return;
     var key = idsKey();
     if (!key.replace('||','').trim()) return;
-    if (key === _lastPreviewedIds) return;
-    _fitBoundsOnNextRender = true;
+    if (key === st.editor.lastPreviewedIds) return;
+    st.editor.fitBounds = true;
     scheduleAutoUpdate(true);
     _setSec('area', true);
   }, 150);
@@ -221,7 +211,7 @@ export function newJob() {
   confirmIfDirty(_doNewJob);
 }
 export function _doNewJob() {
-  if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
+  if (st.editor.autoTimer) { clearTimeout(st.editor.autoTimer); st.editor.autoTimer = null; }
   document.getElementById('jname').value = defaultJobName();
   document.getElementById('pids').value = '';
   document.getElementById('kids').value = '';
@@ -231,7 +221,7 @@ export function _doNewJob() {
   editLayers.clearLayers();
   st.editMode = false;
   _detachEditListeners();
-  st.previewData = null; _clearEditedPoly(); _lastPreviewedIds = '';
+  st.previewData = null; _clearEditedPoly(); st.editor.lastPreviewedIds = '';
   st._activeJob = null; st._activeJobFolder = null; st._dirty = false; st._altCap = null;
   _clearTakeoff();
   _setColorPicker(null);

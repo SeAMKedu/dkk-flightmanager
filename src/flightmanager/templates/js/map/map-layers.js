@@ -3,8 +3,7 @@
 import { st } from '../core/state.js';
 import { map, lrs, editLayers, resetLrs } from './map-init.js';
 import { _legendUserVis, resetLegend, redrawRings } from './legend.js';
-import { getFitBoundsFlag, setFitBoundsFlag, setLastPreviewedIds,
-         getRadiusLinked, setRadiusLinked, idsKey, updateGsd, clearAreaFocus, showError } from '../editor/form-controls.js';
+import { getRadiusLinked, setRadiusLinked, idsKey, updateGsd, clearAreaFocus, showError } from '../editor/form-controls.js';
 import { _renderTakeoffMarker } from '../editor/takeoff.js';
 import { renderStatus } from '../panels/status-panel.js';
 import { _buildVertexLayer, exitBridgeMode } from '../editor/polygon-bridge.js';
@@ -16,7 +15,7 @@ import { toggleEdit } from '../editor/polygon-edit.js';
 export function onPreviewDone(payload) {
   console.log('[preview done]', payload.stats);
   st.previewData = payload;
-  setLastPreviewedIds(idsKey());
+  st.editor.lastPreviewedIds = idsKey();
   clearAreaFocus();
   xbUpdate();
   document.getElementById('rstbtn').disabled = false;
@@ -259,7 +258,7 @@ export function renderMap(data) {
       l.on('dblclick', function(e) { L.DomEvent.stop(e); if (!st.editMode && !st._bridgeMode) toggleEdit(); });
     });
     console.log('[renderMap] survey bounds', lrs.survey.getBounds());
-    if (getFitBoundsFlag()) { setFitBoundsFlag(false); map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]}); }
+    if (st.editor.fitBounds) { st.editor.fitBounds = false; map.fitBounds(lrs.survey.getBounds(), {padding:[40,40]}); }
   } else {
     console.warn('[renderMap] no survey polygons rendered, survey type:', data.survey && data.survey.type);
   }
