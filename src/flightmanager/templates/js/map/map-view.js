@@ -20,23 +20,20 @@ import { openJob as _openJobFn } from '../jobs/job-ops.js';
 import { _selectedJobs, _selectedMeta, _updateSelBar, openMergeModal } from '../jobs/multi-select.js';
 import { autoSortFolder } from '../jobs/drag-reorder.js';
 
-var _mvMode = false;
-var _mvFromEditor = false;
+// Map-view mode lives solely in st._mvMode now (single source of truth, read by
+// polygon-edit/measurement/cesium/etc.). getMvMode() exposes it to callers that
+// import it; no separate module-level copy to keep in sync. The other shared
+// fields (fromEditor, currentFolder, selected, layers) live in st.mv; the
+// purely internal handles below stay module-local.
 var _mvJobGroup = null;
-var _mvLayers = [];
 var _mvHoverPopup = null;
 var _mvHoverTimer = null;
-var _mvSelected = new Set();
 var _mvAllFeatures = [];
-var _mvCurrentFolder = null;
 var _mvRouteSeq = 0;
 var _mvRouteVisible = true;
 var _mvDimLayer = null;
 
-export function getMvMode() { return _mvMode; }
-export function getMvSelected() { return _mvSelected; }
-export function getMvCurrentFolder() { return _mvCurrentFolder; }
-export function getMvLayers() { return _mvLayers; }
+export function getMvMode() { return st._mvMode; }
 
 export function showFolderOnMap(e, folderName) {
   e.stopPropagation();
@@ -46,15 +43,14 @@ export function showFolderOnMap(e, folderName) {
 export function openMapView(folderFilter) {
   hideCesiumView();
   var folderKey = folderFilter || null;
-  var _comingFromEditor = _mvFromEditor && st._activeJobFolder === folderKey;
+  var _comingFromEditor = st.mv.fromEditor && st._activeJobFolder === folderKey;
   var _skipFit = _comingFromEditor;
-  _mvFromEditor = false;
+  st.mv.fromEditor = false;
 
-  var folderChanged = _mvMode && _mvCurrentFolder !== folderKey;
+  var folderChanged = st._mvMode && st.mv.currentFolder !== folderKey;
 
-  _mvMode = true;
   st._mvMode = true;
-  _mvCurrentFolder = folderKey;
+  st.mv.currentFolder = folderKey;
   if (st.editMode) saveEdit();
 
   Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
@@ -76,7 +72,7 @@ export function openMapView(folderFilter) {
   });
 
   if (folderChanged) {
-    _mvSelected.clear();
+    st.mv.selected.clear();
   }
   _mvUpdateSelBar();
 
@@ -89,10 +85,9 @@ export function openMapView(folderFilter) {
 }
 
 export function closeMapView() {
-  if (!_mvMode) return;
-  _mvMode = false;
+  if (!st._mvMode) return;
   st._mvMode = false;
-  _mvCurrentFolder = null;
+  st.mv.currentFolder = null;
   clearTimeout(_mvHoverTimer);
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
   destroyBatteryTimeline();
@@ -102,11 +97,11 @@ export function closeMapView() {
   _mvHideDim();
   clearLaunchSites(map);
   clearArrowLayer();
-  _mvSelected.forEach(function(path) {
+  st.mv.selected.forEach(function(path) {
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
     if (card) card.classList.remove('selected');
   });
-  _mvSelected.clear();
+  st.mv.selected.clear();
   _mvUpdateSelBar();
   _updateSelBar(); // re-show list-mode toast if jobs were selected in the panel
 
@@ -133,17 +128,17 @@ export async function _mvDrawRoute() {
   // (e.g. _mvApplyFilter + _mvLoad on open). The async fetch below means a stale
   // call could otherwise create a second, untracked layer group that leaks.
   var seq = ++_mvRouteSeq;
-  if (!_mvRouteVisible || !_mvMode) return;
+  if (!_mvRouteVisible || !st._mvMode) return;
 
   // Launch sites: consecutive jobs flown from one parking spot are grouped
   // server-side into a single numbered dot (takeoff centroid) carrying its
   // flight-announcement circle. Hover a dot to see the operating-area radius.
   try {
     var url = '/api/launch_sites'
-      + (_mvCurrentFolder ? ('?folder=' + encodeURIComponent(_mvCurrentFolder)) : '');
+      + (st.mv.currentFolder ? ('?folder=' + encodeURIComponent(st.mv.currentFolder)) : '');
     var resp = await apiGet(url);
     if (seq !== _mvRouteSeq) return;            // superseded by a newer call
-    if (!_mvRouteVisible || !_mvMode) return;   // state may have changed during await
+    if (!_mvRouteVisible || !st._mvMode) return;   // state may have changed during await
     drawLaunchSites(map, resp.sites || []);
   } catch (e) {
     console.error('[launch-sites]', e);
@@ -167,13 +162,13 @@ export async function _mvRefreshRouteData() {
 
 // Re-fetch features and rebuild the per-job layers for the current folder,
 // keeping the current view (no re-fit). Call after an in-place mutation that
-// changes job *paths* (route rename, reorder): otherwise _mvLayers keeps the
+// changes job *paths* (route rename, reorder): otherwise st.mv.layers keeps the
 // old paths and selection silently no-ops (_mvToggleSel can't find the layer)
 // until a full page refresh.
 export async function mvReload() {
-  if (!_mvMode) return;
-  _mvSelected.clear();
-  await _mvLoad(_mvCurrentFolder, true);   // skipFit → preserve the current view
+  if (!st._mvMode) return;
+  st.mv.selected.clear();
+  await _mvLoad(st.mv.currentFolder, true);   // skipFit → preserve the current view
   _mvUpdateSelBar();
 }
 
@@ -186,7 +181,7 @@ function _mvApplyFilter(folderFilter, skipFit) {
     var layer = _mvMakeLayer(f);
     if (layer) {
       _mvJobGroup.addLayer(layer);
-      _mvLayers.push({path: f.properties.path, layer: layer, feature: f});
+      st.mv.layers.push({path: f.properties.path, layer: layer, feature: f});
       try { bounds.push(layer.getBounds()); } catch {}
     }
   });
@@ -198,8 +193,8 @@ function _mvApplyFilter(folderFilter, skipFit) {
   _mvDrawRoute();
   // Re-apply selection visuals after layer rebuild
   var stale = [];
-  _mvSelected.forEach(function(path) {
-    var item = _mvLayers.find(function(i){ return i.path === path; });
+  st.mv.selected.forEach(function(path) {
+    var item = st.mv.layers.find(function(i){ return i.path === path; });
     if (!item) { stale.push(path); return; }
     item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
@@ -209,13 +204,13 @@ function _mvApplyFilter(folderFilter, skipFit) {
       if (chk) chk.checked = true;
     }
   });
-  stale.forEach(function(p){ _mvSelected.delete(p); });
-  showBatteryTimeline(_mvAllFeatures, _mvSelected, _mvCurrentFolder, _mvLayers);
-  showForecastBar(_mvCurrentFolder);
-  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
+  stale.forEach(function(p){ st.mv.selected.delete(p); });
+  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder, st.mv.layers);
+  showForecastBar(st.mv.currentFolder);
+  renderStatPanel(st.mv.layers.map(function(item) { return item.feature; }), st.mv.selected);
   if (statModeColorsJobs()) {
-    _mvLayers.forEach(function(item) {
-      if (_mvSelected.has(item.path)) return;
+    st.mv.layers.forEach(function(item) {
+      if (st.mv.selected.has(item.path)) return;
       var c = getMvStatColor(item.feature.properties);
       item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.30});
     });
@@ -224,8 +219,8 @@ function _mvApplyFilter(folderFilter, skipFit) {
 }
 
 function _mvClearLayers() {
-  _mvLayers.forEach(function(item){ if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); });
-  _mvLayers = [];
+  st.mv.layers.forEach(function(item){ if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); });
+  st.mv.layers = [];
 }
 
 function _mvMakeLayer(feature) {
@@ -344,7 +339,7 @@ export async function mvToggleSkip(path, currentSkipped) {
     if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
     try {
       _mvAllFeatures = (await apiGet('/api/jobs/geojson')).features || [];
-      _mvApplyFilter(_mvCurrentFolder, true);
+      _mvApplyFilter(st.mv.currentFolder, true);
     } catch { /* geojson refresh best-effort */ }
     loadJobsList();
   } catch(e) { showError(e.detail || ('Failed: ' + e.message)); }
@@ -356,7 +351,7 @@ export function mvDeleteJob(path, name) {
   openDeleteModal('Delete "' + name + '"? This cannot be undone.', async function() {
     try {
       await apiDelete(jobApiUrl(path));
-      _mvLayers = _mvLayers.filter(function(item) {
+      st.mv.layers = st.mv.layers.filter(function(item) {
         if (item.path === path) { _mvJobGroup.removeLayer(item.layer); return false; }
         return true;
       });
@@ -368,7 +363,7 @@ export function mvDeleteJob(path, name) {
 }
 
 function _mvUpdateDim() {
-  if (statModeColorsJobs() && _mvMode) { _mvShowDim(); } else { _mvHideDim(); }
+  if (statModeColorsJobs() && st._mvMode) { _mvShowDim(); } else { _mvHideDim(); }
 }
 
 function _mvShowDim() {
@@ -386,22 +381,22 @@ function _mvHideDim() {
 }
 
 export function _mvToggleSel(path) {
-  var item = _mvLayers.find(function(i){ return i.path === path; });
+  var item = st.mv.layers.find(function(i){ return i.path === path; });
   if (!item) return;
   var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
   var chk = card && card.querySelector('.jcard-chk');
-  if (_mvSelected.has(path)) {
-    _mvSelected.delete(path);
+  if (st.mv.selected.has(path)) {
+    st.mv.selected.delete(path);
     var origColor = getMvStatColor(item.feature.properties);
     item.layer.setStyle({weight: 2.5, opacity: 1, color: origColor, fillColor: origColor});
     if (card) card.classList.remove('selected');
     if (chk) chk.checked = false;
   } else {
-    _mvSelected.add(path);
+    st.mv.selected.add(path);
     item.layer.setStyle({weight: 4, opacity: 1, color: '#f59e0b', fillColor: '#f59e0b'});
     if (card) {
       card.classList.add('selected');
-      if (_mvSelected.size === 1) card.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+      if (st.mv.selected.size === 1) card.scrollIntoView({block: 'nearest', behavior: 'smooth'});
     }
     if (chk) chk.checked = true;
   }
@@ -412,13 +407,13 @@ export function _mvToggleSel(path) {
 // dot clicks to select all jobs flown from that parking spot).
 export function mvSelectPaths(paths) {
   (paths || []).forEach(function(p) {
-    if (!_mvSelected.has(p)) _mvToggleSel(p);
+    if (!st.mv.selected.has(p)) _mvToggleSel(p);
   });
 }
 
 export function mvClearSel() {
-  _mvSelected.forEach(function(path) {
-    var item = _mvLayers.find(function(i){ return i.path === path; });
+  st.mv.selected.forEach(function(path) {
+    var item = st.mv.layers.find(function(i){ return i.path === path; });
     if (item) { var c = getMvStatColor(item.feature.properties); item.layer.setStyle({weight: 2.5, opacity: 1, color: c, fillColor: c}); }
     var card = document.querySelector('.jcard[data-path="' + CSS.escape(path) + '"]');
     if (card) {
@@ -427,29 +422,29 @@ export function mvClearSel() {
       if (chk) chk.checked = false;
     }
   });
-  _mvSelected.clear();
+  st.mv.selected.clear();
   _mvUpdateSelBar();
 }
 
 function _mvUpdateSelBar() {
-  var n = _mvSelected.size;
-  document.getElementById('mv-actions').classList.toggle('visible', _mvMode && n > 0);
-  setForecastBarShifted(_mvMode && n > 0);
+  var n = st.mv.selected.size;
+  document.getElementById('mv-actions').classList.toggle('visible', st._mvMode && n > 0);
+  setForecastBarShifted(st._mvMode && n > 0);
   document.getElementById('mv-sel-count').textContent = n + ' selected';
   document.getElementById('mv-merge-btn').disabled = n < 2;
   var openBtn = document.getElementById('mv-open-btn');
   if (openBtn) {
     openBtn.style.display = n === 1 ? '' : 'none';
-    if (n === 1) openBtn.dataset.path = Array.from(_mvSelected)[0];
+    if (n === 1) openBtn.dataset.path = Array.from(st.mv.selected)[0];
   }
-  showBatteryTimeline(_mvAllFeatures, _mvSelected, _mvCurrentFolder, _mvLayers);
-  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
+  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder, st.mv.layers);
+  renderStatPanel(st.mv.layers.map(function(item) { return item.feature; }), st.mv.selected);
 }
 
 export function mvMerge() {
   _selectedJobs.clear(); _selectedMeta.clear();
-  _mvSelected.forEach(function(path) {
-    var item = _mvLayers.find(function(i){ return i.path === path; });
+  st.mv.selected.forEach(function(path) {
+    var item = st.mv.layers.find(function(i){ return i.path === path; });
     if (item) {
       var p = item.feature.properties;
       _selectedJobs.add(path);
@@ -462,9 +457,9 @@ export function mvMerge() {
 }
 
 export function mvBulkMove() {
-  var paths = Array.from(_mvSelected);
+  var paths = Array.from(st.mv.selected);
   var metas = paths.map(function(path) {
-    var item = _mvLayers.find(function(i){ return i.path === path; });
+    var item = st.mv.layers.find(function(i){ return i.path === path; });
     return item ? {path: path, name: item.feature.properties.name, folder: item.feature.properties.folder} : null;
   }).filter(Boolean);
   if (!metas.length) return;
@@ -482,16 +477,16 @@ export function mvBulkMove() {
 }
 
 export function mvBulkDelete() {
-  var n = _mvSelected.size;
+  var n = st.mv.selected.size;
   if (!n) return;
   var msg = 'Delete ' + n + ' selected job' + (n > 1 ? 's' : '') + '? This cannot be undone.';
   openDeleteModal(msg, async function() {
-    var paths = Array.from(_mvSelected);
+    var paths = Array.from(st.mv.selected);
     for (var i = 0; i < paths.length; i++) {
       try {
         await apiDelete(jobApiUrl(paths[i]));
         _mvAllFeatures = _mvAllFeatures.filter(function(f){ return f.properties.path !== paths[i]; });
-        _mvLayers = _mvLayers.filter(function(item) {
+        st.mv.layers = st.mv.layers.filter(function(item) {
           if (item.path === paths[i]) { if (_mvJobGroup) _mvJobGroup.removeLayer(item.layer); return false; }
           return true;
         });
@@ -504,28 +499,27 @@ export function mvBulkDelete() {
 
 // Called by stat-view.js to pan to a job
 export function _mvStatJobClickInternal(path) {
-  var item = _mvLayers.find(function(i) { return i.path === path; });
+  var item = st.mv.layers.find(function(i) { return i.path === path; });
   if (!item) return;
   try { map.fitBounds(item.layer.getBounds(), {padding: [60, 60], maxZoom: 16}); } catch {}
-  if (!_mvSelected.has(path)) _mvToggleSel(path);
+  if (!st.mv.selected.has(path)) _mvToggleSel(path);
 }
 
 // Called by stat-view.js when stat mode changes
 export function _onStatModeChangeInternal(_mode) {
-  renderStatPanel(_mvLayers.map(function(item) { return item.feature; }), _mvSelected);
-  _mvLayers.forEach(function(item) {
-    if (_mvSelected.has(item.path)) return;
+  renderStatPanel(st.mv.layers.map(function(item) { return item.feature; }), st.mv.selected);
+  st.mv.layers.forEach(function(item) {
+    if (st.mv.selected.has(item.path)) return;
     var c = getMvStatColor(item.feature.properties);
     item.layer.setStyle({color: c, fillColor: c, weight: 2.5, opacity: 1, fillOpacity: 0.30});
   });
   _mvUpdateDim();
 }
 
-// Set _mvFromEditor flag (called by job-ops when closing a job to go back to map)
-export function setMvFromEditor(v) { _mvFromEditor = v; }
+// Set st.mv.fromEditor flag (called by job-ops when closing a job to go back to map)
 
 export async function mvAutoRoute() {
-  var folderKey = _mvCurrentFolder;
+  var folderKey = st.mv.currentFolder;
   var features = _mvAllFeatures.filter(function(f){ return (f.properties.folder || null) === folderKey; });
   var group = { jobs: features.map(function(f){ return f.properties; }) };
   await autoSortFolder(group, folderKey);

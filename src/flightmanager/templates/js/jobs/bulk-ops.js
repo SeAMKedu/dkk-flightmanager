@@ -9,7 +9,7 @@ import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal } from './
 import { closeCardMenu } from './card-menu.js';
 import { openDeleteModal, openMoveModal, openRouteRenameModal } from '../panels/modal-utils.js';
 // Circular — only called at runtime:
-import { getMvMode, getMvSelected, getMvCurrentFolder,
+import { getMvMode,
          mvMerge, mvBulkMove, mvBulkDelete, mvClearSel, mvReload } from '../map/map-view.js';
 import { setForecastBarPdf } from '../forecast/forecast-bar.js';
 import { launchSiteNavPoints, launchSitePoints } from '../forecast/launch-sites.js';
@@ -35,7 +35,7 @@ async function _bulkMoveToFolder(toFolder, metas) {
 }
 
 async function _loadSelectedJobs() {
-  var paths = getMvMode() ? Array.from(getMvSelected()) : Array.from(_selectedJobs);
+  var paths = getMvMode() ? Array.from(st.mv.selected) : Array.from(_selectedJobs);
   if (!paths.length) return null;
   var jobs = [];
   for (var i = 0; i < paths.length; i++) {
@@ -219,7 +219,7 @@ export function exportRoute() {
   var modal = document.getElementById('export-route-modal');
   var desc  = document.getElementById('export-route-desc');
   var err   = document.getElementById('export-route-error');
-  var scope = getMvCurrentFolder() ? 'folder "' + getMvCurrentFolder() + '"' : 'all folders';
+  var scope = st.mv.currentFolder ? 'folder "' + st.mv.currentFolder + '"' : 'all folders';
   desc.textContent = 'Copies .kmz and homes KML for all route jobs in ' + scope + ' to a folder on disk.';
   err.style.display = 'none';
   document.getElementById('export-route-dest').value = '';
@@ -242,7 +242,7 @@ export async function submitExportRoute() {
   btn.textContent = 'Exporting…';
 
   try {
-    var data = await apiPost('/api/export-route', {dest_dir: dest, folder: getMvCurrentFolder()});
+    var data = await apiPost('/api/export-route', {dest_dir: dest, folder: st.mv.currentFolder});
     btn.textContent = '✓ ' + data.copied + ' file' + (data.copied !== 1 ? 's' : '') + ' copied';
     setTimeout(closeExportRouteModal, 1500);
   } catch(e) {

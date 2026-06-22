@@ -97,7 +97,7 @@ document.addEventListener('keydown', function(e) {
 
 map.on('contextmenu', function(e) {
   if (st._mvMode) {
-    import('../map/map-view.js').then(function(m){ if (m.getMvSelected().size > 0) m.mvClearSel(); });
+    import('../map/map-view.js').then(function(m){ if (st.mv.selected.size > 0) m.mvClearSel(); });
     return;
   }
   if (st.editMode || st._bridgeMode || _currentSurveyGeom()) return;

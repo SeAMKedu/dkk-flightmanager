@@ -132,8 +132,7 @@ export function clearMgrsLayer() {
 function _tileColor(i) { return _MGRS_PAL[i % _MGRS_PAL.length]; }
 
 async function _stMgrs(body) {
-  var mv = await import('../map/map-view.js');
-  var folder = mv.getMvCurrentFolder();
+  var folder = st.mv.currentFolder;
   if (_mgrsCache.folder === folder && _mgrsCache.data) {
     body.innerHTML = _mgrsLegend(_mgrsCache.data);
     if (_mgrsCache.data.grid_ok) _drawMgrsTiles(_mgrsCache.data.tiles);

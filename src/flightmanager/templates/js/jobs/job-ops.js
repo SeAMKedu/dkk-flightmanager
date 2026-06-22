@@ -19,14 +19,14 @@ import { restoreTplSettings } from '../panels/tpl-modal.js';
 import { hideExtModifiedNotice } from '../core/event-stream.js';
 // Circular — only called at runtime:
 import { startPreview } from '../editor/preview-runner.js';
-import { closeMapView, getMvMode, setMvFromEditor, openMapView } from '../map/map-view.js';
+import { closeMapView, getMvMode, openMapView } from '../map/map-view.js';
 import { _detachEditListeners } from '../editor/polygon-edit.js';
 import { _clearTakeoff, _renderTakeoffMarker } from '../editor/takeoff.js';
 
 export function openJob(path) {
   if (st.isRunning) return;
   if (getMvMode()) closeMapView();
-  confirmIfDirty(function() { setMvFromEditor(true); _doOpenJob(path); });
+  confirmIfDirty(function() { st.mv.fromEditor = true; _doOpenJob(path); });
 }
 
 export async function _doOpenJob(path) {
