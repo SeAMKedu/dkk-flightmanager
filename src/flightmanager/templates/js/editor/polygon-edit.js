@@ -40,38 +40,54 @@ export function toggleEdit() {
   _attachEditListeners();
 }
 
-export function saveEdit() {
-  if (!st.editMode) return;
+// Single teardown for leaving edit mode: exit bridge mode, re-enable
+// doubleClickZoom, disable per-layer Leaflet editing, clear the edit layers,
+// detach the capture-phase listeners, and drop the draw:editvertex listener.
+// Every "leave edit mode" path routes through this so none can leave the
+// machinery half torn down (the cause of several edit-state-leak bugs — e.g.
+// the bridge/split paths and newJob used to skip the draw:editvertex removal).
+function _teardownEdit() {
+  if (st._bridgeMode) exitBridgeMode();
   st.editMode = false;
+  _editAllPolysDeleted = false;
   map.doubleClickZoom.enable();
-  var liveGeom = _geomFromEditLayers();
   editLayers.eachLayer(function(l) {
     if (l.editing && l.editing.enabled()) l.editing.disable();
   });
   editLayers.clearLayers();
+  _detachEditListeners();
+  if (_editVHandler) { map.off('draw:editvertex', _editVHandler); _editVHandler = null; }
+}
+
+// Abandon an in-progress edit/bridge session without baking geometry or running
+// a preview. Used when navigating away (open another job, new job, discard,
+// bridge/split commit). saveEdit() is the *commit* counterpart.
+export function cancelEdit() {
+  if (!st.editMode && !st._bridgeMode) return;
+  _teardownEdit();
+}
+
+export function saveEdit() {
+  if (!st.editMode) return;
+  var liveGeom = _geomFromEditLayers();      // read before _teardownEdit clears editLayers
+  var allDeleted = _editAllPolysDeleted;     // captured before _teardownEdit resets it
+  _teardownEdit();
   if (liveGeom) {
     document.getElementById('offset').value = 0;
     _setEditedPoly(liveGeom); markDirty();
     _updateSurveyDisplay(liveGeom);
-  } else if (_editAllPolysDeleted) {
-    _editAllPolysDeleted = false;
+  } else if (allDeleted) {
     _clearEditedPoly();
     if (lrs.survey) { map.removeLayer(lrs.survey); lrs.survey = null; }
     if (lrs.vertices) { map.removeLayer(lrs.vertices); lrs.vertices = null; }
     st.previewData = null;
     markDirty();
-    exitBridgeMode();
-    _detachEditListeners();
-    if (_editVHandler) { map.off('draw:editvertex', _editVHandler); _editVHandler = null; }
-    return;
+    return;   // everything deleted: nothing to preview
   } else {
     var _fallback = (st.previewData && st.previewData.survey) || null;
     if (_fallback) _updateSurveyDisplay(_fallback);
     else if (lrs.survey) lrs.survey.addTo(map);
   }
-  exitBridgeMode();
-  _detachEditListeners();
-  if (_editVHandler) { map.off('draw:editvertex', _editVHandler); _editVHandler = null; }
   setTimeout(startPreview, 0);
 }
 
@@ -167,7 +183,7 @@ function _attachEditListeners() {
   c.addEventListener('click',       _editKHandler, true);
 }
 
-export function _detachEditListeners() {
+function _detachEditListeners() {
   var c = map.getContainer();
   if (_editCHandler) { c.removeEventListener('contextmenu', _editCHandler, true); _editCHandler = null; }
   if (_editKHandler) { c.removeEventListener('click',       _editKHandler, true); _editKHandler = null; }

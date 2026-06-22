@@ -1,7 +1,7 @@
 // ── Job open / restore / delete / rename / stale / color ─────────────────────
 
 import { st } from '../core/state.js';
-import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from '../map/map-init.js';
+import { map, lrs, resetLrs, resetMapToUserLocation } from '../map/map-init.js';
 import { escHtml, jobApiUrl } from '../core/utils.js';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../core/api.js';
 import { confirmIfDirty, xbUpdate } from '../core/dirty-tracking.js';
@@ -20,7 +20,7 @@ import { hideExtModifiedNotice } from '../core/event-stream.js';
 // Circular — only called at runtime:
 import { startPreview } from '../editor/preview-runner.js';
 import { closeMapView, getMvMode, openMapView } from '../map/map-view.js';
-import { _detachEditListeners } from '../editor/polygon-edit.js';
+import { cancelEdit } from '../editor/polygon-edit.js';
 import { _clearTakeoff, _renderTakeoffMarker } from '../editor/takeoff.js';
 
 export function openJob(path) {
@@ -39,8 +39,9 @@ export async function _doOpenJob(path) {
     if (st.editor.autoTimer) { clearTimeout(st.editor.autoTimer); st.editor.autoTimer = null; }
     Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
     resetLrs();
-    editLayers.clearLayers();
-    st.editMode = false; _detachEditListeners();
+    // Fully tear down any in-progress polygon edit/bridge mode (single seam in
+    // polygon-edit) so its machinery doesn't linger into the job we're opening.
+    cancelEdit();
     _clearTakeoff();
     if (p && p.takeoff_point_4326) {
       st.takeoff.auto = p.takeoff_point_4326;

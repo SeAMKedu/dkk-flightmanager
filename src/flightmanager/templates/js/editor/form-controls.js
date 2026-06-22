@@ -2,7 +2,7 @@
 
 import { st } from '../core/state.js';
 import { getTplSettings } from '../panels/tpl-modal.js';
-import { map, lrs, editLayers, resetLrs, resetMapToUserLocation } from '../map/map-init.js';
+import { map, lrs, resetLrs, resetMapToUserLocation } from '../map/map-init.js';
 import { markDirty, confirmIfDirty } from '../core/dirty-tracking.js';
 import { redrawRings } from '../map/legend.js';
 import { _clearTakeoff } from './takeoff.js';
@@ -13,7 +13,7 @@ import { closeMapView, getMvMode } from '../map/map-view.js';
 import { hideExtModifiedNotice } from '../core/event-stream.js';
 import { setSpeedSilent, setRouteAngleSilent, _clearRouteLayer, updateRouteStats } from './route-planner.js';
 import { hideStaleNotice, _setColorPicker } from '../jobs/job-ops.js';
-import { _detachEditListeners } from './polygon-edit.js';
+import { cancelEdit } from './polygon-edit.js';
 
 export function defaultJobName() {
   var n = new Date();
@@ -218,9 +218,7 @@ export function _doNewJob() {
   updateFolderHint();
   Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
   resetLrs();
-  editLayers.clearLayers();
-  st.editMode = false;
-  _detachEditListeners();
+  cancelEdit();   // single edit-mode teardown (also re-enables zoom + drops the vertex listener)
   st.previewData = null; _clearEditedPoly(); st.editor.lastPreviewedIds = '';
   st._activeJob = null; st._activeJobFolder = null; st._dirty = false; st._altCap = null;
   _clearTakeoff();

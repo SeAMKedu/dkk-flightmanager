@@ -5,7 +5,7 @@ import { map, editLayers, layerGeom } from '../map/map-init.js';
 import { markDirty } from '../core/dirty-tracking.js';
 import { _setEditedPoly } from './form-controls.js';
 // Circular — only called at runtime:
-import { _detachEditListeners } from './polygon-edit.js';
+import { cancelEdit } from './polygon-edit.js';
 import { jobApiUrl } from '../core/utils.js';
 import { apiPost } from '../core/api.js';
 
@@ -226,13 +226,7 @@ async function _commitBridge() {
       polygon: geom,
       points: _bridgePts.map(function(p){ return p.coord; })
     });
-    exitBridgeMode();
-    if (st.editMode) {
-      st.editMode = false;
-      map.doubleClickZoom.enable();
-      editLayers.clearLayers();
-    }
-    _detachEditListeners();
+    cancelEdit();   // single teardown (also drops the draw:editvertex listener)
     _setEditedPoly(data.geometry); markDirty();
     document.getElementById('rstbtn').disabled = false;
     // _updateSurveyDisplay is in polygon-edit.js — import at runtime
@@ -301,13 +295,7 @@ export async function commitSplit() {
     _showBridgeError('Select points that leave at least 2 vertices on each side');
     return;
   }
-  exitBridgeMode();
-  if (st.editMode) {
-    st.editMode = false;
-    map.doubleClickZoom.enable();
-    editLayers.clearLayers();
-    _detachEditListeners();
-  }
+  cancelEdit();   // single teardown (also drops the draw:editvertex listener)
   try {
     st._ownSavedJob = st._activeJob;
     await apiPost(jobApiUrl(st._activeJob, '/split'), {polygon_a: halves[0], polygon_b: halves[1]});
