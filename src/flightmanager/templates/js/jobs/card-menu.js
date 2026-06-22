@@ -11,8 +11,6 @@ import { openJob } from './job-ops.js';
 import { revealJob, startRename, confirmDeleteJob } from './job-ops.js';
 
 var _openMenu = null;
-export function getOpenMenu() { return _openMenu; }
-export function setOpenMenu(m) { _openMenu = m; }
 
 export function toggleCardMenu(e, j) {
   e.stopPropagation();
