@@ -1,5 +1,6 @@
 // ── Drag-and-drop reordering ──────────────────────────────────────────────────
 
+import { st } from '../core/state.js';
 import { jobApiUrl } from '../core/utils.js';
 import { apiPost, apiPatch } from '../core/api.js';
 import { loadJobsList } from './jobs-panel.js';
@@ -10,8 +11,7 @@ export async function _finishDrop(group, folderKey, targetPath, pos) {
   var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
   var paths = readyJobs.map(function(j){ return j.path; });
 
-  // getDragPath / getDragFolder from jobs-panel
-  var dragPath = (await import('./jobs-panel.js')).getDragPath();
+  var dragPath = st.drag.path;
 
   if (targetPath) {
     var fromIdx = paths.indexOf(dragPath);

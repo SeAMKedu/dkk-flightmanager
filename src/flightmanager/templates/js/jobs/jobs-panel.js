@@ -12,8 +12,6 @@ import { openJob } from './job-ops.js';
 var _jpOpen = localStorage.getItem('jp-open') !== 'false';
 export var _jobsCache = [];
 export var _jobsGroups = [];
-var _dragPath = null;
-var _dragFolder = null;
 
 function _jpStickyRefresh() {
   var list = document.getElementById('jp-list');
@@ -142,7 +140,7 @@ function buildFolderSection(group) {
   jobs.addEventListener('dragover', function(e) { e.preventDefault(); });
   jobs.addEventListener('drop', function(e) {
     e.preventDefault();
-    if (!_dragPath) return;
+    if (!st.drag.path) return;
     import('./drag-reorder.js').then(function(m){ m._finishDrop(group, folderKey, null, 'after'); });
   });
 
@@ -264,8 +262,8 @@ export function buildJobCard(j, group, folderKey) {
   if (isReady && group) {
     card.draggable = true;
     card.addEventListener('dragstart', function(e) {
-      _dragPath = j.path;
-      _dragFolder = folderKey;
+      st.drag.path = j.path;
+      st.drag.folder = folderKey;
       card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
     });
@@ -276,7 +274,7 @@ export function buildJobCard(j, group, folderKey) {
       });
     });
     card.addEventListener('dragover', function(e) {
-      if (!_dragPath || _dragFolder !== folderKey) return;
+      if (!st.drag.path || st.drag.folder !== folderKey) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       var rect = card.getBoundingClientRect();
@@ -292,7 +290,7 @@ export function buildJobCard(j, group, folderKey) {
     card.addEventListener('drop', function(e) {
       e.preventDefault();
       e.stopPropagation();
-      if (!_dragPath || _dragPath === j.path) return;
+      if (!st.drag.path || st.drag.path === j.path) return;
       var rect = card.getBoundingClientRect();
       var pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
       card.classList.remove('drag-over-top', 'drag-over-bottom');
@@ -303,5 +301,3 @@ export function buildJobCard(j, group, folderKey) {
   return card;
 }
 
-export function getDragPath() { return _dragPath; }
-export function getDragFolder() { return _dragFolder; }
