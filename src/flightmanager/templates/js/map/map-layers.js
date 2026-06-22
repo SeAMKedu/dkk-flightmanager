@@ -5,7 +5,7 @@ import { map, lrs, editLayers, resetLrs } from './map-init.js';
 import { _legendUserVis, resetLegend, redrawRings } from './legend.js';
 import { getFitBoundsFlag, setFitBoundsFlag, setLastPreviewedIds,
          getRadiusLinked, setRadiusLinked, idsKey, updateGsd, clearAreaFocus, showError } from '../editor/form-controls.js';
-import { getTakeoffAuto, setTakeoffAuto, getTakeoffUserMoved, _renderTakeoffMarker } from '../editor/takeoff.js';
+import { _renderTakeoffMarker } from '../editor/takeoff.js';
 import { renderStatus } from '../panels/status-panel.js';
 import { _buildVertexLayer, exitBridgeMode } from '../editor/polygon-bridge.js';
 import { updateRouteOverlay, updateRouteStats, _renderAngleControl } from '../editor/route-planner.js';
@@ -58,8 +58,8 @@ export function onPreviewDone(payload) {
     resetLegend(_legendUserVis);
     renderStatus(payload.stats);
     if (payload.takeoff_point_4326) {
-      setTakeoffAuto(payload.takeoff_point_4326);
-      if (!getTakeoffUserMoved()) _renderTakeoffMarker(getTakeoffAuto());
+      st.takeoff.auto = payload.takeoff_point_4326;
+      if (!st.takeoff.userMoved) _renderTakeoffMarker(st.takeoff.auto);
     }
     if (payload.stats) {
       updateRouteStats({

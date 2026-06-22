@@ -6,7 +6,6 @@
 
 import { st } from '../core/state.js';
 import { map } from '../map/map-init.js';
-import { getTakeoffPt, getTakeoffAuto } from '../editor/takeoff.js';
 
 // ── Module state ──────────────────────────────────────────────────────────────
 var _viewer = null;
@@ -367,7 +366,7 @@ function _buildWaypoints(altM) {
     // No home transit in the GeoJSON (simple mode or export without home transits).
     // If a takeoff marker exists, bookend the animation so the drone starts and
     // returns to the takeoff/landing spot.
-    var homePt = getTakeoffPt() || getTakeoffAuto();
+    var homePt = st.takeoff.pt || st.takeoff.auto;
     if (homePt && strips.length > 0) {
       _addPt(homePt[0], homePt[1], _startAlt(strips[0], 0), stripSpeeds[0]);
     }

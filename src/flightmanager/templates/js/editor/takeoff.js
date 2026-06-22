@@ -2,23 +2,16 @@
 
 import { map } from '../map/map-init.js';
 import { markDirty } from '../core/dirty-tracking.js';
+import { st } from '../core/state.js';
 
-var _takeoffAuto = null;        // [lng, lat] suggested by server
-var _takeoffPt   = null;        // [lng, lat] current (auto or user-dragged)
-var _takeoffUserMoved = false;  // true once user drags the marker
+// Shared takeoff state lives in st.takeoff: auto ([lng,lat] suggested by server),
+// pt ([lng,lat] current, auto or user-dragged), userMoved (true once dragged),
+// vlosRange (metres, from /api/config). The Leaflet handles below stay
+// module-local — they're per-view objects, not shared application state.
 var _takeoffMarker = null;      // Leaflet draggable marker
-var _vlosRange   = 300;         // metres, set from /api/config
 var _vlosOuter   = null;        // L.circle — full VLOS range ring
 var _vlosInner   = null;        // L.circle — half VLOS range ring
 var _vlosVisible = false;       // toggled by click on marker
-
-export function getTakeoffAuto() { return _takeoffAuto; }
-export function setTakeoffAuto(v) { _takeoffAuto = v; }
-export function getTakeoffPt() { return _takeoffPt; }
-export function setTakeoffPt(v) { _takeoffPt = v; }
-export function getTakeoffUserMoved() { return _takeoffUserMoved; }
-export function setTakeoffUserMoved(v) { _takeoffUserMoved = v; }
-export function setVlosRange(v) { _vlosRange = v; }
 
 // Helper for map-view.js to clear takeoff without importing private vars
 export function clearTakeoffForMapView() {
@@ -28,8 +21,8 @@ export function clearTakeoffForMapView() {
 
 function _vlosCircleOpts(full) {
   return full
-    ? {radius: _vlosRange,       color:'#ffffff', weight:2,   dashArray:'8 6', fillOpacity:0.08, fillColor:'#ffffff', interactive:false}
-    : {radius: _vlosRange / 2,   color:'#ffffff', weight:1.5, dashArray:'4 5', fillOpacity:0.05, fillColor:'#ffffff', interactive:false};
+    ? {radius: st.takeoff.vlosRange,       color:'#ffffff', weight:2,   dashArray:'8 6', fillOpacity:0.08, fillColor:'#ffffff', interactive:false}
+    : {radius: st.takeoff.vlosRange / 2,   color:'#ffffff', weight:1.5, dashArray:'4 5', fillOpacity:0.05, fillColor:'#ffffff', interactive:false};
 }
 
 function _showVlos(ll) {
@@ -54,7 +47,7 @@ export function _renderTakeoffMarker(lngLat) {
   _hideVlos();
   var row = document.getElementById('leg-takeoff-row');
   if (!lngLat) { if (row) row.style.display = 'none'; return; }
-  _takeoffPt = lngLat;
+  st.takeoff.pt = lngLat;
   var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
     + '<line x1="4" y1="4" x2="20" y2="20" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>'
     + '<line x1="20" y1="4" x2="4" y2="20" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>'
@@ -71,13 +64,13 @@ export function _renderTakeoffMarker(lngLat) {
     if (_vlosVisible) { _hideVlos(); } else { _showVlos(this.getLatLng()); _vlosVisible = true; }
   });
   _takeoffMarker.on('dragstart', function() {
-    _takeoffUserMoved = true;
+    st.takeoff.userMoved = true;
     _showVlos(this.getLatLng()); _vlosVisible = true;
   });
   _takeoffMarker.on('drag', function() { _moveVlos(this.getLatLng()); });
   _takeoffMarker.on('dragend', function() {
     var ll = _takeoffMarker.getLatLng();
-    _takeoffPt = [ll.lng, ll.lat];
+    st.takeoff.pt = [ll.lng, ll.lat];
     _hideVlos();
     markDirty();
   });
@@ -88,13 +81,13 @@ export function _renderTakeoffMarker(lngLat) {
 }
 
 export function recalcTakeoff() {
-  if (!_takeoffAuto) return;
-  _takeoffUserMoved = false;
-  _renderTakeoffMarker(_takeoffAuto);
+  if (!st.takeoff.auto) return;
+  st.takeoff.userMoved = false;
+  _renderTakeoffMarker(st.takeoff.auto);
 }
 
 export function _clearTakeoff() {
-  _takeoffAuto = null; _takeoffPt = null; _takeoffUserMoved = false;
+  st.takeoff.auto = null; st.takeoff.pt = null; st.takeoff.userMoved = false;
   _renderTakeoffMarker(null);
   document.getElementById('takeoff-recalc-btn').disabled = true;
 }

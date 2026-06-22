@@ -22,8 +22,7 @@ import { hideExtModifiedNotice } from '../core/event-stream.js';
 import { startPreview } from '../editor/preview-runner.js';
 import { closeMapView, getMvMode, setMvFromEditor, openMapView } from '../map/map-view.js';
 import { _detachEditListeners } from '../editor/polygon-edit.js';
-import { _clearTakeoff, _renderTakeoffMarker,
-         setTakeoffAuto, setTakeoffUserMoved } from '../editor/takeoff.js';
+import { _clearTakeoff, _renderTakeoffMarker } from '../editor/takeoff.js';
 
 export function openJob(path) {
   if (st.isRunning) return;
@@ -46,8 +45,8 @@ export async function _doOpenJob(path) {
     st.editMode = false; _detachEditListeners();
     _clearTakeoff();
     if (p && p.takeoff_point_4326) {
-      setTakeoffAuto(p.takeoff_point_4326);
-      setTakeoffUserMoved(true);
+      st.takeoff.auto = p.takeoff_point_4326;
+      st.takeoff.userMoved = true;
       _renderTakeoffMarker(p.takeoff_point_4326);
     }
     st._waypointMode = !!(p && p.template_settings && p.template_settings.advanced_mode);
