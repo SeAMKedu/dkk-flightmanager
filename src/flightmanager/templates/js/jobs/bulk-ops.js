@@ -4,12 +4,14 @@ import { st } from '../core/state.js';
 import { jobApiUrl } from '../core/utils.js';
 import { apiGet, apiPost, apiDelete } from '../core/api.js';
 import { showError } from '../editor/form-controls.js';
-import { loadJobsList } from './jobs-panel.js';
-import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal } from './multi-select.js';
+import { loadJobsList, _jobsCache } from './jobs-panel.js';
+import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal,
+         toggleJobSelection } from './multi-select.js';
 import { closeCardMenu } from './card-menu.js';
 import { openDeleteModal, openMoveModal, openRouteRenameModal } from '../panels/modal-utils.js';
+import { clearActiveJob } from './job-ops.js';
 // Circular — only called at runtime:
-import { getMvMode, getMvSelected, getMvCurrentFolder,
+import { getMvMode, mvReplaceSelection,
          mvMerge, mvBulkMove, mvBulkDelete, mvClearSel, mvReload } from '../map/map-view.js';
 import { setForecastBarPdf } from '../forecast/forecast-bar.js';
 import { launchSiteNavPoints, launchSitePoints } from '../forecast/launch-sites.js';
@@ -35,7 +37,7 @@ async function _bulkMoveToFolder(toFolder, metas) {
 }
 
 async function _loadSelectedJobs() {
-  var paths = getMvMode() ? Array.from(getMvSelected()) : Array.from(_selectedJobs);
+  var paths = getMvMode() ? Array.from(st.mv.selected) : Array.from(_selectedJobs);
   if (!paths.length) return null;
   var jobs = [];
   for (var i = 0; i < paths.length; i++) {
@@ -198,29 +200,49 @@ export async function routeRename() {
 async function _doRouteRename(jobs) {
   // Naming convention (YYYYMMDD-NN- prefix, idempotent strip) lives server-side
   // in POST /api/jobs/route_rename so the UI and MCP share one implementation.
+  var mv = getMvMode();
+  // Snapshot the current selection so we can restore it after the paths change.
+  var origSel = mv ? Array.from(st.mv.selected) : Array.from(_selectedJobs);
   var paths = jobs.map(function(j) { return j.path; });
   var activeIdx = jobs.findIndex(function(j) { return st._activeJob === j.path; });
+  var remap = {};   // old path -> new path, for selection restore
   try {
     var data = await apiPost('/api/jobs/route_rename', {paths: paths});
     if (activeIdx >= 0 && data.renamed && data.renamed[activeIdx]) {
       st._activeJob = data.renamed[activeIdx].path;
     }
+    (data.renamed || []).forEach(function(r) {
+      if (r.path !== r.old_path) remap[r.old_path] = r.path;
+    });
   } catch(err) {
     showError('Route rename failed: ' + (err.detail || err.message));
   }
-  clearSelection();
-  await loadJobsList();
-  // Rename changed job paths; in map mode the layer cache (_mvLayers) still
-  // holds the old paths, so rebuild it or folder select-all silently no-ops.
-  if (getMvMode()) await mvReload();
+
+  // Map the previous selection onto the new (renamed) paths.
+  var newSel = origSel.map(function(p){ return remap[p] || p; });
+
+  if (mv) {
+    // Set the new paths first; reloading the map re-applies the selection visuals
+    // (and rebuilds the layer cache that still holds the old, now-stale paths).
+    mvReplaceSelection(newSel);
+    await loadJobsList();
+    await mvReload();
+  } else {
+    clearSelection();
+    await loadJobsList();          // prunes the now-stale old paths
+    var want = new Set(newSel);
+    _jobsCache.forEach(function(j){ if (want.has(j.path)) toggleJobSelection(j, true); });
+  }
 }
 
 export function exportRoute() {
   var modal = document.getElementById('export-route-modal');
   var desc  = document.getElementById('export-route-desc');
   var err   = document.getElementById('export-route-error');
-  var scope = getMvCurrentFolder() ? 'folder "' + getMvCurrentFolder() + '"' : 'all folders';
-  desc.textContent = 'Copies .kmz and homes KML for all route jobs in ' + scope + ' to a folder on disk.';
+  var n = (getMvMode() ? st.mv.selected : _selectedJobs).size;
+  if (!n) { showError('Select one or more jobs to export.'); return; }
+  desc.textContent = 'Copies .kmz and homes KML for the ' + n + ' selected route job'
+    + (n !== 1 ? 's' : '') + ' to a folder on disk.';
   err.style.display = 'none';
   document.getElementById('export-route-dest').value = '';
   modal.classList.add('open');
@@ -237,12 +259,15 @@ export async function submitExportRoute() {
   if (!dest) { err.textContent = 'Please enter a destination path.'; err.style.display = 'block'; return; }
   err.style.display = 'none';
 
+  var result = await _loadSelectedJobs();
+  if (!result) { err.textContent = 'No jobs selected.'; err.style.display = 'block'; return; }
+
   var btn = document.getElementById('export-route-submit');
   btn.disabled = true;
   btn.textContent = 'Exporting…';
 
   try {
-    var data = await apiPost('/api/export-route', {dest_dir: dest, folder: getMvCurrentFolder()});
+    var data = await apiPost('/api/export-route', {dest_dir: dest, paths: result.paths});
     btn.textContent = '✓ ' + data.copied + ' file' + (data.copied !== 1 ? 's' : '') + ' copied';
     setTimeout(closeExportRouteModal, 1500);
   } catch(e) {
@@ -265,7 +290,7 @@ export function bulkDelete() {
       try {
         await apiDelete(jobApiUrl(j.path));
         if (st._activeJob === j.path) {
-          st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
+          clearActiveJob();
           import('../editor/form-controls.js').then(function(m){ m._doNewJob(); });
         }
       } catch(err) { showError(err.detail || ('Delete failed: ' + err.message)); }

@@ -4,7 +4,6 @@ import { st } from '../core/state.js';
 import { map, lrs } from '../map/map-init.js';
 import { apiPost } from '../core/api.js';
 import { markDirty } from '../core/dirty-tracking.js';
-import { getTakeoffPt, getTakeoffAuto } from './takeoff.js';
 import { notifyCesiumRouteReady } from '../three-d/cesium-view.js';
 import { getTplSettings } from '../panels/tpl-modal.js';
 
@@ -384,7 +383,7 @@ function _scheduleAccurateEstimate() {
 
 async function _fetchAccurateEstimate() {
   if (!st.previewData || !st.previewData.survey) return;
-  var home = getTakeoffPt() || getTakeoffAuto();
+  var home = st.takeoff.pt || st.takeoff.auto;
   var tpl = getTplSettings();
   var body = {
     polygon_4326:              st.previewData.survey,

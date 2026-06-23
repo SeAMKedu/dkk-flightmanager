@@ -1,17 +1,17 @@
 // ── Drag-and-drop reordering ──────────────────────────────────────────────────
 
+import { st } from '../core/state.js';
 import { jobApiUrl } from '../core/utils.js';
 import { apiPost, apiPatch } from '../core/api.js';
 import { loadJobsList } from './jobs-panel.js';
 // Circular — only called at runtime:
-import { _mvRefreshRouteData, getMvMode, getMvCurrentFolder } from '../map/map-view.js';
+import { _mvRefreshRouteData, getMvMode } from '../map/map-view.js';
 
 export async function _finishDrop(group, folderKey, targetPath, pos) {
   var readyJobs = (group.jobs || []).filter(function(j){ return j.takeoff_point_4326 && !j.skipped; });
   var paths = readyJobs.map(function(j){ return j.path; });
 
-  // getDragPath / getDragFolder from jobs-panel
-  var dragPath = (await import('./jobs-panel.js')).getDragPath();
+  var dragPath = st.drag.path;
 
   if (targetPath) {
     var fromIdx = paths.indexOf(dragPath);
@@ -25,7 +25,7 @@ export async function _finishDrop(group, folderKey, targetPath, pos) {
   try {
     await apiPost('/api/jobs/reorder', {paths: paths});
     await loadJobsList();
-    if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
+    if (getMvMode() && st.mv.currentFolder === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[reorder]', e); }
 }
 
@@ -137,7 +137,7 @@ async function _doReRouteAll(readyJobs, folderKey) {
   try {
     await apiPost('/api/jobs/reorder', {paths: paths});
     await loadJobsList();
-    if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
+    if (getMvMode() && st.mv.currentFolder === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[autosort]', e); }
 }
 
@@ -159,7 +159,7 @@ async function _doRouteRemaining(routed, unrouted, folderKey) {
       await apiPatch(jobApiUrl(sorted[i].path), {sort_order: maxSo + 1 + i});
     }
     await loadJobsList();
-    if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
+    if (getMvMode() && st.mv.currentFolder === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[route-remaining]', e); }
 }
 
@@ -169,6 +169,6 @@ async function _doClearRoute(routed, folderKey) {
       await apiPatch(jobApiUrl(routed[i].path), {sort_order: null});
     }
     await loadJobsList();
-    if (getMvMode() && getMvCurrentFolder() === folderKey) await _mvRefreshRouteData();
+    if (getMvMode() && st.mv.currentFolder === folderKey) await _mvRefreshRouteData();
   } catch(e) { console.error('[clear-route]', e); }
 }

@@ -33,7 +33,6 @@ import { _initEventStream, showExtModifiedNotice, hideExtModifiedNotice, reloadC
 import { _cpSetFromHex, _syncPaletteActive } from '../panels/color-picker.js';
 import { closeDeleteModal, confirmDeleteAction, closeMoveModal, submitNewFolderMove,
          closeRouteRenameModal, confirmRouteRenameAction } from '../panels/modal-utils.js';
-import { setVlosRange } from '../editor/takeoff.js';
 import { clearMeasurements } from '../map/measurement.js';
 import { initCesiumView, toggle3dView } from '../three-d/cesium-view.js';
 import { openTplModal, closeTplModal, tplTab, initTplModal, initTplDefaults } from '../panels/tpl-modal.js';
@@ -153,7 +152,7 @@ async function init() {
       setSimpManual(parseFloat(cfg.simplify) || 0, true);
     }
     document.getElementById('kochk').checked = cfg.keepout !== false;
-    if (cfg.vlos_range_m) setVlosRange(cfg.vlos_range_m);
+    if (cfg.vlos_range_m) st.takeoff.vlosRange = cfg.vlos_range_m;
     if (cfg.overlap_front_pct) st._cfgOverlapFront = cfg.overlap_front_pct;
     if (cfg.overlap_side_pct)  st._cfgOverlapSide  = cfg.overlap_side_pct;
     if (cfg.auto_flight_speed_ms) {

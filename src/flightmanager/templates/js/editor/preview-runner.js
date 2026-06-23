@@ -4,7 +4,6 @@ import { st } from '../core/state.js';
 import { apiPost } from '../core/api.js';
 import { xbUpdate } from '../core/dirty-tracking.js';
 import { getParams, showError, clearError } from './form-controls.js';
-import { getTakeoffUserMoved, getTakeoffPt } from './takeoff.js';
 import { onPreviewDone } from '../map/map-layers.js';
 import { renderStatus } from '../panels/status-panel.js';
 import { loadJobsList, setJpOpen } from '../jobs/jobs-panel.js';
@@ -17,7 +16,7 @@ export async function startPreview() {
   if (st.polyModified) p.custom_polygon = st.editedPoly;
   // Send the user's pinned/saved takeoff so the route's home legs anchor there;
   // leave null until the user moves it so auto-suggest keeps tracking polygon edits.
-  if (getTakeoffUserMoved()) p.takeoff_point_4326 = getTakeoffPt() || null;
+  if (st.takeoff.userMoved) p.takeoff_point_4326 = st.takeoff.pt || null;
   if (!p.parcel_ids.length && !p.property_ids.length && !p.custom_polygon) {
     showError('Enter at least one parcel ID or property ID.'); return;
   }
@@ -40,7 +39,7 @@ export async function startExport() {
     folder: st._activeJobFolder || null,
     color: colorEl.value !== _DEFAULT_JOB_COLOR ? colorEl.value : null,
     custom_polygon: st.polyModified ? st.editedPoly : null,
-    takeoff_point_4326: (await import('./takeoff.js')).getTakeoffPt() || null
+    takeoff_point_4326: st.takeoff.pt || null
   });
   await runJob('/api/export', p, 'Saving…', onSaveDone);
 }
