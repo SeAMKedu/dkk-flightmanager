@@ -1,5 +1,6 @@
 // ── Multi-select & bulk operations ────────────────────────────────────────────
 
+import { st } from '../core/state.js';
 import { escHtml } from '../core/utils.js';
 import { apiPost } from '../core/api.js';
 import { showError } from '../editor/form-controls.js';
@@ -68,7 +69,10 @@ export function openMergeModal() {
     'Merging: <b>' + names.map(escHtml).join(', ') + '</b><br>'
     + '<span style="font-size:9px;color:#64748b">' + strategyNote + '</span>';
   document.getElementById('merge-name').value = names[0] + '-merged';
-  document.getElementById('merge-folder').value = '';
+  // Default to the sources' shared folder so the merge stays put; blank if mixed.
+  var folders = jobs.map(function(j){ return j.folder || ''; });
+  var common = folders.every(function(f){ return f === folders[0]; }) ? folders[0] : '';
+  document.getElementById('merge-folder').value = common;
   document.getElementById('merge-del-src').checked = false;
   document.getElementById('merge-modal').classList.add('open');
   setTimeout(function(){ document.getElementById('merge-name').focus(); document.getElementById('merge-name').select(); }, 50);
@@ -94,6 +98,11 @@ export async function submitMerge() {
     });
     clearSelection();
     await loadJobsList();
-    if (merged && merged.path) openJob(merged.path);
+    if (merged && merged.path) {
+      // The merge wrote a new job file; mark it as our own save so the
+      // file-watcher doesn't flag the just-opened job as "modified externally".
+      st._ownSavedJob = merged.path;
+      openJob(merged.path);
+    }
   } catch(e) { showError(e.detail || ('Merge failed: ' + e.message)); }
 }

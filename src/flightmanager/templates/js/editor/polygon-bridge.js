@@ -231,6 +231,9 @@ async function _commitBridge() {
     document.getElementById('rstbtn').disabled = false;
     // _updateSurveyDisplay is in polygon-edit.js — import at runtime
     import('./polygon-edit.js').then(function(m){ m._updateSurveyDisplay(data.geometry); });
+    // Re-run the preview so the route/flight path reflects the bridged polygon
+    // instead of going stale until the job is reopened.
+    import('./preview-runner.js').then(function(m){ m.startPreview(); });
   } catch(e) {
     exitBridgeMode();
     _showBridgeError(e.detail || ('Operation failed: ' + e.message));

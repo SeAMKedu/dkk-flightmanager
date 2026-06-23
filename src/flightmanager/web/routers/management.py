@@ -832,6 +832,16 @@ async def split_job(path: str, req: SplitRequest):
     new_params["survey_outline"] = None
     new_params["saved_at"] = now
 
+    # The original keeps its flight-order slot; the new half is inserted right
+    # after it (shifting later siblings). dict(params) copied the original's
+    # sort_order, which would otherwise collide — override it here.
+    orig_so = params.get("sort_order")
+    new_params["sort_order"] = (
+        _open_sort_order_slot(parent_dir, orig_so, exclude={name, new_name})
+        if orig_so is not None
+        else None
+    )
+
     new_dir = parent_dir / new_name
     new_dir.mkdir(parents=True, exist_ok=True)
     save_params(new_dir, new_params)
@@ -1098,6 +1108,33 @@ def _delete_merged_sources(output_dir: Path, job_paths: list[str]) -> None:
                     shutil.rmtree(parent)
 
 
+def _open_sort_order_slot(folder_dir: Path, after: int, exclude: set[str]) -> int:
+    """Free the flight-order slot right after ``after`` in ``folder_dir``.
+
+    Bumps every sibling job whose ``sort_order`` is greater than ``after`` by +1
+    (so nothing collides) and returns ``after + 1`` — the slot the caller should
+    assign to the job being inserted. Jobs in ``exclude`` (by directory name) and
+    those without a ``sort_order`` are left untouched.
+    """
+    for job_dir in folder_dir.iterdir():
+        if (
+            not job_dir.is_dir()
+            or job_dir.name in exclude
+            or job_dir.name.startswith(".")
+        ):
+            continue
+        if not (job_dir / "job_params.json").exists():
+            continue
+        p = load_params(job_dir)
+        if p is None:
+            continue
+        so = p.get("sort_order")
+        if so is not None and so > after:
+            p["sort_order"] = so + 1
+            save_params(job_dir, p)
+    return after + 1
+
+
 @router.post("/api/merge")
 async def merge_jobs(req: MergeRequest):
     if len(req.job_paths) < 2:
@@ -1122,9 +1159,17 @@ async def merge_jobs(req: MergeRequest):
     else:
         merged_params = _merge_by_polygon(all_params, new_name)
 
-    dest_parent = resolve_folder_dir(output_dir, req.folder)
+    # Default the destination to the sources' shared folder (when they all live
+    # in one), so a merge stays put instead of dropping into the output root.
+    src_folders = {
+        (p.rsplit("/", 1)[0] if "/" in p else None) for p in req.job_paths
+    }
+    common_folder = next(iter(src_folders)) if len(src_folders) == 1 else None
+    folder = req.folder or common_folder
+
+    dest_parent = resolve_folder_dir(output_dir, folder)
     dest_parent.mkdir(parents=True, exist_ok=True)
-    if req.folder:
+    if folder:
         marker = dest_parent / ".dkk-folder"
         if not marker.exists():
             marker.write_text("", encoding="utf-8")
@@ -1135,12 +1180,29 @@ async def merge_jobs(req: MergeRequest):
             409, detail=f"A job named '{new_name}' already exists in that location"
         )
     dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # Position the merged job in the flight order, but only when the sources all
+    # live in the destination folder (sort_order is per-folder, so cross-folder
+    # merges have no meaningful slot and stay unrouted).
+    if common_folder is not None and folder == common_folder:
+        src_sort_orders = [
+            p.get("sort_order") for _, p in all_params if p.get("sort_order") is not None
+        ]
+        if src_sort_orders:
+            if req.delete_sources:
+                # Sources vacate their slots — take the group's first one.
+                merged_params["sort_order"] = min(src_sort_orders)
+            else:
+                # Sources stay — insert right after the last of them.
+                merged_params["sort_order"] = _open_sort_order_slot(
+                    dest_parent, max(src_sort_orders), exclude={new_name}
+                )
     save_params(dest_dir, merged_params)
 
     if req.delete_sources:
         _delete_merged_sources(output_dir, req.job_paths)
 
-    card = read_job_card(dest_dir, folder=req.folder)
+    card = read_job_card(dest_dir, folder=folder)
     card["merge_strategy"] = merged_params["merge_strategy"]
     return card
 
