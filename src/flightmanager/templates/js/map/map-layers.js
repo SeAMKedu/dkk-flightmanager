@@ -1,7 +1,7 @@
 // ── Map rendering ─────────────────────────────────────────────────────────────
 
 import { st } from '../core/state.js';
-import { map, lrs, editLayers, resetLrs } from './map-init.js';
+import { map, lrs, editLayers, clearAllLayers } from './map-init.js';
 import { _legendUserVis, resetLegend, redrawRings } from './legend.js';
 import { getRadiusLinked, setRadiusLinked, idsKey, updateGsd, clearAreaFocus, showError } from '../editor/form-controls.js';
 import { _renderTakeoffMarker } from '../editor/takeoff.js';
@@ -92,8 +92,7 @@ export function geomToPolys(geom, style) {
 
 export function renderMap(data) {
   exitBridgeMode();
-  Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  resetLrs();
+  clearAllLayers();
   editLayers.clearLayers();
   if (st._dataAttribution) { map.attributionControl.removeAttribution(st._dataAttribution); st._dataAttribution = ''; }
 

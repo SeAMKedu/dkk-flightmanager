@@ -1,7 +1,7 @@
 // ── Map view (in-place — reuses existing #map, hides #sb) ─────────────────────
 
 import { st } from '../core/state.js';
-import { map, lrs, editLayers, resetLrs } from './map-init.js';
+import { map, editLayers, clearAllLayers } from './map-init.js';
 import { escHtml, jobApiUrl } from '../core/utils.js';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../core/api.js';
 import { showError } from '../editor/form-controls.js';
@@ -53,8 +53,7 @@ export function openMapView(folderFilter) {
   st.mv.currentFolder = folderKey;
   if (st.editMode) saveEdit();
 
-  Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
-  resetLrs();
+  clearAllLayers();
   editLayers.clearLayers();
   clearArrowLayer();
   clearTakeoffForMapView();

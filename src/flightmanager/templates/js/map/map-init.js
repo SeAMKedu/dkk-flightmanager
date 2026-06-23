@@ -91,6 +91,14 @@ export function resetLrs() {
   Object.keys(lrs).forEach(function(k){ lrs[k] = null; });
 }
 
+// Remove every tracked overlay layer from the map and reset the lrs registry.
+// The job-open / new-job / map-view / re-render paths all start from this same
+// clean slate, so it lives in one place rather than being re-spelled at each.
+export function clearAllLayers() {
+  Object.values(lrs).forEach(function(l){ if (l) map.removeLayer(l); });
+  resetLrs();
+}
+
 export function layerGeom(layer) {
   var lls = layer.getLatLngs();
   var ring = (Array.isArray(lls[0]) ? lls[0] : lls).map(function(ll){return [ll.lng,ll.lat];});

@@ -1,7 +1,7 @@
 // ── Job open / restore / delete / rename / stale / color ─────────────────────
 
 import { st } from '../core/state.js';
-import { map, lrs, resetLrs, resetMapToUserLocation } from '../map/map-init.js';
+import { map, lrs, clearAllLayers, resetMapToUserLocation } from '../map/map-init.js';
 import { escHtml, jobApiUrl } from '../core/utils.js';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../core/api.js';
 import { confirmIfDirty, xbUpdate } from '../core/dirty-tracking.js';
@@ -37,8 +37,7 @@ export async function _doOpenJob(path) {
     var p = data.params;
     var name = path.includes('/') ? path.split('/').pop() : path;
     if (st.editor.autoTimer) { clearTimeout(st.editor.autoTimer); st.editor.autoTimer = null; }
-    Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-    resetLrs();
+    clearAllLayers();
     // Fully tear down any in-progress polygon edit/bridge mode (single seam in
     // polygon-edit) so its machinery doesn't linger into the job we're opening.
     cancelEdit();
@@ -168,11 +167,20 @@ export function confirmDeleteJob(j) {
   card.style.alignItems = 'center';
 }
 
+// Reset the "currently-open job" pointers + flags. Single source for clearing
+// active-job state, shared by job delete (single + bulk) and new-job.
+export function clearActiveJob() {
+  st._activeJob = null;
+  st._activeJobFolder = null;
+  st._dirty = false;
+  st._altCap = null;
+}
+
 export async function deleteJob(j) {
   try {
     await apiDelete(jobApiUrl(j.path));
     if (st._activeJob === j.path) {
-      st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
+      clearActiveJob();
       import('../editor/form-controls.js').then(function(m){ m._doNewJob(); });
     }
     await loadJobsList();

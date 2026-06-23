@@ -8,6 +8,7 @@ import { loadJobsList } from './jobs-panel.js';
 import { _selectedJobs, _selectedMeta, clearSelection, openMergeModal } from './multi-select.js';
 import { closeCardMenu } from './card-menu.js';
 import { openDeleteModal, openMoveModal, openRouteRenameModal } from '../panels/modal-utils.js';
+import { clearActiveJob } from './job-ops.js';
 // Circular — only called at runtime:
 import { getMvMode,
          mvMerge, mvBulkMove, mvBulkDelete, mvClearSel, mvReload } from '../map/map-view.js';
@@ -265,7 +266,7 @@ export function bulkDelete() {
       try {
         await apiDelete(jobApiUrl(j.path));
         if (st._activeJob === j.path) {
-          st._activeJob = null; st._activeJobFolder = null; st._dirty = false;
+          clearActiveJob();
           import('../editor/form-controls.js').then(function(m){ m._doNewJob(); });
         }
       } catch(err) { showError(err.detail || ('Delete failed: ' + err.message)); }

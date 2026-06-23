@@ -2,7 +2,7 @@
 
 import { st } from '../core/state.js';
 import { getTplSettings } from '../panels/tpl-modal.js';
-import { map, lrs, resetLrs, resetMapToUserLocation } from '../map/map-init.js';
+import { map, clearAllLayers, resetMapToUserLocation } from '../map/map-init.js';
 import { markDirty, confirmIfDirty } from '../core/dirty-tracking.js';
 import { redrawRings } from '../map/legend.js';
 import { _clearTakeoff } from './takeoff.js';
@@ -12,7 +12,7 @@ import { startPreview } from './preview-runner.js';
 import { closeMapView, getMvMode } from '../map/map-view.js';
 import { hideExtModifiedNotice } from '../core/event-stream.js';
 import { setSpeedSilent, setRouteAngleSilent, _clearRouteLayer, updateRouteStats } from './route-planner.js';
-import { hideStaleNotice, _setColorPicker } from '../jobs/job-ops.js';
+import { hideStaleNotice, _setColorPicker, clearActiveJob } from '../jobs/job-ops.js';
 import { cancelEdit } from './polygon-edit.js';
 
 export function defaultJobName() {
@@ -216,11 +216,10 @@ export function _doNewJob() {
   document.getElementById('pids').value = '';
   document.getElementById('kids').value = '';
   updateFolderHint();
-  Object.values(lrs).forEach(function(l){ if(l) map.removeLayer(l); });
-  resetLrs();
+  clearAllLayers();
   cancelEdit();   // single edit-mode teardown (also re-enables zoom + drops the vertex listener)
   st.previewData = null; _clearEditedPoly(); st.editor.lastPreviewedIds = '';
-  st._activeJob = null; st._activeJobFolder = null; st._dirty = false; st._altCap = null;
+  clearActiveJob();
   _clearTakeoff();
   _setColorPicker(null);
   if (st._dataAttribution) { map.attributionControl.removeAttribution(st._dataAttribution); st._dataAttribution = ''; }
