@@ -1270,10 +1270,10 @@ def _copy_route_job(job_dir: Path, job_name: str, dest_path: Path) -> int:
 
 @router.post("/api/export-route")
 async def export_route(body: dict):
-    """Copy .kmz and homes.kml for every route job to a local directory.
+    """Copy .kmz and homes.kml for the selected route jobs to a local directory.
 
-    Route jobs are those with a takeoff_point_4326 and skipped != true.
-    ``folder`` scopes to a specific group folder; null exports all folders.
+    ``paths`` is the list of selected job paths; only route jobs among them
+    (those with a takeoff_point_4326 and skipped != true) are copied.
     homes.kml is renamed ``<job_name>_homes.kml`` to avoid collisions.
     """
     if not _st.config.output.allow_local_fs:
@@ -1282,7 +1282,9 @@ async def export_route(body: dict):
     if not dest_str:
         raise HTTPException(400, detail="dest_dir is required")
 
-    folder: str | None = body.get("folder")
+    paths = body.get("paths") or []
+    if not paths:
+        raise HTTPException(400, detail="paths is required")
 
     dest_path = Path(dest_str).expanduser().resolve()
     try:
@@ -1293,20 +1295,14 @@ async def export_route(body: dict):
         ) from exc
 
     output_dir = Path(_st.config.output.output_dir).resolve()
-    groups = scan_jobs(output_dir)
 
     copied = 0
-    for group in groups:
-        if folder is None:
-            if group["name"] is not None:
-                continue
-        elif group["name"] != folder:
+    for path in paths:
+        _, _, job_dir = resolve_job_dir(output_dir, path)
+        card = read_job_card(job_dir, folder=None)
+        if not card.get("takeoff_point_4326") or card.get("skipped", False):
             continue
-        for card in group["jobs"]:
-            if not card.get("takeoff_point_4326") or card.get("skipped", False):
-                continue
-            _, _, job_dir = resolve_job_dir(output_dir, card["path"])
-            copied += _copy_route_job(job_dir, card["name"], dest_path)
+        copied += _copy_route_job(job_dir, card["name"], dest_path)
 
     return {"ok": True, "copied": copied, "dest_dir": str(dest_path)}
 

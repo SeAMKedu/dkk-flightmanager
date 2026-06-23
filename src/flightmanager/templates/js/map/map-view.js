@@ -167,10 +167,11 @@ export async function _mvRefreshRouteData() {
 // keeping the current view (no re-fit). Call after an in-place mutation that
 // changes job *paths* (route rename, reorder): otherwise st.mv.layers keeps the
 // old paths and selection silently no-ops (_mvToggleSel can't find the layer)
-// until a full page refresh.
+// until a full page refresh. The selection set is preserved as-is — callers that
+// renamed paths set the new ones first (mvReplaceSelection); _mvApplyFilter
+// re-applies the highlight on rebuild and prunes any paths that no longer exist.
 export async function mvReload() {
   if (!st._mvMode) return;
-  st.mv.selected.clear();
   await _mvLoad(st.mv.currentFolder, true);   // skipFit → preserve the current view
   _mvUpdateSelBar();
 }
@@ -412,6 +413,15 @@ export function mvSelectPaths(paths) {
   (paths || []).forEach(function(p) {
     if (!st.mv.selected.has(p)) _mvToggleSel(p);
   });
+}
+
+// Replace the map-view selection set wholesale, without touching layer styling.
+// Used by route rename (which changes job paths): callers set the new paths here
+// then reload the map; _mvApplyFilter re-applies the selection visuals on rebuild.
+export function mvReplaceSelection(paths) {
+  st.mv.selected.clear();
+  (paths || []).forEach(function(p) { st.mv.selected.add(p); });
+  _mvUpdateSelBar();
 }
 
 export function mvClearSel() {
