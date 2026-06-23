@@ -155,7 +155,11 @@ export async function _mvRefreshRouteData() {
   try {
     var fc = await apiGet('/api/jobs/geojson');
     _mvAllFeatures = fc.features || [];
-    _mvDrawRoute();
+    // Rebuild the polygon layers (not just the route dots): each layer's hover
+    // popup closes over the feature's properties captured in _mvMakeLayer, so a
+    // stale sort_order would otherwise persist in the mouseover after a reorder.
+    // _mvApplyFilter recreates the layers (fresh closures) and redraws the route.
+    _mvApplyFilter(st.mv.currentFolder, true);
   } catch(e) { console.error('[mv-refresh-route]', e); }
 }
 
