@@ -24,12 +24,19 @@ export function showBatteryTimeline(mvAllFeatures, mvSelected, mvCurrentFolder, 
 
   if (routable.length === 0) { hideBatteryTimeline(); return; }
 
-  var droneName = routable[0].properties.drone;
-  var d = st.drones.find(function(x) { return x.name === droneName; }) || st.drones[0];
-  var batCapMin = d ? d.battery_minutes * 0.85 : 20;
+  var batCapMin = batteryCapMinFor(routable);
 
-  var groups = _btComputeGroups(routable, batCapMin);
+  var groups = computeBatteryGroups(routable, batCapMin);
   _btRender(routable, groups, mvLayers);
+}
+
+// Battery capacity (minutes), reserved to 85%, for the drone flying the given
+// routable jobs. Approximates by the first job's drone; mixed-drone routes
+// aren't a real scenario today.
+export function batteryCapMinFor(routable) {
+  var droneName = routable[0] && routable[0].properties.drone;
+  var d = st.drones.find(function(x) { return x.name === droneName; }) || st.drones[0];
+  return d ? d.battery_minutes * 0.85 : 20;
 }
 
 export function hideBatteryTimeline() {
@@ -40,7 +47,7 @@ export function destroyBatteryTimeline() {
   if (_btContainer) { _btContainer.remove(); _btContainer = null; }
 }
 
-function _btComputeGroups(routable, batCapMin) {
+export function computeBatteryGroups(routable, batCapMin) {
   var groups = [[]];
   var chargeLeft = batCapMin;
   routable.forEach(function(f) {

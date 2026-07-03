@@ -3,6 +3,7 @@
 import { escHtml } from '../core/utils.js';
 import { apiGet } from '../core/api.js';
 import { st } from '../core/state.js';
+import { computeBatteryGroups, batteryCapMinFor } from './battery-timeline.js';
 
 var _statBinMap = {};
 
@@ -196,18 +197,33 @@ function _drawMgrsTiles(tiles) {
 }
 
 function _stNormal(active) {
-  var count = active.length, area = 0, hasA = false, time = 0, hasT = false, bats = 0, hasB = false;
+  var count = active.length, area = 0, hasA = false, time = 0, hasT = false;
   active.forEach(function(f) {
     var p = f.properties;
     if (p.area_ha != null)        { area += p.area_ha;        hasA = true; }
     if (p.flight_time_min != null){ time += p.flight_time_min; hasT = true; }
-    if (p.battery_count != null)  { bats += p.battery_count;  hasB = true; }
   });
+  var bats = _stBatteryCount(active);
   var r = '<div class="mv-st-row"><span class="mv-st-lbl">Jobs</span><span>' + count + '</span></div>';
   if (hasA) r += '<div class="mv-st-row"><span class="mv-st-lbl">Total area</span><span>' + area.toFixed(1) + ' ha</span></div>';
   if (hasT) r += '<div class="mv-st-row"><span class="mv-st-lbl">Flight time</span><span>' + _fmtMin(time) + '</span></div>';
-  if (hasB) r += '<div class="mv-st-row"><span class="mv-st-lbl">Batteries</span><span>' + bats + '</span></div>';
+  if (bats != null) r += '<div class="mv-st-row"><span class="mv-st-lbl">Batteries</span><span>' + bats + '</span></div>';
   return r;
+}
+
+// Actual batteries required: packs routable jobs onto the same battery charge
+// wherever the flight-order timeline allows, mirroring the battery timeline
+// display, not a naive per-job sum (that overcounts when several short jobs
+// share one charge).
+function _stBatteryCount(active) {
+  var routable = active.filter(function(f) {
+    var p = f.properties;
+    return p.sort_order != null && !p.skipped && p.flight_time_min != null && p.flight_time_min > 0;
+  });
+  if (!routable.length) return null;
+  routable.sort(function(a, b) { return a.properties.sort_order - b.properties.sort_order; });
+  var batCapMin = batteryCapMinFor(routable);
+  return computeBatteryGroups(routable, batCapMin).length;
 }
 
 function _stSubcat(all, active) {
