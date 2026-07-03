@@ -27,6 +27,7 @@ import { autoSortFolder } from '../jobs/drag-reorder.js';
 // purely internal handles below stay module-local.
 var _mvJobGroup = null;
 var _mvHoverPopup = null;
+var _mvHoverPath = null;
 var _mvHoverTimer = null;
 var _mvAllFeatures = [];
 var _mvRouteSeq = 0;
@@ -248,9 +249,12 @@ function _mvMakeLayer(feature) {
 
     if (p.skipped) { layer.setStyle({opacity: 0.35, fillOpacity: 0.07}); }
 
-    layer.on('mouseover', function(e) {
+    layer.on('mouseover', function() {
       clearTimeout(_mvHoverTimer);
-      _mvOpenHoverPopup(e.latlng, p);
+      // Re-entering the same polygon (e.g. after visiting the popup's buttons)
+      // keeps the popup where it is instead of re-opening it.
+      if (_mvHoverPopup && map.hasLayer(_mvHoverPopup) && _mvHoverPath === p.path) return;
+      _mvOpenHoverPopup(layer, p);
     });
     layer.on('mouseout', function() {
       _mvHoverTimer = setTimeout(function() {
@@ -277,7 +281,69 @@ function _mvDash(p) {
   return null;
 }
 
-function _mvOpenHoverPopup(latlng, p) {
+// Stable popup anchor: the on-screen bounding box of the polygon, clipped to
+// the viewport. The popup opens above its top-centre so it floats over the map
+// just clear of the shape - not at the mouse-entry point, which landed wherever
+// the cursor crossed the edge and often covered the polygon or its neighbours.
+function _mvPopupAnchor(layer) {
+  var size = map.getSize();
+  var b = layer.getBounds();
+  var p1 = map.latLngToContainerPoint(b.getNorthWest());
+  var p2 = map.latLngToContainerPoint(b.getSouthEast());
+  var x0 = Math.max(Math.min(p1.x, p2.x), 0);
+  var x1 = Math.min(Math.max(p1.x, p2.x), size.x);
+  return {
+    x: (x0 + x1) / 2,
+    top: Math.max(Math.min(p1.y, p2.y), 0),
+    bottom: Math.min(Math.max(p1.y, p2.y), size.y),
+  };
+}
+
+// After opening, measure the rendered popup and reposition if needed: clamp
+// horizontally, keep it out from under the forecast bar, and when there is no
+// room above the polygon flip it below (or clamp inside the view as a last
+// resort). Flipped placements hide the tip, which would point at nothing.
+function _mvNudgeHoverPopup(anchor) {
+  var el = _mvHoverPopup && _mvHoverPopup.getElement();
+  if (!el) return;
+  var size = map.getSize();
+  var mapRect = map.getContainer().getBoundingClientRect();
+  var r = el.getBoundingClientRect();
+  var w = r.width;
+  var hAbove = anchor.top - (r.top - mapRect.top); // popup extent above the anchor (incl. tip + offset)
+
+  var x = Math.min(Math.max(anchor.x, w / 2 + 8), size.x - w / 2 - 8);
+
+  var topLimit = 8;
+  var bar = document.getElementById('forecast-bar');
+  if (bar && bar.offsetWidth) {
+    var br = bar.getBoundingClientRect();
+    if (x + w / 2 > br.left - mapRect.left && x - w / 2 < br.right - mapRect.left) {
+      topLimit = Math.max(topLimit, br.bottom - mapRect.top + 6);
+    }
+  }
+  var bottomLimit = size.y - 8;
+  var bt = document.getElementById('battery-timeline');
+  if (bt && bt.offsetWidth && bt.style.display !== 'none') {
+    var tr = bt.getBoundingClientRect();
+    if (x + w / 2 > tr.left - mapRect.left && x - w / 2 < tr.right - mapRect.left) {
+      bottomLimit = Math.min(bottomLimit, tr.top - mapRect.top - 6);
+    }
+  }
+
+  var y = anchor.top, flip = false;
+  if (y - hAbove < topLimit) {
+    var yBelow = Math.max(anchor.bottom + 6, topLimit) + hAbove;
+    if (yBelow <= bottomLimit) { y = yBelow; flip = true; }        // below the polygon
+    else { y = topLimit + hAbove; flip = true; }                   // clamp inside the view
+  }
+  if (flip) el.classList.add('mv-popup-flip');
+  if (x !== anchor.x || y !== anchor.top) {
+    _mvHoverPopup.setLatLng(map.containerPointToLatLng([x, y]));
+  }
+}
+
+function _mvOpenHoverPopup(layer, p) {
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
   var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
     : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
@@ -317,10 +383,13 @@ function _mvOpenHoverPopup(latlng, p) {
     + '<button onclick="mvToggleSkip(\'' + escHtml(p.path) + '\',' + !!p.skipped + ')">' + skipLabel + '</button>'
     + '<button class="mv-tt-del" onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')">✕ Delete</button>'
     + '</div></div>';
+  var anchor = _mvPopupAnchor(layer);
   _mvHoverPopup = L.popup({
     closeButton: false, minWidth: 160, className: 'mv-popup',
-    autoClose: false, closeOnClick: true, offset: [0, -4]
-  }).setLatLng(latlng).setContent(html).openOn(map);
+    autoClose: false, closeOnClick: true, autoPan: false, offset: [0, -6]
+  }).setLatLng(map.containerPointToLatLng([anchor.x, anchor.top])).setContent(html).openOn(map);
+  _mvHoverPath = p.path;
+  _mvNudgeHoverPopup(anchor);
   setTimeout(function() {
     var el = _mvHoverPopup && _mvHoverPopup.getElement();
     if (!el) return;

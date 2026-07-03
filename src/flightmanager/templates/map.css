@@ -96,6 +96,7 @@
 .mv-tt-del:hover{background:#ef4444 !important}
 .mv-popup .leaflet-popup-content-wrapper{background:#1e293b;border:1px solid #334155;color:#f1f5f9;box-shadow:0 4px 12px rgba(0,0,0,.5);border-radius:6px}
 .mv-popup .leaflet-popup-tip{background:#1e293b}
+.mv-popup.mv-popup-flip .leaflet-popup-tip-container{display:none}
 .mv-popup .leaflet-popup-close-button{color:#94a3b8}
 .mv-popup .leaflet-popup-close-button:hover{color:#f1f5f9}
 
