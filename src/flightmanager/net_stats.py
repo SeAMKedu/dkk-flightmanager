@@ -29,6 +29,7 @@ _SOURCES = (
     "zones",
     "satellites",
     "weather",
+    "ntrip",
 )
 
 _LABELS: dict[str, str] = {
@@ -41,6 +42,7 @@ _LABELS: dict[str, str] = {
     "zones": "UAS zones   ",
     "satellites": "Satellites  ",
     "weather": "Weather     ",
+    "ntrip": "RTK/NTRIP   ",
 }
 
 
