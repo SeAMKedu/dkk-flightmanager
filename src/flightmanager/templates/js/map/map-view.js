@@ -8,7 +8,8 @@ import { showError } from '../editor/form-controls.js';
 import { loadJobsList } from '../jobs/jobs-panel.js';
 import { openDeleteModal, openMoveModal } from '../panels/modal-utils.js';
 import { clearTakeoffForMapView, _hideVlos } from '../editor/takeoff.js';
-import { getMvStatColor, statModeColorsJobs, clearMgrsLayer, renderStatPanel } from '../forecast/stat-view.js';
+import { getMvStatColor, statModeColorsJobs, statModeDims, clearMgrsLayer, renderStatPanel } from '../forecast/stat-view.js';
+import { ensureRtkData, clearRtkLayer, rtkPopupHtml } from '../forecast/rtk-stations.js';
 import { showBatteryTimeline, destroyBatteryTimeline } from '../forecast/battery-timeline.js';
 import { showForecastBar, destroyForecastBar, setForecastBarShifted } from '../forecast/forecast-bar.js';
 import { hideCesiumView } from '../three-d/cesium-view.js';
@@ -93,6 +94,7 @@ export function closeMapView() {
   destroyBatteryTimeline();
   destroyForecastBar();
   clearMgrsLayer();
+  clearRtkLayer();
   _mvClearLayers();
   _mvHideDim();
   clearLaunchSites(map);
@@ -212,6 +214,9 @@ function _mvApplyFilter(folderFilter, skipFit) {
   stale.forEach(function(p){ st.mv.selected.delete(p); });
   showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder, st.mv.layers);
   showForecastBar(st.mv.currentFolder);
+  // Prefetch RTK base stations (folder-keyed, cache-first server-side) so the
+  // hover popups can show the nearest station synchronously.
+  ensureRtkData(st.mv.currentFolder).catch(function(e){ console.error('[rtk]', e); });
   renderStatPanel(st.mv.layers.map(function(item) { return item.feature; }), st.mv.selected);
   if (statModeColorsJobs()) {
     st.mv.layers.forEach(function(item) {
@@ -373,12 +378,19 @@ function _mvOpenHoverPopup(layer, p) {
     ? '<span style="display:inline-flex;align-items:center;justify-content:center;background:#f59e0b;color:#000;font-size:9px;font-weight:700;width:16px;height:16px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.25);box-shadow:0 1px 2px rgba(0,0,0,.5);vertical-align:middle;line-height:1;flex-shrink:0">' + (p.sort_order + 1) + '</span>'
     : '';
   var skipLabel = p.skipped ? '⊘ Unskip' : '⊘ Skip';
+  // RTK line: stations within range of the takeoff (or polygon centre), or the
+  // nearest one. Empty string until the folder's station data has loaded.
+  var rtkRef = null;
+  if (p.takeoff_point_4326) rtkRef = [p.takeoff_point_4326[1], p.takeoff_point_4326[0]];
+  else { try { var cc = layer.getBounds().getCenter(); rtkRef = [cc.lat, cc.lng]; } catch {} }
+  var rtkHtml = rtkPopupHtml(st.mv.currentFolder, rtkRef);
   var html = '<div class="mv-tt-inner">'
     + '<div class="mv-tt-name">' + (p.skipped ? '⊘ ' : '') + escHtml(p.name)
     + (p.folder ? ' <span class="mv-tt-folder">(' + escHtml(p.folder) + ')</span>' : '') + '</div>'
     + '<div class="mv-tt-meta">' + (routeIndex ? routeIndex + ' · ' : '') + statusChip + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
     + (flightInfo ? '<div class="mv-tt-flight">' + flightInfo + '</div>' : '')
     + (photoInfo ? '<div class="mv-tt-flight">' + photoInfo + '</div>' : '')
+    + rtkHtml
     + '<div class="mv-tt-actions">'
     + '<button onclick="mvToggleSkip(\'' + escHtml(p.path) + '\',' + !!p.skipped + ')">' + skipLabel + '</button>'
     + '<button class="mv-tt-del" onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')">✕ Delete</button>'
@@ -436,7 +448,7 @@ export function mvDeleteJob(path, name) {
 }
 
 function _mvUpdateDim() {
-  if (statModeColorsJobs() && st._mvMode) { _mvShowDim(); } else { _mvHideDim(); }
+  if (statModeDims() && st._mvMode) { _mvShowDim(); } else { _mvHideDim(); }
 }
 
 function _mvShowDim() {

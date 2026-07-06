@@ -1063,6 +1063,79 @@ def satellites_cmd(
     typer.echo(result.attribution)
 
 
+@app.command("rtk")
+def rtk_cmd(
+    folder: Optional[str] = typer.Option(
+        None, "--folder", help="Only consider jobs in this output subfolder."
+    ),
+    point: Optional[str] = typer.Option(
+        None, "--point", help="Check a single 'lat,lon' point instead of jobs."
+    ),
+    config_path: str = typer.Option("config.toml", "--config", "-c"),
+) -> None:
+    """List nearby NTRIP RTK base stations for the jobs (or a point).
+
+    Polls the casters configured in [rtk.networks] (rtk2go, centipede, ... —
+    sourcetables cached for [rtk].cache_max_age_hours) and prints the stations
+    within [rtk].search_radius_km, nearest first, with the DJI Pilot 2
+    connection settings per network.
+
+      flightmanager rtk --folder my-group
+      flightmanager rtk --point 62.79,22.84
+    """
+    from flightmanager.geo import ntrip
+
+    cfg = _load_cfg(config_path)
+
+    if point:
+        try:
+            lat_s, lon_s = point.split(",")
+            points = [(float(lat_s), float(lon_s))]
+        except ValueError:
+            typer.echo("Error: --point must be 'lat,lon'", err=True)
+            raise typer.Exit(1)
+    else:
+        points = _collect_job_centroids(Path(cfg.output.output_dir), folder)
+        if not points:
+            typer.echo(
+                "No job polygons found. Use --point to test a coordinate.", err=True
+            )
+            raise typer.Exit(1)
+
+    typer.echo(f"Checking {len(points)} location(s)…")
+    payload = ntrip.stations_near(points, cfg.rtk, cfg.cache.cache_dir)
+
+    for net in payload["networks"]:
+        line = f"{net['name']}: {net['caster_host']}:{net['caster_port']}"
+        if net.get("username"):
+            line += f"  (user {net['username']} / pass {net['password']})"
+        if net.get("error"):
+            line += f"  ⚠ {net['error']}"
+        elif net.get("fetched_at"):
+            line += f"  [as of {net['fetched_at']}]"
+        typer.echo(line)
+
+    stations = payload["stations"]
+    if not stations:
+        typer.echo(f"No stations within {cfg.rtk.search_radius_km:.0f} km.")
+        raise typer.Exit(0)
+
+    radius = cfg.rtk.circle_radius_km
+    typer.echo("")
+    typer.echo(f"{'dist':>8}  {'mountpoint':<24} {'network':<12} format")
+    for s in stations:
+        mark = " " if s["dist_km"] <= radius else "!"
+        typer.echo(
+            f"{s['dist_km']:>6.1f}km{mark} {s['mountpoint']:<24} "
+            f"{s['network']:<12} {s['format']}"
+        )
+    typer.echo("")
+    typer.echo(
+        f"'!' = beyond the {radius:.0f} km usable-baseline radius. "
+        "Sourcetables list online stations only - re-check on flight day."
+    )
+
+
 @app.command("mcp")
 def mcp_cmd(
     config_path: str = typer.Option("config.toml", "--config", "-c"),
@@ -1156,6 +1229,12 @@ def report_cmd(
     no_cards: bool = typer.Option(
         False, "--no-cards", help="Packet without the per-job detail cards."
     ),
+    single_rtk: bool = typer.Option(
+        False,
+        "--single-rtk",
+        help="Recommend one RTK base station for the whole packet "
+        "(nearest to the all-jobs circle centre) instead of per launch site.",
+    ),
     out: Optional[str] = typer.Option(None, "--out", "-o", help="Output PDF path."),
     open_pdf: bool = typer.Option(
         False, "--open", help="Open the PDF after generating."
@@ -1197,7 +1276,12 @@ def report_cmd(
     )
     if as_packet:
         pdf = report.render_packet(
-            cfg, entries, folder=folder, basemap=basemap, include_job_cards=not no_cards
+            cfg,
+            entries,
+            folder=folder,
+            basemap=basemap,
+            include_job_cards=not no_cards,
+            single_rtk=single_rtk,
         )
         default_name = f"dkk-{folder or 'packet'}.pdf"
     else:

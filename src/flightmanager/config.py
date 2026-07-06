@@ -376,6 +376,64 @@ class WeatherConfig(BaseModel):
     clear_sky_max_cloud_pct: int = Field(default=30, ge=0, le=100)
 
 
+class RtkNetworkConfig(BaseModel):
+    """One NTRIP caster whose base stations are shown as RTK candidates.
+
+    The username/password are what the pilot enters into DJI Pilot 2 (custom
+    network RTK) — they are also sent as HTTP basic auth when fetching the
+    caster's sourcetable, which public casters simply ignore.
+    """
+
+    name: str = Field(description="Short label shown in the UI/PDF (e.g. 'rtk2go')")
+    # "host:port" or "http://host:port". Sourcetable is fetched from the root path.
+    caster_url: str
+    # rtk2go requires a registered email as username (password is ignored);
+    # centipede is open with centipede/centipede.
+    username: str = ""
+    password: str = ""
+    # Map dot / legend colour for this network's stations. Keep it bright — the
+    # RTK stat mode dims the basemap and muted hues get lost.
+    color: str = "#f97316"
+    # Toggle without removing the entry.
+    enabled: bool = True
+
+
+def _default_rtk_networks() -> list[RtkNetworkConfig]:
+    return [
+        RtkNetworkConfig(
+            name="rtk2go",
+            caster_url="http://rtk2go.com:2101",
+            username="you@example.com",
+            password="none",
+            color="#f97316",
+        ),
+        RtkNetworkConfig(
+            name="centipede",
+            caster_url="http://crtk.net:2101",
+            username="centipede",
+            password="centipede",
+            color="#22c55e",
+        ),
+    ]
+
+
+class RtkConfig(BaseModel):
+    # NTRIP casters polled for base stations. Like [[drones]], adding any
+    # [[rtk.networks]] entry in config.toml replaces the whole default list.
+    networks: list[RtkNetworkConfig] = Field(default_factory=_default_rtk_networks)
+    # Usable RTK baseline radius drawn around each station (dashed circle) and
+    # used as the "nearby" threshold in popups/PDF. ~20 km is the common guidance
+    # for a fixed-quality RTK solution; accuracy degrades with distance.
+    circle_radius_km: float = Field(default=20.0, gt=0)
+    # Stations farther than this from every job are dropped from API/PDF payloads
+    # (rtk2go alone lists thousands of stations worldwide).
+    search_radius_km: float = Field(default=100.0, gt=0)
+    # Sourcetables list only currently-online stations, so this TTL is a liveness
+    # trade-off: community bases churn, keep it hours not days.
+    cache_max_age_hours: int = Field(default=6, gt=0)
+    timeout_s: int = Field(default=20, gt=0)
+
+
 class AppConfig(BaseModel):
     flight: FlightConfig
     home_safety: HomeSafetyConfig = Field(default_factory=HomeSafetyConfig)
@@ -388,6 +446,7 @@ class AppConfig(BaseModel):
     powerlines: PowerLinesConfig = Field(default_factory=PowerLinesConfig)
     satellites: SatellitesConfig = Field(default_factory=SatellitesConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
+    rtk: RtkConfig = Field(default_factory=RtkConfig)
     # Drone / payload profiles.  The built-in list covers common DJI mapping drones.
     # Add [[drones]] entries in config.toml to extend or override.
     default_drone: str = "m3m-ms"
@@ -443,6 +502,7 @@ _SAVE_SECTIONS = [
     "powerlines",
     "satellites",
     "weather",
+    "rtk",
 ]
 
 

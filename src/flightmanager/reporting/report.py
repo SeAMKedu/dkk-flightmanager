@@ -420,7 +420,7 @@ def _card_map(pdf: FPDF, rd: dict, y: float, mml_key: str | None, basemap: str) 
 
 
 def _card_flight_params(
-    pdf: FPDF, manifest: dict, stats: dict, y: float, col_w: float
+    pdf: FPDF, manifest: dict, stats: dict, y: float, col_w: float, rtk_line=None
 ) -> float:
     """Left-column flight-parameters table. Returns the table's bottom y."""
     drone = (
@@ -462,6 +462,8 @@ def _card_flight_params(
             ">1 battery" if _mf(manifest, "battery.over_one_battery") else "1 battery",
         ),
     ]
+    if rtk_line:
+        rows.append(("RTK base", rtk_line))
     return _kv_table(pdf, MARGIN, y, col_w, rows, title="Flight parameters")
 
 
@@ -598,6 +600,7 @@ def build_job_card(
     mml_key: str | None,
     basemap: str = "mml",
     tab=None,
+    rtk_line=None,
 ):
     """Render one job onto a fresh page."""
     pdf.add_page()
@@ -613,7 +616,7 @@ def build_job_card(
 
     # Flight params (left) + DSM/zones (right).
     col_w = (CONTENT_W - 8) / 2
-    left_end = _card_flight_params(pdf, manifest, stats, y, col_w)
+    left_end = _card_flight_params(pdf, manifest, stats, y, col_w, rtk_line=rtk_line)
 
     rx = MARGIN + col_w + 8
     ry = y
@@ -666,6 +669,146 @@ def _mml_key() -> str | None:
     return os.environ.get("MML_API_KEY") or None
 
 
+# ── RTK base stations (NTRIP) ─────────────────────────────────────────────────
+
+
+def _rtk_payload(base_config, points: list[tuple[float, float]]):
+    """NTRIP stations near the given (lat, lon) points, or None (offline / none
+    in range). Cache-first via geo.ntrip; a failure only drops the RTK blocks."""
+    if not points:
+        return None
+    try:
+        from flightmanager.geo import ntrip
+
+        payload = ntrip.stations_near(
+            points, base_config.rtk, base_config.cache.cache_dir
+        )
+    except Exception:
+        return None
+    return payload if payload.get("stations") else None
+
+
+def _rtk_nearest(payload: dict, lat: float, lon: float):
+    from flightmanager.geo import ntrip
+
+    return ntrip.recommend_for_point(payload, lat, lon, payload["circle_radius_km"])
+
+
+def _rtk_net(payload: dict, station: dict) -> dict:
+    return next(
+        (n for n in payload.get("networks", []) if n["name"] == station["network"]), {}
+    )
+
+
+def _rtk_dist_km(station: dict, lat: float, lon: float) -> float:
+    from flightmanager.geo.ntrip import haversine_km
+
+    return round(haversine_km(lat, lon, station["lat"], station["lon"]), 1)
+
+
+def _rtk_line(payload, pt_4326, fixed=None) -> str | None:
+    """One-line station summary for the job-card flight-params table: the fixed
+    packet-wide station when given (``single_rtk``), else the nearest one."""
+    if not payload or not pt_4326:
+        return None
+    if fixed is not None:
+        station = dict(fixed, dist_km=_rtk_dist_km(fixed, pt_4326[1], pt_4326[0]))
+    else:
+        station, _ = _rtk_nearest(payload, pt_4326[1], pt_4326[0])
+    if not station:
+        return None
+    net = _rtk_net(payload, station)
+    host = (
+        f"{net['caster_host']}:{net['caster_port']}" if net.get("caster_host") else ""
+    )
+    far = (
+        "!" if station["dist_km"] > payload["circle_radius_km"] else ""
+    )  # beyond usable baseline
+    return (
+        f"{station['mountpoint']} {station['dist_km']} km{far} "
+        f"({station['network']}{', ' + host if host else ''})"
+    )
+
+
+def _rtk_site_block(pdf: FPDF, payload, site, fixed=None):
+    """RTK recommendation next to the flight announcement on a launch-site page:
+    station + full DJI Pilot 2 settings, alternatives one-liner. Distances are
+    measured from the site's announcement-circle centre (the operating-area
+    centre), not the takeoff dot. With *fixed* (``single_rtk``), every site shows
+    the same packet-wide station instead of its own nearest."""
+    if not payload:
+        return
+    lon, lat = site.circle_center_4326 or site.dot_4326
+    if fixed is not None:
+        nearest, alts = dict(fixed, dist_km=_rtk_dist_km(fixed, lat, lon)), []
+    else:
+        nearest, alts = _rtk_nearest(payload, lat, lon)
+    if not nearest:
+        return
+    net = _rtk_net(payload, nearest)
+    radius = payload["circle_radius_km"]
+    dist = f"{nearest['dist_km']} km"
+    if nearest["dist_km"] > radius:
+        dist += f"  (beyond {radius:.0f} km!)"
+    if fixed is not None:
+        alt_s = "- (single station for the whole packet)"
+    else:
+        alt_s = (
+            ", ".join(f"{a['mountpoint']} {a['dist_km']} km" for a in alts[:3]) or "-"
+        )
+    rows = [
+        ("Mountpoint", f"{nearest['mountpoint']}  ({nearest['network']})"),
+        ("Distance", dist),
+        ("Caster", f"{net.get('caster_host', '-')}:{net.get('caster_port', '')}"),
+        ("Login", f"{net.get('username') or '-'} / {net.get('password') or '-'}"),
+        ("Alternatives", alt_s),
+    ]
+    fetched = (net.get("fetched_at") or "").replace("T", " ")[:16]
+    title = "RTK base station" + (f"  (as of {fetched} UTC)" if fetched else "")
+    _kv_table(
+        pdf,
+        MARGIN + CONTENT_W * 0.52,
+        MARGIN + 132,
+        CONTENT_W * 0.48,
+        rows,
+        title=title,
+    )
+
+
+def _rtk_fixed_station(payload, cards: list[dict]):
+    """The single packet-wide station for ``single_rtk``: nearest to the centre
+    of the smallest enclosing circle over *all* jobs. When the jobs are spread
+    too widely for one base, the per-site distances simply show the beyond-
+    baseline warning."""
+    if not payload:
+        return None
+    from flightmanager.forecasting.launch_sites import enclosing_circle
+
+    fit = enclosing_circle(cards)
+    if fit is None:
+        return None
+    (lon, lat), _radius_m = fit
+    nearest, _ = _rtk_nearest(payload, lat, lon)
+    return nearest
+
+
+def _job_point_4326(params: dict) -> list | None:
+    """Reference [lon, lat] for RTK distance: takeoff, else survey centroid."""
+    pt = params.get("takeoff_point_4326")
+    if pt:
+        return pt
+    from flightmanager.storage.job_store import card_polygon
+
+    poly = card_polygon(params)
+    if not poly:
+        return None
+    try:
+        c = shape(poly).centroid
+        return [c.x, c.y]
+    except Exception:
+        return None
+
+
 def render_job_report(
     base_config, params: dict, manifest: dict, *, basemap: str = "mml", progress_cb=None
 ) -> bytes:
@@ -678,8 +821,12 @@ def render_job_report(
     _p("Analysing survey", 8)
     rd = _render_data_for_job(base_config, params)
     _p("Rendering map", 55)
+    pt = _job_point_4326(params)
+    rtk = _rtk_payload(base_config, [(pt[1], pt[0])] if pt else [])
     pdf = _new_pdf()
-    build_job_card(pdf, params, manifest, rd, _mml_key(), basemap)
+    build_job_card(
+        pdf, params, manifest, rd, _mml_key(), basemap, rtk_line=_rtk_line(rtk, pt)
+    )
     _p("Finalizing", 98)
     return bytes(pdf.output())
 
@@ -938,7 +1085,14 @@ def _overview_map(pdf: FPDF, cards: list[dict], mml_key: str | None, basemap: st
 
 
 def _launch_site_page(
-    pdf: FPDF, site, cards: list[dict], mml_key: str | None, basemap: str, tab=None
+    pdf: FPDF,
+    site,
+    cards: list[dict],
+    mml_key: str | None,
+    basemap: str,
+    tab=None,
+    rtk=None,
+    rtk_fixed=None,
 ):
     pdf.add_page()
     if tab:
@@ -1000,6 +1154,9 @@ def _launch_site_page(
         pdf, MARGIN, MARGIN + 132, CONTENT_W * 0.5, rows, title="Flight announcement"
     )
 
+    # RTK base-station recommendation for this parking spot (right column).
+    _rtk_site_block(pdf, rtk, site, fixed=rtk_fixed)
+
     # Then the member-job list (same style as the overview).
     _flow_job_table(pdf, member_cards, MARGIN + 168, title="Jobs at this site", tab=tab)
 
@@ -1011,6 +1168,7 @@ def render_packet(  # noqa: C901
     folder: str | None = None,
     basemap: str = "mml",
     include_job_cards: bool = True,
+    single_rtk: bool = False,
     progress_cb=None,
 ) -> bytes:
     """Render the full mission packet for the given jobs.
@@ -1019,7 +1177,8 @@ def render_packet(  # noqa: C901
     carry ``path``/``job_name``/``folder``). Layout: cover + overview, then each
     launch site as a divider page (map + announcement + job list) immediately
     followed by its member job cards, then any non-routable jobs. Each launch
-    site's pages carry a thumb-index tab on the page edge.
+    site's pages carry a thumb-index tab on the page edge. ``single_rtk``
+    recommends one packet-wide RTK base station instead of per-site nearest.
     """
 
     def _p(msg, pct):
@@ -1033,6 +1192,15 @@ def render_packet(  # noqa: C901
         (e["params"].get("path") or e["params"].get("job_name")): e for e in job_entries
     }
     _p("Preparing", 3)
+    # One NTRIP lookup covers every launch site + job card (cache-first).
+    # Distances are measured from each site's announcement-circle centre.
+    rtk = _rtk_payload(
+        base_config,
+        [(c[1], c[0]) for s in sites if (c := s.circle_center_4326 or s.dot_4326)],
+    )
+    # single_rtk: one station for the whole packet (nearest to the all-jobs fit
+    # circle centre) so the pilot never re-enters NTRIP settings between sites.
+    fixed = _rtk_fixed_station(rtk, cards) if single_rtk else None
 
     pdf = _new_pdf()
     _cover(pdf, cards, folder)
@@ -1052,7 +1220,9 @@ def render_packet(  # noqa: C901
             "total": len(sites),
         }
         _p(f"Launch site {i + 1}/{len(sites)}", 13 + i / total * 85)
-        _launch_site_page(pdf, site, cards, mml_key, basemap, tab=tab)
+        _launch_site_page(
+            pdf, site, cards, mml_key, basemap, tab=tab, rtk=rtk, rtk_fixed=fixed
+        )
         if include_job_cards:
             for m in site.members:
                 e = entry_by_path.get(m["path"])
@@ -1069,6 +1239,7 @@ def render_packet(  # noqa: C901
                         mml_key,
                         basemap,
                         tab=tab,
+                        rtk_line=_rtk_line(rtk, m.get("takeoff_4326"), fixed=fixed),
                     )
                 except Exception:
                     continue

@@ -307,6 +307,27 @@ _FIELD_META: dict[str, dict[str, Any]] = {
         "unit": "s",
         "description": "Request timeout when fetching the forecast.",
     },
+    # ── RTK / NTRIP ───────────────────────────────────────────────────────────
+    "rtk.circle_radius_km": {
+        "label": "Usable baseline radius",
+        "unit": "km",
+        "description": "Dashed circle drawn around each base station, and the 'nearby' threshold for popups and PDF recommendations.",
+    },
+    "rtk.search_radius_km": {
+        "label": "Search radius",
+        "unit": "km",
+        "description": "Stations farther than this from every job are ignored entirely.",
+    },
+    "rtk.cache_max_age_hours": {
+        "label": "Sourcetable cache age",
+        "unit": "h",
+        "description": "Re-poll a caster's sourcetable when the cached copy is older than this. Sourcetables list online stations only, so keep this short.",
+    },
+    "rtk.timeout_s": {
+        "label": "Caster timeout",
+        "unit": "s",
+        "description": "Request timeout when fetching a sourcetable.",
+    },
 }
 
 # Ordered sections — (section_id, label)
@@ -322,6 +343,7 @@ _SECTIONS_DEF: list[tuple[str, str]] = [
     ("properties", "Properties"),
     ("satellites", "Satellites"),
     ("weather", "Weather"),
+    ("rtk", "RTK / NTRIP"),
 ]
 
 # Fields to hide per section (internal / dangerous to edit via UI)
@@ -340,6 +362,8 @@ _SKIP_FIELDS: dict[str, set[str]] = {
     # URLs and the tracked-satellite list are managed in config.toml directly.
     "satellites": {"omm_url", "tracked"},
     "weather": {"open_meteo_url", "fmi_wfs_url"},
+    # The caster list (urls/credentials/colors) is managed in config.toml directly.
+    "rtk": {"networks"},
 }
 
 
@@ -397,6 +421,7 @@ def _build_sections(config: Any) -> list[dict]:
         PolygonConfig,
         PowerLinesConfig,
         PropertiesConfig,
+        RtkConfig,
         SatellitesConfig,
         WeatherConfig,
         ZonesConfig,
@@ -414,6 +439,7 @@ def _build_sections(config: Any) -> list[dict]:
         "properties": PropertiesConfig,
         "satellites": SatellitesConfig,
         "weather": WeatherConfig,
+        "rtk": RtkConfig,
     }
 
     # ── Drone section (top-level field + enum from loaded drone list) ──────────

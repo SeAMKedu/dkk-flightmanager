@@ -4,6 +4,10 @@ import { escHtml } from '../core/utils.js';
 import { apiGet } from '../core/api.js';
 import { st } from '../core/state.js';
 import { computeBatteryGroups, batteryCapMinFor } from './battery-timeline.js';
+import {
+  ensureRtkData, getRtkData, drawRtkLayer, clearRtkLayer, rtkLegendHtml,
+  fetchFitCircle, drawRtkFit, clearRtkFit, rtkSelectionHtml, hasRtkLayer,
+} from './rtk-stations.js';
 
 var _statBinMap = {};
 
@@ -21,10 +25,16 @@ var _mgrsLayer = null;                       // Leaflet layer group for tile out
 var _mgrsCache = { folder: undefined, data: null };  // folder-stable tile data
 
 
-// Modes that recolor the job polygons (and dim the basemap). 'normal' and 'mgrs'
-// leave jobs in their own colours so they read against the tile/basemap.
+// Modes that recolor the job polygons. 'normal', 'mgrs' and 'rtk' leave jobs in
+// their own colours so they read against the overlay.
 export function statModeColorsJobs() {
-  return st.stat.mode !== 'normal' && st.stat.mode !== 'mgrs';
+  return st.stat.mode !== 'normal' && st.stat.mode !== 'mgrs' && st.stat.mode !== 'rtk';
+}
+
+// Modes that dim the basemap: every recolouring mode, plus 'rtk' (the station
+// dots/rings sit on the basemap, so darkening lifts them the same way).
+export function statModeDims() {
+  return statModeColorsJobs() || st.stat.mode === 'rtk';
 }
 
 export function getMvStatColor(props) {
@@ -43,9 +53,12 @@ export function renderStatPanel(allFeatures, mvSelected) {
   var body = document.getElementById('mv-stat-body');
   if (!body) return;
 
-  // MGRS mode draws a tile overlay + legend (async, folder-keyed); other modes clear it.
-  if (st.stat.mode === 'mgrs') { _stMgrs(body); return; }
+  // MGRS / RTK modes draw their own overlay + legend (async, folder-keyed);
+  // every other mode clears both.
+  if (st.stat.mode === 'mgrs') { clearRtkLayer(); _stMgrs(body); return; }
+  if (st.stat.mode === 'rtk')  { clearMgrsLayer(); _stRtk(body, mvSelected); return; }
   clearMgrsLayer();
+  clearRtkLayer();
 
   var sel = mvSelected && mvSelected.size > 0 ? mvSelected : null;
   var active = sel ? allFeatures.filter(function(f) { return sel.has(f.properties.path); }) : allFeatures;
@@ -194,6 +207,42 @@ function _drawMgrsTiles(tiles) {
     grp.addTo(m.map);
     _mgrsLayer = grp;
   });
+}
+
+// ── RTK base stations mode ────────────────────────────────────────────────────
+
+async function _stRtk(body, mvSelected) {
+  var folder = st.mv.currentFolder;
+  var cached = getRtkData(folder);
+  if (!cached) {
+    body.innerHTML = '<div class="mv-st-nodata">Loading base stations…</div>';
+    try {
+      cached = await ensureRtkData(folder);
+    } catch (e) {
+      console.error('[rtk]', e);
+      body.innerHTML = '<div class="mv-st-nodata">RTK stations unavailable</div>';
+      return;
+    }
+    if (st.stat.mode !== 'rtk') return;  // mode changed while loading
+    drawRtkLayer(cached);
+  } else if (!hasRtkLayer(cached)) {
+    drawRtkLayer(cached);   // re-entering the mode or folder change; kept on selection changes
+  }
+  body.innerHTML = rtkLegendHtml(cached);
+
+  // Selection: fit the smallest enclosing circle over the selected jobs and
+  // measure station distances from its centre (same fitting as launch sites).
+  var sel = mvSelected && mvSelected.size > 0 ? Array.from(mvSelected) : null;
+  if (!sel) { clearRtkFit(); return; }
+  try {
+    var fit = await fetchFitCircle(sel);
+    if (st.stat.mode !== 'rtk') return;
+    if (!st.mv.selected.size) { clearRtkFit(); return; }  // deselected during await
+    drawRtkFit(fit);
+    body.innerHTML = rtkSelectionHtml(cached, fit) + rtkLegendHtml(cached);
+  } catch (e) {
+    console.error('[rtk-fit]', e);
+  }
 }
 
 function _stNormal(active) {

@@ -101,6 +101,7 @@ Progress is streamed to the browser via Server-Sent Events (`GET /api/progress/{
 | Traficom REST | UAS restriction zones | SQLite, 1-day TTL |
 | CelesTrak OMM | Satellite orbital elements (overpass forecast) | JSON per NORAD id, 3-day TTL |
 | Open-Meteo | Daily weather forecast (map-view bar) | JSON per coordinate, 3-hour TTL |
+| NTRIP casters (rtk2go, centipede, …) | RTK base-station sourcetables | JSON per network, 6-hour TTL |
 
 Tile cache keys are `E{xmin}_N{ymin}` on the 1 km EPSG:3067 grid. All writes are atomic. Building and DEM tiles share the same SQLite database as parcel/property geometry records (`cache.py` and `geo_cache.py` share the same DB primitives).
 
@@ -137,6 +138,7 @@ The single-page UI (`templates/ui.html`) loads JavaScript as ES modules from `te
 | `launch-sites.js` | Renders launch-site dots, route line, and flight-announcement circles in map view |
 | `stat-view.js` | Map-view statistics panel and modes (incl. MGRS-tiles overlay) |
 | `forecast-bar.js` | Map-view satellite-overpass + weather forecast bar |
+| `rtk-stations.js` | RTK base-station layer, selection fit circle, and popup lines (NTRIP) |
 | `dirty-tracking.js` | Unsaved-change detection and confirmation prompts |
 
 ## Setup
@@ -269,8 +271,17 @@ flightmanager report a b c --no-cards -o out.pdf        # packet without per-job
 | **Lost area ha** | Same palette as Lost %, but in absolute hectares |
 | **Flight time** | Five-bin light-to-dark green palette; lists 5 longest and 5 shortest jobs |
 | **MGRS tiles** | Draws the Sentinel-2 tile(s) the jobs fall in plus their neighbours, each in a distinct colour, listed in the legend with job counts — shows how close the folder sits to a tile/UTM-zone border. Job polygons keep their own colours. Requires the grid file (see setup step 5). |
+| **RTK base stations** | NTRIP base stations near the jobs, one dot per station coloured by network (rtk2go red, centipede green by default) with a dashed circle at the usable-baseline radius (20 km default). Hovering a dot highlights its coverage circle; the legend lists each network's station count and sourcetable "as of" time plus the nearest stations. With jobs selected, the smallest circle enclosing the selection is drawn (same fitting as a launch-site announcement circle) and station distances are measured from its centre. Job polygons keep their own colours. |
 
-Jobs without data for the selected stat are shown in grey. In the binning modes (everything except **Jobs** and **MGRS tiles**) a dim overlay is added between the base map tiles and the job polygons to improve color contrast. If jobs are selected (Ctrl+click), the stats reflect only the selected set. Click a job name in any list to pan and zoom the map to that polygon and add it to the selection. The selected stat mode is remembered across sessions.
+Jobs without data for the selected stat are shown in grey. In the recolouring and RTK modes (everything except **Jobs** and **MGRS tiles**) a dim overlay is added between the base map tiles and the job polygons to improve color contrast. If jobs are selected (Ctrl+click), the stats reflect only the selected set. Click a job name in any list to pan and zoom the map to that polygon and add it to the selection. The selected stat mode is remembered across sessions.
+
+**RTK base stations (NTRIP):** the casters in `[rtk.networks]` (rtk2go + centipede by default; MML FinnRef/FINPOS or any private caster can be added — the list replaces the defaults like `[[drones]]`) are polled for their sourcetables and cached for a few hours. Besides the stat mode above, the nearest stations (or all within the baseline radius) appear in each job's map-view hover popup, on the PDF launch-site pages as a full DJI Pilot 2 settings block (caster host:port, mountpoint, username, password, distance from the operating-area centre, alternatives), and as an "RTK base" row on the job cards. **A sourcetable only lists stations that are online right now** — community bases come and go, so every surface shows the fetch time and you should re-check on the day of flight. rtk2go expects a registered e-mail as the username; set yours in `config.toml`. CLI:
+
+```bash
+flightmanager rtk --folder my-group          # stations near a folder's jobs
+flightmanager rtk --point 62.79,22.84        # stations near a coordinate
+flightmanager report --folder my-group --packet --single-rtk   # one station for the whole packet
+```
 
 **Satellite & weather forecast bar:** a bar at the top centre of the map view (mirroring the battery timeline) shows a per-day forecast for the folder's grid square: weather (daytime-average icon, temperature, wind, and cloud cover) and which tracked Earth-observation satellites pass overhead that day. Only daytime passes are shown as badges (colour-coded by family — Sentinel green, Landsat orange); night passes collapse into a `+N☾` marker. A pass is marked a **clear-sky window** (yellow glow) when the cloud forecast at its actual overpass time is low, and a whole day is tinted **green ("golden")** when it is both drone-flyable (wind below the configured limit, fair sky) and has a clear-sky pass — i.e. a day you can both fly and expect usable satellite imagery. The header shows the MGRS tile id; collapse the bar with the chevron (state is remembered). Weather comes from Open-Meteo (`[weather]` config; FMI is a planned alternative); thresholds (`clear_sky_max_cloud_pct`, `drone_wind_limit_ms`, the daytime window) and the tracked satellites are configurable in **⚙ Settings** or `config.toml`. If the grid file is absent the weather still shows; only the satellite overpasses are omitted.
 

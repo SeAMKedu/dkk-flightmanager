@@ -259,7 +259,8 @@ _report_jobs: dict = {}
 async def report_start(body: dict):
     """Start a PDF report job. One path -> flight card, several -> mission packet.
 
-    Body: ``{paths: [...], folder?, basemap?, include_job_cards?}`` -> ``{job_id}``.
+    Body: ``{paths: [...], folder?, basemap?, include_job_cards?, single_rtk?}``
+    -> ``{job_id}``.
     Stream progress via ``GET /api/report/progress/{job_id}``, then fetch the PDF
     from ``GET /api/report/result/{job_id}``.
     """
@@ -313,6 +314,7 @@ async def report_start(body: dict):
                     folder=folder,
                     basemap=basemap,
                     include_job_cards=body.get("include_job_cards", True),
+                    single_rtk=body.get("single_rtk", False),
                     progress_cb=progress_cb,
                 )
                 fname = (folder or "jobs") + ".pdf"
@@ -480,6 +482,57 @@ async def mgrs_tiles(folder: str | None = None, paths: str | None = None):
     )
 
 
+@router.get("/api/fit_circle")
+async def fit_circle(folder: str | None = None, paths: str | None = None):
+    """Smallest enclosing circle over the given jobs' polygons + takeoffs.
+
+    Same fitting as a launch site's announcement circle, but over an arbitrary
+    selection — the map view uses it to measure RTK station distances from the
+    selection's centre. Returns ``{center_4326, radius_m, job_count}`` (404 when
+    no job has geometry). Registered before ``/api/jobs/{path:path}``."""
+    from flightmanager.forecasting.launch_sites import enclosing_circle
+
+    output_dir = Path(_st.config.output.output_dir).resolve()
+    wanted = {p for p in (paths or "").split(",") if p.strip()}
+    cards: list[dict] = []
+    for group in scan_jobs(output_dir, with_polygon=True):
+        if not wanted and folder is not None and group["name"] != folder:
+            continue
+        if not wanted and folder is None and group["name"] is not None:
+            continue
+        for card in group["jobs"]:
+            if not wanted or card["path"] in wanted:
+                cards.append(card)
+    fit = enclosing_circle(cards)
+    if fit is None:
+        raise HTTPException(404, detail="No geometry in the given jobs")
+    center, radius_m = fit
+    return {
+        "center_4326": center,
+        "radius_m": round(radius_m, 1),
+        "job_count": len(cards),
+    }
+
+
+@router.get("/api/rtk_stations")
+async def rtk_stations(folder: str | None = None, paths: str | None = None):
+    """NTRIP RTK base stations near the jobs, for the 'RTK base stations' stat
+    view, the map-view popups, and the PDF launch-site pages. Sourcetables are
+    cache-first (RtkConfig.cache_max_age_hours); stations are filtered to
+    search_radius_km of any job centroid. Registered before ``/api/jobs/{path:path}``."""
+    import asyncio
+
+    from flightmanager.geo import ntrip
+
+    centroids, _ = _resolve_centroids(folder, paths)
+    return await asyncio.to_thread(
+        ntrip.stations_near,
+        centroids,
+        _st.config.rtk,
+        _st.config.cache.cache_dir,
+    )
+
+
 @router.post("/api/export/kml")
 async def export_kml(req: ExportKmlRequest):
     """Build a Google-Earth KML for the selected jobs (survey polygons + takeoffs).
@@ -640,9 +693,7 @@ async def route_rename(body: dict):  # noqa: C901
     # Phase 2 — move each temp name to its final flight name; build a result
     # aligned 1:1 with the input paths so callers can remap reliably.
     renamed: list[dict] = []
-    for idx, (orig_path, (job_dir, old_name, new_name)) in enumerate(
-        zip(paths, plan)
-    ):
+    for idx, (orig_path, (job_dir, old_name, new_name)) in enumerate(zip(paths, plan)):
         if idx in staged:
             tmp_dir, tmp_name, final_name = staged[idx]
             info = _rename_job(tmp_dir, tmp_name, final_name, folder0)
@@ -1161,9 +1212,7 @@ async def merge_jobs(req: MergeRequest):
 
     # Default the destination to the sources' shared folder (when they all live
     # in one), so a merge stays put instead of dropping into the output root.
-    src_folders = {
-        (p.rsplit("/", 1)[0] if "/" in p else None) for p in req.job_paths
-    }
+    src_folders = {(p.rsplit("/", 1)[0] if "/" in p else None) for p in req.job_paths}
     common_folder = next(iter(src_folders)) if len(src_folders) == 1 else None
     folder = req.folder or common_folder
 
@@ -1186,7 +1235,9 @@ async def merge_jobs(req: MergeRequest):
     # merges have no meaningful slot and stay unrouted).
     if common_folder is not None and folder == common_folder:
         src_sort_orders = [
-            p.get("sort_order") for _, p in all_params if p.get("sort_order") is not None
+            p.get("sort_order")
+            for _, p in all_params
+            if p.get("sort_order") is not None
         ]
         if src_sort_orders:
             if req.delete_sources:

@@ -118,6 +118,34 @@ def _takeoff_point_3067(card: dict) -> Point:
     return reproject_to_3067(Point(lon, lat))
 
 
+def enclosing_circle(cards: list[dict]) -> tuple[list[float], float] | None:
+    """Smallest enclosing circle over the cards' survey polygons + takeoff points.
+
+    Returns ``([lon, lat] centre, radius_m)``, or None when no card carries any
+    geometry. Cards use the same shape as :func:`cluster_jobs` (``_geometry`` +
+    ``takeoff_point_4326``). Computed in EPSG:3067 like the per-site circle;
+    shared by the launch sites, ``GET /api/fit_circle`` (map-view selection), and
+    the PDF RTK recommendation.
+    """
+    geoms: list[BaseGeometry] = []
+    for c in cards:
+        tp = c.get("takeoff_point_4326")
+        if tp:
+            geoms.append(reproject_to_3067(Point(tp[0], tp[1])))
+        g = c.get("_geometry")
+        if g:
+            try:
+                geoms.append(reproject_to_3067(shape(g)))
+            except Exception:
+                pass
+    if not geoms:
+        return None
+    union = unary_union(geoms)
+    radius_m = float(minimum_bounding_radius(union))
+    center_4326 = reproject_to_4326(minimum_bounding_circle(union).centroid)
+    return [center_4326.x, center_4326.y], radius_m
+
+
 def _build_site(index: int, members: list[dict]) -> LaunchSite:
     """Assemble a :class:`LaunchSite` from its (already grouped) member cards."""
     takeoffs_3067 = [_takeoff_point_3067(c) for c in members]
@@ -126,18 +154,7 @@ def _build_site(index: int, members: list[dict]) -> LaunchSite:
     dot_4326 = reproject_to_4326(Point(cx, cy))
 
     # Smallest enclosing circle over every member polygon + every takeoff point.
-    geoms: list[BaseGeometry] = list(takeoffs_3067)
-    for c in members:
-        g = c.get("_geometry")
-        if g:
-            try:
-                geoms.append(reproject_to_3067(shape(g)))
-            except Exception:
-                pass
-    union = unary_union(geoms)
-    circle = minimum_bounding_circle(union)
-    radius_m = float(minimum_bounding_radius(union))
-    center_4326 = reproject_to_4326(circle.centroid)
+    circle_center, radius_m = enclosing_circle(members)
 
     times = [c.get("flight_time_min") for c in members]
     known = [t for t in times if t is not None]
@@ -174,7 +191,7 @@ def _build_site(index: int, members: list[dict]) -> LaunchSite:
         sort_orders=[c.get("sort_order") for c in members],
         members=member_dicts,
         dot_4326=[dot_4326.x, dot_4326.y],
-        circle_center_4326=[center_4326.x, center_4326.y],
+        circle_center_4326=circle_center,
         radius_m=radius_m,
         flight_time_min=flight_time,
         max_altitude_m=max_alt,

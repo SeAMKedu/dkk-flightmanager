@@ -133,3 +133,21 @@ def test_first_route_index_and_members():
 
 def test_empty_input():
     assert cluster_jobs([]) == []
+
+
+def test_enclosing_circle_covers_all_jobs():
+    from flightmanager.forecasting.launch_sites import enclosing_circle
+
+    # Two jobs 1 km apart (centres); each square is 20 m across -> the fit
+    # circle centre lands midway and the radius is ~510 m (half-spread + half).
+    cards = [_card("a", 0, 0, 0), _card("b", 1, 1000, 0)]
+    center, radius_m = enclosing_circle(cards)
+    assert abs(center[0] - _lon(500)) < 1e-4
+    assert abs(center[1] - LAT0) < 1e-4
+    assert 500 <= radius_m <= 530
+
+
+def test_enclosing_circle_no_geometry():
+    from flightmanager.forecasting.launch_sites import enclosing_circle
+
+    assert enclosing_circle([{"name": "x"}]) is None
