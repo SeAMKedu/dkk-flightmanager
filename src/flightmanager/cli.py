@@ -1173,12 +1173,13 @@ def serve_cmd(
     import threading
     import webbrowser
     import uvicorn
+    from flightmanager import __version__
     from flightmanager.web.server import create_app
 
     cfg = _load_cfg(config_path)
     web_app = create_app(cfg, config_path=str(Path(config_path).resolve()))
     url = f"http://localhost:{port}"
-    typer.echo(f"dkk-flightmanager web UI → {url}")
+    typer.echo(f"dkk-flightmanager v{__version__} web UI → {url}")
     typer.echo("Press Ctrl+C to stop.")
 
     if not no_open:
