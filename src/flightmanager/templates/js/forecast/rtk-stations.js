@@ -14,6 +14,7 @@ var _rtkPromise = null;      // in-flight fetch (deduplicates ensureRtkData call
 var _rtkLayer = null;        // Leaflet layer group: dots + dashed range circles
 var _rtkFitLayer = null;     // selection fit circle + centre crosshair
 var _fitCache = { key: undefined, fit: null };  // last selection's fit circle
+var _rtkMarkers = {};        // "lat_lon" -> {highlight, unhighlight}, for list-row hover
 
 export function getRtkData(folder) {
   return (_rtkCache.folder === folder) ? _rtkCache.data : null;
@@ -41,6 +42,7 @@ export function ensureRtkData(folder) {
 
 export function clearRtkLayer() {
   if (_rtkLayer) { _rtkLayer.remove(); _rtkLayer = null; }
+  _rtkMarkers = {};
   clearRtkFit();
 }
 
@@ -76,16 +78,19 @@ export function drawRtkLayer(data) {
         + s.dist_km + ' km from nearest job',
         { direction: 'top', offset: [0, -6] }
       ).addTo(grp);
-      dot.on('mouseover', function () {
+      function highlight() {
         ring.setStyle({ weight: 3.5, opacity: 1, dashArray: null,
                         fill: true, fillColor: s.color, fillOpacity: 0.18 });
         ring.bringToFront();
         dot.setStyle({ radius: 8.5 });
-      });
-      dot.on('mouseout', function () {
+      }
+      function unhighlight() {
         ring.setStyle({ weight: 2.5, opacity: 1, dashArray: '8,6', fill: false });
         dot.setStyle({ radius: 6.5 });
-      });
+      }
+      dot.on('mouseover', highlight);
+      dot.on('mouseout', unhighlight);
+      _rtkMarkers[s.lat + '_' + s.lon] = { highlight: highlight, unhighlight: unhighlight };
     });
     grp.addTo(m.map);
     _rtkLayer = grp;
@@ -133,9 +138,9 @@ function _asOf(iso) {
   } catch { return iso; }
 }
 
-// Legend for #mv-stat-body: one row per network (count within range + as-of
-// time or fetch error), then the nearest stations as clickable rows.
-export function rtkLegendHtml(data) {
+// Legend header for #mv-stat-body: one row per network (count within range +
+// as-of time or fetch error). Always shown, selection or not.
+export function rtkNetworksHtml(data) {
   var r = '<div class="mv-st-div">Base stations within ' + Math.round(data.search_radius_km) + ' km</div>';
   (data.networks || []).forEach(function (n) {
     var note = n.error ? 'error' : (n.station_count + (n.station_count === 1 ? ' station' : ' stations'));
@@ -147,11 +152,21 @@ export function rtkLegendHtml(data) {
       r += '<div class="mv-st-nodata" style="padding:0 0 4px 18px">as of ' + escHtml(_asOf(n.fetched_at)) + '</div>';
     }
   });
+  return r;
+}
+
+// Nearest stations overall (not tied to any selection) as clickable rows.
+// Shown only when no jobs are selected - rtkSelectionHtml() replaces this
+// with distances from the fitted selection circle otherwise.
+export function rtkNearestHtml(data) {
+  var r = '';
   var sts = (data.stations || []).slice(0, 10);
   if (sts.length) {
     r += '<div class="mv-st-div">Nearest (dashed ring = ' + Math.round(data.circle_radius_km) + ' km)</div>';
     sts.forEach(function (s) {
-      r += '<div class="mv-st-job" onclick="_rtkStationClick(' + s.lat + ',' + s.lon + ')" title="'
+      r += '<div class="mv-st-job" onclick="_rtkStationClick(' + s.lat + ',' + s.lon + ')" '
+        + 'onmouseenter="_rtkStationHover(' + s.lat + ',' + s.lon + ',true)" '
+        + 'onmouseleave="_rtkStationHover(' + s.lat + ',' + s.lon + ',false)" title="'
         + escHtml(s.identifier || s.mountpoint) + '">'
         + '<span class="mv-st-jdot" style="background:' + s.color + '"></span>'
         + '<span class="mv-st-jname">' + escHtml(s.mountpoint) + '</span>'
@@ -160,14 +175,24 @@ export function rtkLegendHtml(data) {
   } else if (!(data.networks || []).some(function (n) { return n.error; })) {
     r += '<div class="mv-st-nodata">No stations in range</div>';
   }
-  r += '<div class="mv-st-nodata">Sourcetables list online stations only - re-check on flight day</div>';
   return r;
+}
+
+export function rtkFooterHtml() {
+  return '<div class="mv-st-nodata">Sourcetables list online stations only - re-check on flight day</div>';
 }
 
 export function _rtkStationClick(lat, lon) {
   import('../map/map-init.js').then(function (m) {
     m.map.setView([lat, lon], Math.max(m.map.getZoom(), 11));
   });
+}
+
+// Mirrors the dot's own mouseover/mouseout highlight, driven from a list row.
+export function _rtkStationHover(lat, lon, on) {
+  var m = _rtkMarkers[lat + '_' + lon];
+  if (!m) return;
+  if (on) m.highlight(); else m.unhighlight();
 }
 
 // Legend section for an active selection: nearest stations measured from the
@@ -182,7 +207,9 @@ export function rtkSelectionHtml(data, fit) {
   if (!ranked.length) return r + '<div class="mv-st-nodata">No stations in range</div>';
   ranked.slice(0, 5).forEach(function (e) {
     var far = e.d > data.circle_radius_km;
-    r += '<div class="mv-st-job" onclick="_rtkStationClick(' + e.s.lat + ',' + e.s.lon + ')" title="'
+    r += '<div class="mv-st-job" onclick="_rtkStationClick(' + e.s.lat + ',' + e.s.lon + ')" '
+      + 'onmouseenter="_rtkStationHover(' + e.s.lat + ',' + e.s.lon + ',true)" '
+      + 'onmouseleave="_rtkStationHover(' + e.s.lat + ',' + e.s.lon + ',false)" title="'
       + escHtml(e.s.identifier || e.s.mountpoint) + '">'
       + '<span class="mv-st-jdot" style="background:' + e.s.color + '"></span>'
       + '<span class="mv-st-jname">' + escHtml(e.s.mountpoint) + '</span>'

@@ -29,7 +29,7 @@ import { bulkMove, bulkDelete, exportKml, exportPdf, openGoogleMaps, routeRename
 import { openBatchDialog, closeBatchDialog, setBatchType, submitBatch } from '../jobs/batch-modal.js';
 import { routeAngleAuto, routeAngleStep, speedAuto, speedStep } from '../editor/route-planner.js';
 import { onStatModeChange, _mvStatJobClick } from '../forecast/stat-view.js';
-import { _rtkStationClick } from '../forecast/rtk-stations.js';
+import { _rtkStationClick, _rtkStationHover } from '../forecast/rtk-stations.js';
 import { _initEventStream, showExtModifiedNotice, hideExtModifiedNotice, reloadCurrentJob } from './event-stream.js';
 import { _cpSetFromHex, _syncPaletteActive } from '../panels/color-picker.js';
 import { closeDeleteModal, confirmDeleteAction, closeMoveModal, submitNewFolderMove,
@@ -107,7 +107,7 @@ Object.assign(window, {
   onStatModeChange, _mvStatJobClick,
 
   // rtk-stations
-  _rtkStationClick,
+  _rtkStationClick, _rtkStationHover,
 
   // event-stream
   showExtModifiedNotice, hideExtModifiedNotice, reloadCurrentJob,

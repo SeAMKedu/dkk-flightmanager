@@ -5,8 +5,9 @@ import { apiGet } from '../core/api.js';
 import { st } from '../core/state.js';
 import { computeBatteryGroups, batteryCapMinFor } from './battery-timeline.js';
 import {
-  ensureRtkData, getRtkData, drawRtkLayer, clearRtkLayer, rtkLegendHtml,
-  fetchFitCircle, drawRtkFit, clearRtkFit, rtkSelectionHtml, hasRtkLayer,
+  ensureRtkData, getRtkData, drawRtkLayer, clearRtkLayer, rtkNetworksHtml,
+  rtkNearestHtml, rtkFooterHtml, fetchFitCircle, drawRtkFit, clearRtkFit,
+  rtkSelectionHtml, hasRtkLayer,
 } from './rtk-stations.js';
 
 var _statBinMap = {};
@@ -228,18 +229,29 @@ async function _stRtk(body, mvSelected) {
   } else if (!hasRtkLayer(cached)) {
     drawRtkLayer(cached);   // re-entering the mode or folder change; kept on selection changes
   }
-  body.innerHTML = rtkLegendHtml(cached);
 
   // Selection: fit the smallest enclosing circle over the selected jobs and
   // measure station distances from its centre (same fitting as launch sites).
+  // Mirrors the other stat modes: the selection-scoped list replaces the
+  // all-stations "Nearest" list rather than sitting alongside it.
   var sel = mvSelected && mvSelected.size > 0 ? Array.from(mvSelected) : null;
-  if (!sel) { clearRtkFit(); return; }
+  if (!sel) {
+    clearRtkFit();
+    body.innerHTML = rtkNetworksHtml(cached) + rtkNearestHtml(cached) + rtkFooterHtml();
+    return;
+  }
+  body.innerHTML = rtkNetworksHtml(cached)
+    + '<div class="mv-st-nodata">Fitting selection…</div>' + rtkFooterHtml();
   try {
     var fit = await fetchFitCircle(sel);
     if (st.stat.mode !== 'rtk') return;
-    if (!st.mv.selected.size) { clearRtkFit(); return; }  // deselected during await
+    if (!st.mv.selected.size) {
+      clearRtkFit();  // deselected during await
+      body.innerHTML = rtkNetworksHtml(cached) + rtkNearestHtml(cached) + rtkFooterHtml();
+      return;
+    }
     drawRtkFit(fit);
-    body.innerHTML = rtkSelectionHtml(cached, fit) + rtkLegendHtml(cached);
+    body.innerHTML = rtkNetworksHtml(cached) + rtkSelectionHtml(cached, fit) + rtkFooterHtml();
   } catch (e) {
     console.error('[rtk-fit]', e);
   }
