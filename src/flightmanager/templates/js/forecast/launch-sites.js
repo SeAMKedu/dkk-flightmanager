@@ -23,7 +23,7 @@
 
 import { escHtml } from '../core/utils.js';
 // Circular (map-view imports this module); only called at runtime:
-import { mvSelectPaths } from '../map/map-view.js';
+import { mvSelectPaths, mvFitPaths } from '../map/map-view.js';
 
 // Zoom at/above which sites split into per-job circles (matches the route
 // chevrons' _ARROW_MIN_ZOOM in route-planner.js).
@@ -268,6 +268,9 @@ function _render() {
     m.on('mouseout', function () { _clearSite(); });
     m.on('click', function (e) {
       mvSelectPaths(s.job_paths);             // select every job flown from this spot
+      // Cap below DETAIL_ZOOM so the fit can't flip the site into per-job
+      // takeoff circles - it should stay showing the launch site itself.
+      mvFitPaths(s.job_paths, DETAIL_ZOOM - 1);
       if (e && e.originalEvent) L.DomEvent.stopPropagation(e);
     });
     return m;

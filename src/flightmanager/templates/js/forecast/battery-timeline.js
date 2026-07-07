@@ -62,34 +62,45 @@ export function computeBatteryGroups(routable, batCapMin) {
   return groups;
 }
 
-function _btPanToJob(path, mvLayers) {
-  var item = mvLayers.find(function(i) { return i.path === path; });
+function _btPanToJob(path) {
+  // Read st.mv.layers fresh: the click listener is attached once, but
+  // st.mv.layers is reassigned on every map rebuild (reorder/rename/refresh),
+  // so a captured array reference would go stale and stop resolving paths.
+  var item = st.mv.layers.find(function(i) { return i.path === path; });
   if (!item) return;
   try {
     import('../map/map-init.js').then(function(m){
-      var b = item.layer.getBounds();
+      var lb = item.layer.getBounds();
+      if (!lb.isValid()) return;
+      // Clone before extending — getBounds() is the layer's live internal
+      // _bounds; extending it in place would permanently inflate this job's
+      // bounds (and each click would grow them further).
+      var bounds = window.L.latLngBounds(lb.getSouthWest(), lb.getNorthEast());
       var tp = item.feature && item.feature.properties.takeoff_point_4326;
-      if (tp) b = b.extend([tp[1], tp[0]]);   // keep the takeoff marker in view too
-      m.map.fitBounds(b, {padding: [80, 80], maxZoom: 17});
+      if (tp) bounds.extend([tp[1], tp[0]]);   // keep the takeoff marker in view too
+      // Cap at 16 (one below launch-sites' DETAIL_ZOOM of 17) so the fit stays
+      // at launch-site-dot level instead of flipping the route layer into
+      // per-job takeoff circles - matches the launch-site dot + stat-job clicks.
+      m.map.fitBounds(bounds, {padding: [80, 80], maxZoom: 16});
     });
   } catch {}
 }
 
-function _btEnsureContainer(mvLayers) {
+function _btEnsureContainer() {
   if (!_btContainer) {
     _btContainer = document.createElement('div');
     _btContainer.id = 'battery-timeline';
     document.getElementById('map').appendChild(_btContainer);
     _btContainer.addEventListener('click', function(e) {
       var path = e.target.dataset && e.target.dataset.path;
-      if (path) _btPanToJob(path, mvLayers);
+      if (path) _btPanToJob(path);
     });
   }
   _btContainer.style.display = 'block';
 }
 
 function _btRender(routable, groups, mvLayers) {
-  _btEnsureContainer(mvLayers);
+  _btEnsureContainer();
 
   var totalMin = routable.reduce(function(s, f) { return s + f.properties.flight_time_min; }, 0);
 

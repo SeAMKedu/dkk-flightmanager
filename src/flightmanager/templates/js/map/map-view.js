@@ -193,8 +193,12 @@ function _mvApplyFilter(folderFilter, skipFit) {
     }
   });
   if (bounds.length && !skipFit) {
-    var combined = bounds[0];
-    bounds.forEach(function(b){ combined = combined.extend(b); });
+    // Clone the first layer's bounds — getBounds() returns the layer's live
+    // internal _bounds object, so extending it in place would permanently
+    // inflate that layer's bounds to span the whole folder (breaking any later
+    // fit-to-that-job).
+    var combined = L.latLngBounds(bounds[0].getSouthWest(), bounds[0].getNorthEast());
+    bounds.forEach(function(b){ combined.extend(b); });
     map.fitBounds(combined, {padding: [40, 40]});
   }
   _mvDrawRoute();
@@ -494,6 +498,32 @@ export function mvSelectPaths(paths) {
   (paths || []).forEach(function(p) {
     if (!st.mv.selected.has(p)) _mvToggleSel(p);
   });
+}
+
+// Zoom/pan to fit the combined bounds of the given job paths' polygons (plus
+// their takeoff points). Used by launch-site dot clicks so the whole site's
+// jobs land in view together, mirroring the single-job zoom from stat-panel
+// and battery-timeline clicks. Callers can cap maxZoom (e.g. launch sites stay
+// below their own detail-view threshold so the fit doesn't flip the dot into
+// per-job takeoff circles).
+export function mvFitPaths(paths, maxZoom) {
+  // Accumulate into a fresh LatLngBounds — never extend a layer's getBounds()
+  // in place (it is the layer's live internal _bounds; mutating it would
+  // permanently inflate that job's bounds).
+  var combined = null;
+  (paths || []).forEach(function(p) {
+    var item = st.mv.layers.find(function(i){ return i.path === p; });
+    if (!item) return;
+    try {
+      var b = item.layer.getBounds();
+      if (!b.isValid()) return;
+      if (!combined) combined = L.latLngBounds(b.getSouthWest(), b.getNorthEast());
+      else combined.extend(b);
+      var tp = item.feature && item.feature.properties.takeoff_point_4326;
+      if (tp) combined.extend([tp[1], tp[0]]);
+    } catch {}
+  });
+  if (combined) map.fitBounds(combined, {padding: [60, 60], maxZoom: maxZoom != null ? maxZoom : 17});
 }
 
 // Replace the map-view selection set wholesale, without touching layer styling.
