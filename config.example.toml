@@ -270,19 +270,21 @@ timeout_s = 20
 # MML's own free FinnRef RTK service (FINPOS, https://www.maanmittauslaitos.fi
 # -> paikannuspalvelut, registration required) works here too — add it as an
 # extra [[rtk.networks]] entry with the credentials you receive.
+#
+# `color` (map dot / legend hue) is optional: omit it and each network is
+# auto-assigned a distinct bright colour by position, so they stay told apart.
+# Set an explicit hex (e.g. color = "#38bdf8") only to override a specific one.
 [[rtk.networks]]
 name = "rtk2go"
 caster_url = "http://rtk2go.com:2101"
 username = "you@example.com"   # rtk2go: any registered email; password is ignored
 password = "none"
-color = "#f97316"
 enabled = true
 [[rtk.networks]]
 name = "centipede"
 caster_url = "http://crtk.net:2101"
 username = "centipede"         # centipede is an open network
 password = "centipede"
-color = "#22c55e"
 enabled = true
 
 # ---------------------------------------------------------------------------

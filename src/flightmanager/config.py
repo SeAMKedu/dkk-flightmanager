@@ -391,11 +391,29 @@ class RtkNetworkConfig(BaseModel):
     # centipede is open with centipede/centipede.
     username: str = ""
     password: str = ""
-    # Map dot / legend colour for this network's stations. Keep it bright — the
-    # RTK stat mode dims the basemap and muted hues get lost.
-    color: str = "#f97316"
+    # Map dot / legend colour for this network's stations. Leave unset to
+    # auto-pick a distinct bright hue from `_RTK_PALETTE` by position (see
+    # RtkConfig._assign_network_colors) so networks are told apart without
+    # hand-picking. Set an explicit hex to override. Kept bright on purpose —
+    # the RTK stat mode dims the basemap and muted hues get lost.
+    color: str | None = None
     # Toggle without removing the entry.
     enabled: bool = True
+
+
+# Bright, well-separated hues (lost-area palette family) auto-assigned to
+# networks that don't set an explicit `color`. Cycles if there are more
+# networks than entries.
+_RTK_PALETTE: tuple[str, ...] = (
+    "#4ade80",  # green
+    "#facc15",  # yellow
+    "#38bdf8",  # sky
+    "#f472b6",  # pink
+    "#a78bfa",  # violet
+    "#fb7185",  # rose
+    "#a3e635",  # lime
+    "#fb923c",  # orange — last, too close to the amber launch-site dots
+)
 
 
 def _default_rtk_networks() -> list[RtkNetworkConfig]:
@@ -405,14 +423,12 @@ def _default_rtk_networks() -> list[RtkNetworkConfig]:
             caster_url="http://rtk2go.com:2101",
             username="you@example.com",
             password="none",
-            color="#f97316",
         ),
         RtkNetworkConfig(
             name="centipede",
             caster_url="http://crtk.net:2101",
             username="centipede",
             password="centipede",
-            color="#22c55e",
         ),
     ]
 
@@ -432,6 +448,22 @@ class RtkConfig(BaseModel):
     # trade-off: community bases churn, keep it hours not days.
     cache_max_age_hours: int = Field(default=6, gt=0)
     timeout_s: int = Field(default=20, gt=0)
+
+    @model_validator(mode="after")
+    def _assign_network_colors(self) -> "RtkConfig":
+        """Give every colour-less network a distinct palette hue by position.
+
+        Runs after networks are parsed, so a config that omits `color` (or omits
+        it on some entries) still renders each network in a different colour
+        instead of collapsing to one. Explicit colours are left untouched; the
+        palette index counts only the auto-assigned ones so they stay distinct.
+        """
+        auto_i = 0
+        for net in self.networks:
+            if not net.color:
+                net.color = _RTK_PALETTE[auto_i % len(_RTK_PALETTE)]
+                auto_i += 1
+        return self
 
 
 class AppConfig(BaseModel):
