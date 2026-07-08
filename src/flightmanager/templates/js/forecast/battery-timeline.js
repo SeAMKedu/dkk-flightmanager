@@ -5,7 +5,7 @@ import { escHtml } from '../core/utils.js';
 
 var _btContainer = null;
 
-export function showBatteryTimeline(mvAllFeatures, mvSelected, mvCurrentFolder, mvLayers) {
+export function showBatteryTimeline(mvAllFeatures, mvSelected, mvCurrentFolder) {
   if (!st._mvMode) return;
 
   var features = mvAllFeatures.filter(function(f) {
@@ -27,7 +27,7 @@ export function showBatteryTimeline(mvAllFeatures, mvSelected, mvCurrentFolder, 
   var batCapMin = batteryCapMinFor(routable);
 
   var groups = computeBatteryGroups(routable, batCapMin);
-  _btRender(routable, groups, mvLayers);
+  _btRender(routable, groups);
 }
 
 // Battery capacity (minutes), reserved to 85%, for the drone flying the given
@@ -99,7 +99,7 @@ function _btEnsureContainer() {
   _btContainer.style.display = 'block';
 }
 
-function _btRender(routable, groups, mvLayers) {
+function _btRender(routable, groups) {
   _btEnsureContainer();
 
   var totalMin = routable.reduce(function(s, f) { return s + f.properties.flight_time_min; }, 0);

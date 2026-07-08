@@ -240,11 +240,19 @@ async function _stRtk(body, mvSelected) {
     body.innerHTML = rtkNetworksHtml(cached) + rtkNearestHtml(cached) + rtkFooterHtml();
     return;
   }
+  var selKey = sel.slice().sort().join(',');
   body.innerHTML = rtkNetworksHtml(cached)
     + '<div class="mv-st-nodata">Fitting selection…</div>' + rtkFooterHtml();
   try {
     var fit = await fetchFitCircle(sel);
     if (st.stat.mode !== 'rtk') return;
+    // Drop a stale result: the selection may have changed during the await, and
+    // fit fetches can resolve out of order (a cache hit for an old selection can
+    // land after a newer network call). A concurrent _stRtk owns the current
+    // selection and will render it — only act when the live selection still
+    // matches the set we fitted.
+    var liveKey = Array.from(st.mv.selected).sort().join(',');
+    if (liveKey !== selKey) return;
     if (!st.mv.selected.size) {
       clearRtkFit();  // deselected during await
       body.innerHTML = rtkNetworksHtml(cached) + rtkNearestHtml(cached) + rtkFooterHtml();

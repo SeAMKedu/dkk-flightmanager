@@ -520,6 +520,11 @@ _SAVE_SKIP: dict[str, set[str]] = {
     "cache": {"tile_size_m", "cache_dir"},
     "satellites": {"omm_url"},
     "weather": {"open_meteo_url", "fmi_wfs_url"},
+    # The caster list (urls/credentials/auto-assigned colors) is managed in
+    # config.toml directly, like [[drones]] — never rewrite it on a settings save
+    # (that would freeze the auto-picked network colours and materialise the
+    # placeholder rtk2go credentials into the file).
+    "rtk": {"networks"},
 }
 
 _SAVE_SECTIONS = [

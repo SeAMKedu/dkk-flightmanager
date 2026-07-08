@@ -216,7 +216,7 @@ function _mvApplyFilter(folderFilter, skipFit) {
     }
   });
   stale.forEach(function(p){ st.mv.selected.delete(p); });
-  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder, st.mv.layers);
+  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder);
   showForecastBar(st.mv.currentFolder);
   // Prefetch RTK base stations (folder-keyed, cache-first server-side) so the
   // hover popups can show the nearest station synchronously.
@@ -561,7 +561,7 @@ function _mvUpdateSelBar() {
     openBtn.style.display = n === 1 ? '' : 'none';
     if (n === 1) openBtn.dataset.path = Array.from(st.mv.selected)[0];
   }
-  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder, st.mv.layers);
+  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder);
   renderStatPanel(st.mv.layers.map(function(item) { return item.feature; }), st.mv.selected);
 }
 
