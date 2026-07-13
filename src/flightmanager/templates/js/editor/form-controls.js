@@ -74,6 +74,9 @@ document.getElementById('hgt').addEventListener('input', function() {
   if (st._altCap !== null && st.previewData) renderStatus(st.previewData.stats);
 });
 document.getElementById('dsel').addEventListener('change', updateGsd);
+// Editing the job name is a savable change on its own (a rename); without this
+// the Save/back guard doesn't fire unless some other field also changed.
+document.getElementById('jname').addEventListener('input', markDirty);
 document.getElementById('warn-radius').addEventListener('input', function() {
   markDirty();
   setRadiusLinked(false);
