@@ -5,7 +5,7 @@ import { escHtml } from '../core/utils.js';
 
 var _btContainer = null;
 
-export function showBatteryTimeline(mvAllFeatures, mvSelected, mvCurrentFolder, mvLayers) {
+export function showBatteryTimeline(mvAllFeatures, mvSelected, mvCurrentFolder) {
   if (!st._mvMode) return;
 
   var features = mvAllFeatures.filter(function(f) {
@@ -24,12 +24,19 @@ export function showBatteryTimeline(mvAllFeatures, mvSelected, mvCurrentFolder, 
 
   if (routable.length === 0) { hideBatteryTimeline(); return; }
 
-  var droneName = routable[0].properties.drone;
-  var d = st.drones.find(function(x) { return x.name === droneName; }) || st.drones[0];
-  var batCapMin = d ? d.battery_minutes * 0.85 : 20;
+  var batCapMin = batteryCapMinFor(routable);
 
-  var groups = _btComputeGroups(routable, batCapMin);
-  _btRender(routable, groups, mvLayers);
+  var groups = computeBatteryGroups(routable, batCapMin);
+  _btRender(routable, groups);
+}
+
+// Battery capacity (minutes), reserved to 85%, for the drone flying the given
+// routable jobs. Approximates by the first job's drone; mixed-drone routes
+// aren't a real scenario today.
+export function batteryCapMinFor(routable) {
+  var droneName = routable[0] && routable[0].properties.drone;
+  var d = st.drones.find(function(x) { return x.name === droneName; }) || st.drones[0];
+  return d ? d.battery_minutes * 0.85 : 20;
 }
 
 export function hideBatteryTimeline() {
@@ -40,7 +47,7 @@ export function destroyBatteryTimeline() {
   if (_btContainer) { _btContainer.remove(); _btContainer = null; }
 }
 
-function _btComputeGroups(routable, batCapMin) {
+export function computeBatteryGroups(routable, batCapMin) {
   var groups = [[]];
   var chargeLeft = batCapMin;
   routable.forEach(function(f) {
@@ -55,34 +62,45 @@ function _btComputeGroups(routable, batCapMin) {
   return groups;
 }
 
-function _btPanToJob(path, mvLayers) {
-  var item = mvLayers.find(function(i) { return i.path === path; });
+function _btPanToJob(path) {
+  // Read st.mv.layers fresh: the click listener is attached once, but
+  // st.mv.layers is reassigned on every map rebuild (reorder/rename/refresh),
+  // so a captured array reference would go stale and stop resolving paths.
+  var item = st.mv.layers.find(function(i) { return i.path === path; });
   if (!item) return;
   try {
     import('../map/map-init.js').then(function(m){
-      var b = item.layer.getBounds();
+      var lb = item.layer.getBounds();
+      if (!lb.isValid()) return;
+      // Clone before extending — getBounds() is the layer's live internal
+      // _bounds; extending it in place would permanently inflate this job's
+      // bounds (and each click would grow them further).
+      var bounds = window.L.latLngBounds(lb.getSouthWest(), lb.getNorthEast());
       var tp = item.feature && item.feature.properties.takeoff_point_4326;
-      if (tp) b = b.extend([tp[1], tp[0]]);   // keep the takeoff marker in view too
-      m.map.fitBounds(b, {padding: [80, 80], maxZoom: 17});
+      if (tp) bounds.extend([tp[1], tp[0]]);   // keep the takeoff marker in view too
+      // Cap at 16 (one below launch-sites' DETAIL_ZOOM of 17) so the fit stays
+      // at launch-site-dot level instead of flipping the route layer into
+      // per-job takeoff circles - matches the launch-site dot + stat-job clicks.
+      m.map.fitBounds(bounds, {padding: [80, 80], maxZoom: 16});
     });
   } catch {}
 }
 
-function _btEnsureContainer(mvLayers) {
+function _btEnsureContainer() {
   if (!_btContainer) {
     _btContainer = document.createElement('div');
     _btContainer.id = 'battery-timeline';
     document.getElementById('map').appendChild(_btContainer);
     _btContainer.addEventListener('click', function(e) {
       var path = e.target.dataset && e.target.dataset.path;
-      if (path) _btPanToJob(path, mvLayers);
+      if (path) _btPanToJob(path);
     });
   }
   _btContainer.style.display = 'block';
 }
 
-function _btRender(routable, groups, mvLayers) {
-  _btEnsureContainer(mvLayers);
+function _btRender(routable, groups) {
+  _btEnsureContainer();
 
   var totalMin = routable.reduce(function(s, f) { return s + f.properties.flight_time_min; }, 0);
 

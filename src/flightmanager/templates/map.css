@@ -79,6 +79,7 @@
 #mv-route-btn.active{color:#3b82f6;border-color:#3b82f6}
 .mgrs-tile-label{color:#475569;font:600 11px/1 sans-serif;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;white-space:nowrap;pointer-events:none}
 .mgrs-tile-label.mgrs-job{color:#0f172a;font-weight:800;font-size:12px}
+.rtk-fit-center{color:#f59e0b;font:800 18px/0 sans-serif;text-shadow:0 1px 3px rgba(0,0,0,.7);transform:translate(-5px,0);pointer-events:none}
 .mv-st-sw-nb{opacity:.5;border:1px dashed rgba(255,255,255,.6)}
 .mv-tooltip{background:#1e293b;border:1px solid #334155;color:#f1f5f9;font-size:12px;line-height:1.5;padding:6px 10px;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:auto}
 .mv-tooltip::before{border-top-color:#334155}
@@ -96,6 +97,7 @@
 .mv-tt-del:hover{background:#ef4444 !important}
 .mv-popup .leaflet-popup-content-wrapper{background:#1e293b;border:1px solid #334155;color:#f1f5f9;box-shadow:0 4px 12px rgba(0,0,0,.5);border-radius:6px}
 .mv-popup .leaflet-popup-tip{background:#1e293b}
+.mv-popup.mv-popup-flip .leaflet-popup-tip-container{display:none}
 .mv-popup .leaflet-popup-close-button{color:#94a3b8}
 .mv-popup .leaflet-popup-close-button:hover{color:#f1f5f9}
 

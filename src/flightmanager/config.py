@@ -376,6 +376,96 @@ class WeatherConfig(BaseModel):
     clear_sky_max_cloud_pct: int = Field(default=30, ge=0, le=100)
 
 
+class RtkNetworkConfig(BaseModel):
+    """One NTRIP caster whose base stations are shown as RTK candidates.
+
+    The username/password are what the pilot enters into DJI Pilot 2 (custom
+    network RTK) — they are also sent as HTTP basic auth when fetching the
+    caster's sourcetable, which public casters simply ignore.
+    """
+
+    name: str = Field(description="Short label shown in the UI/PDF (e.g. 'rtk2go')")
+    # "host:port" or "http://host:port". Sourcetable is fetched from the root path.
+    caster_url: str
+    # rtk2go requires a registered email as username (password is ignored);
+    # centipede is open with centipede/centipede.
+    username: str = ""
+    password: str = ""
+    # Map dot / legend colour for this network's stations. Leave unset to
+    # auto-pick a distinct bright hue from `_RTK_PALETTE` by position (see
+    # RtkConfig._assign_network_colors) so networks are told apart without
+    # hand-picking. Set an explicit hex to override. Kept bright on purpose —
+    # the RTK stat mode dims the basemap and muted hues get lost.
+    color: str | None = None
+    # Toggle without removing the entry.
+    enabled: bool = True
+
+
+# Bright, well-separated hues (lost-area palette family) auto-assigned to
+# networks that don't set an explicit `color`. Cycles if there are more
+# networks than entries.
+_RTK_PALETTE: tuple[str, ...] = (
+    "#4ade80",  # green
+    "#facc15",  # yellow
+    "#38bdf8",  # sky
+    "#f472b6",  # pink
+    "#a78bfa",  # violet
+    "#fb7185",  # rose
+    "#a3e635",  # lime
+    "#fb923c",  # orange — last, too close to the amber launch-site dots
+)
+
+
+def _default_rtk_networks() -> list[RtkNetworkConfig]:
+    return [
+        RtkNetworkConfig(
+            name="rtk2go",
+            caster_url="http://rtk2go.com:2101",
+            username="you@example.com",
+            password="none",
+        ),
+        RtkNetworkConfig(
+            name="centipede",
+            caster_url="http://crtk.net:2101",
+            username="centipede",
+            password="centipede",
+        ),
+    ]
+
+
+class RtkConfig(BaseModel):
+    # NTRIP casters polled for base stations. Like [[drones]], adding any
+    # [[rtk.networks]] entry in config.toml replaces the whole default list.
+    networks: list[RtkNetworkConfig] = Field(default_factory=_default_rtk_networks)
+    # Usable RTK baseline radius drawn around each station (dashed circle) and
+    # used as the "nearby" threshold in popups/PDF. ~20 km is the common guidance
+    # for a fixed-quality RTK solution; accuracy degrades with distance.
+    circle_radius_km: float = Field(default=20.0, gt=0)
+    # Stations farther than this from every job are dropped from API/PDF payloads
+    # (rtk2go alone lists thousands of stations worldwide).
+    search_radius_km: float = Field(default=100.0, gt=0)
+    # Sourcetables list only currently-online stations, so this TTL is a liveness
+    # trade-off: community bases churn, keep it hours not days.
+    cache_max_age_hours: int = Field(default=6, gt=0)
+    timeout_s: int = Field(default=20, gt=0)
+
+    @model_validator(mode="after")
+    def _assign_network_colors(self) -> "RtkConfig":
+        """Give every colour-less network a distinct palette hue by position.
+
+        Runs after networks are parsed, so a config that omits `color` (or omits
+        it on some entries) still renders each network in a different colour
+        instead of collapsing to one. Explicit colours are left untouched; the
+        palette index counts only the auto-assigned ones so they stay distinct.
+        """
+        auto_i = 0
+        for net in self.networks:
+            if not net.color:
+                net.color = _RTK_PALETTE[auto_i % len(_RTK_PALETTE)]
+                auto_i += 1
+        return self
+
+
 class AppConfig(BaseModel):
     flight: FlightConfig
     home_safety: HomeSafetyConfig = Field(default_factory=HomeSafetyConfig)
@@ -388,6 +478,7 @@ class AppConfig(BaseModel):
     powerlines: PowerLinesConfig = Field(default_factory=PowerLinesConfig)
     satellites: SatellitesConfig = Field(default_factory=SatellitesConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
+    rtk: RtkConfig = Field(default_factory=RtkConfig)
     # Drone / payload profiles.  The built-in list covers common DJI mapping drones.
     # Add [[drones]] entries in config.toml to extend or override.
     default_drone: str = "m3m-ms"
@@ -429,6 +520,11 @@ _SAVE_SKIP: dict[str, set[str]] = {
     "cache": {"tile_size_m", "cache_dir"},
     "satellites": {"omm_url"},
     "weather": {"open_meteo_url", "fmi_wfs_url"},
+    # The caster list (urls/credentials/auto-assigned colors) is managed in
+    # config.toml directly, like [[drones]] — never rewrite it on a settings save
+    # (that would freeze the auto-picked network colours and materialise the
+    # placeholder rtk2go credentials into the file).
+    "rtk": {"networks"},
 }
 
 _SAVE_SECTIONS = [
@@ -443,6 +539,7 @@ _SAVE_SECTIONS = [
     "powerlines",
     "satellites",
     "weather",
+    "rtk",
 ]
 
 

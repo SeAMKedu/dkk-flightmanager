@@ -488,37 +488,14 @@ def reorder_route(paths: list[str]) -> str:
 
     Returns ok and the count of jobs ordered.
     """
-    from flightmanager.storage.job_store import (
-        load_params,
-        resolve_job_dir,
-        save_params,
-    )
+    from flightmanager.storage.job_store import apply_route_order
 
-    if not paths:
-        return json.dumps({"ok": True, "ordered": 0})
+    try:
+        folder0, ordered = apply_route_order(_output_dir(), paths)
+    except ValueError as e:
+        return json.dumps({"error": f"{e}."})
 
-    output_dir = _output_dir()
-    folder0, _, _ = resolve_job_dir(output_dir, paths[0])
-    for p in paths[1:]:
-        f, _, _ = resolve_job_dir(output_dir, p)
-        if f != folder0:
-            return json.dumps({"error": "All paths must be in the same folder."})
-
-    parent = output_dir / folder0 if folder0 else output_dir
-    ordered_set = {p: i for i, p in enumerate(paths)}
-
-    siblings = [d for d in parent.iterdir() if d.is_dir()] if parent.exists() else []
-    for job_dir in siblings:
-        data = load_params(job_dir)
-        if data is None:
-            continue
-        job_path = f"{folder0}/{job_dir.name}" if folder0 else job_dir.name
-        new_so = ordered_set.get(job_path)
-        if data.get("sort_order") != new_so:
-            data["sort_order"] = new_so
-            save_params(job_dir, data)
-
-    return json.dumps({"ok": True, "folder": folder0, "ordered": len(paths)})
+    return json.dumps({"ok": True, "folder": folder0, "ordered": ordered})
 
 
 @mcp.tool()
@@ -909,7 +886,11 @@ def scan_stale(folder: str | None = None) -> str:
                     }
                 )
     return json.dumps(
-        {"pipeline_version": PIPELINE_VERSION, "stale_count": len(stale), "stale": stale},
+        {
+            "pipeline_version": PIPELINE_VERSION,
+            "stale_count": len(stale),
+            "stale": stale,
+        },
         ensure_ascii=False,
         indent=2,
     )
@@ -1089,7 +1070,11 @@ def clone_job(path: str) -> str:
     """
     import shutil
 
-    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+    from flightmanager.storage.job_store import (
+        load_params,
+        resolve_job_dir,
+        save_params,
+    )
 
     folder, name, src_dir = resolve_job_dir(_output_dir(), path)
     if not src_dir.is_dir():
@@ -1128,7 +1113,11 @@ def set_job_color(path: str, color: str | None) -> str:
 
     Returns ok on success.
     """
-    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+    from flightmanager.storage.job_store import (
+        load_params,
+        resolve_job_dir,
+        save_params,
+    )
 
     _, _, job_dir = resolve_job_dir(_output_dir(), path)
     params = load_params(job_dir) if job_dir.is_dir() else None
@@ -1149,7 +1138,11 @@ def set_job_skipped(path: str, skipped: bool) -> str:
 
     Returns ok on success.
     """
-    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+    from flightmanager.storage.job_store import (
+        load_params,
+        resolve_job_dir,
+        save_params,
+    )
 
     _, _, job_dir = resolve_job_dir(_output_dir(), path)
     params = load_params(job_dir) if job_dir.is_dir() else None
@@ -1241,7 +1234,7 @@ def generate_report(
     Returns the written file path and size.
     """
     from flightmanager.reporting import report
-    from flightmanager.web.routers.management import _load_job_entry
+    from flightmanager.web.routers.insights import _load_job_entry
 
     if not paths:
         return json.dumps({"error": "paths list is empty."})
@@ -1274,7 +1267,12 @@ def generate_report(
     except OSError as e:
         return json.dumps({"error": f"Could not write PDF: {e}"})
     return json.dumps(
-        {"ok": True, "path": str(dest), "size_kb": len(pdf) // 1024, "jobs": len(entries)}
+        {
+            "ok": True,
+            "path": str(dest),
+            "size_kb": len(pdf) // 1024,
+            "jobs": len(entries),
+        }
     )
 
 

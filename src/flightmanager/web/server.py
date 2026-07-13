@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 import flightmanager.web._server_state as _st
 from flightmanager.storage import job_store
 from flightmanager.config import AppConfig
-from flightmanager.web.routers import execution, management, settings
+from flightmanager.web.routers import execution, insights, management, settings
 
 # server.py lives in flightmanager/web/; templates are at flightmanager/templates.
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
@@ -259,6 +259,10 @@ def create_app(config: AppConfig, config_path: str | None = None) -> FastAPI:  #
         }
 
     app.include_router(execution.router)
+    # insights before management: its /api/jobs/{path}/report.pdf, /api/mgrs_tiles,
+    # /api/fit_circle, /api/rtk_stations, /api/launch_sites must match before
+    # management's greedy /api/jobs/{path:path} catch-all.
+    app.include_router(insights.router)
     app.include_router(management.router)
     app.include_router(settings.router)
 

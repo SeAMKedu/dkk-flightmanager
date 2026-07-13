@@ -242,6 +242,51 @@ drone_wind_limit_ms = 10.0
 # Optional: drone max wind limit (m/s) for the future "golden window" highlight.
 # drone_wind_limit_ms = 12.0
 
+[rtk]
+# NTRIP network RTK base-station lookup: the configured casters' sourcetables are
+# polled and nearby base stations shown on the map view ("RTK base stations" stat
+# mode), in job popups, and on PDF launch-site pages with the DJI Pilot 2
+# connection settings (host, port, mountpoint, username, password).
+#
+# NOTE: a sourcetable lists only stations that are online *right now* — community
+# bases (rtk2go) churn, so re-check on the day of flight. Payloads carry an
+# "as of" timestamp.
+#
+# Usable RTK baseline radius (km): dashed circle drawn around each station, and
+# the "nearby" threshold for popups and PDF recommendations.
+circle_radius_km = 20.0
+# Stations farther than this (km) from every job are ignored entirely.
+search_radius_km = 100.0
+# Re-fetch a cached sourcetable if older than this many hours.
+cache_max_age_hours = 6
+# Caster request timeout (seconds).
+timeout_s = 20
+#
+# Casters to poll. Defaults (rtk2go + centipede) are applied if this list is
+# omitted; adding any [[rtk.networks]] entry replaces the whole default list, so
+# copy across the built-ins you still want. username/password are what the pilot
+# enters into DJI Pilot 2 — set your own registered rtk2go email there.
+#
+# MML's own free FinnRef RTK service (FINPOS, https://www.maanmittauslaitos.fi
+# -> paikannuspalvelut, registration required) works here too — add it as an
+# extra [[rtk.networks]] entry with the credentials you receive.
+#
+# `color` (map dot / legend hue) is optional: omit it and each network is
+# auto-assigned a distinct bright colour by position, so they stay told apart.
+# Set an explicit hex (e.g. color = "#38bdf8") only to override a specific one.
+[[rtk.networks]]
+name = "rtk2go"
+caster_url = "http://rtk2go.com:2101"
+username = "you@example.com"   # rtk2go: any registered email; password is ignored
+password = "none"
+enabled = true
+[[rtk.networks]]
+name = "centipede"
+caster_url = "http://crtk.net:2101"
+username = "centipede"         # centipede is an open network
+password = "centipede"
+enabled = true
+
 # ---------------------------------------------------------------------------
 # Drone / payload profiles
 #

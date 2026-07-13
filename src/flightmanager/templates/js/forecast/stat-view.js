@@ -3,6 +3,12 @@
 import { escHtml } from '../core/utils.js';
 import { apiGet } from '../core/api.js';
 import { st } from '../core/state.js';
+import { computeBatteryGroups, batteryCapMinFor } from './battery-timeline.js';
+import {
+  ensureRtkData, getRtkData, drawRtkLayer, clearRtkLayer, rtkNetworksHtml,
+  rtkNearestHtml, rtkFooterHtml, fetchFitCircle, drawRtkFit, clearRtkFit,
+  rtkSelectionHtml, hasRtkLayer,
+} from './rtk-stations.js';
 
 var _statBinMap = {};
 
@@ -20,10 +26,16 @@ var _mgrsLayer = null;                       // Leaflet layer group for tile out
 var _mgrsCache = { folder: undefined, data: null };  // folder-stable tile data
 
 
-// Modes that recolor the job polygons (and dim the basemap). 'normal' and 'mgrs'
-// leave jobs in their own colours so they read against the tile/basemap.
+// Modes that recolor the job polygons. 'normal', 'mgrs' and 'rtk' leave jobs in
+// their own colours so they read against the overlay.
 export function statModeColorsJobs() {
-  return st.stat.mode !== 'normal' && st.stat.mode !== 'mgrs';
+  return st.stat.mode !== 'normal' && st.stat.mode !== 'mgrs' && st.stat.mode !== 'rtk';
+}
+
+// Modes that dim the basemap: every recolouring mode, plus 'rtk' (the station
+// dots/rings sit on the basemap, so darkening lifts them the same way).
+export function statModeDims() {
+  return statModeColorsJobs() || st.stat.mode === 'rtk';
 }
 
 export function getMvStatColor(props) {
@@ -42,9 +54,12 @@ export function renderStatPanel(allFeatures, mvSelected) {
   var body = document.getElementById('mv-stat-body');
   if (!body) return;
 
-  // MGRS mode draws a tile overlay + legend (async, folder-keyed); other modes clear it.
-  if (st.stat.mode === 'mgrs') { _stMgrs(body); return; }
+  // MGRS / RTK modes draw their own overlay + legend (async, folder-keyed);
+  // every other mode clears both.
+  if (st.stat.mode === 'mgrs') { clearRtkLayer(); _stMgrs(body); return; }
+  if (st.stat.mode === 'rtk')  { clearMgrsLayer(); _stRtk(body, mvSelected); return; }
   clearMgrsLayer();
+  clearRtkLayer();
 
   var sel = mvSelected && mvSelected.size > 0 ? mvSelected : null;
   var active = sel ? allFeatures.filter(function(f) { return sel.has(f.properties.path); }) : allFeatures;
@@ -56,6 +71,7 @@ export function renderStatPanel(allFeatures, mvSelected) {
     case 'area':        body.innerHTML = _stBinned(allFeatures, active, _getArea, _AREA_PAL, 'ha',  1, 'Largest', 'Smallest'); break;
     case 'lost_pct':    body.innerHTML = _stLost(allFeatures, active, false); break;
     case 'lost_ha':     body.innerHTML = _stLost(allFeatures, active, true); break;
+    case 'coverage':    body.innerHTML = _stCoverage(allFeatures, active); break;
     case 'flight_time': body.innerHTML = _stBinned(allFeatures, active, _getFT,   _TIME_PAL, 'min', 0, 'Longest', 'Shortest'); break;
   }
 }
@@ -195,19 +211,89 @@ function _drawMgrsTiles(tiles) {
   });
 }
 
+// ── RTK base stations mode ────────────────────────────────────────────────────
+
+async function _stRtk(body, mvSelected) {
+  var folder = st.mv.currentFolder;
+  var cached = getRtkData(folder);
+  if (!cached) {
+    body.innerHTML = '<div class="mv-st-nodata">Loading base stations…</div>';
+    try {
+      cached = await ensureRtkData(folder);
+    } catch (e) {
+      console.error('[rtk]', e);
+      body.innerHTML = '<div class="mv-st-nodata">RTK stations unavailable</div>';
+      return;
+    }
+    if (st.stat.mode !== 'rtk') return;  // mode changed while loading
+    drawRtkLayer(cached);
+  } else if (!hasRtkLayer(cached)) {
+    drawRtkLayer(cached);   // re-entering the mode or folder change; kept on selection changes
+  }
+
+  // Selection: fit the smallest enclosing circle over the selected jobs and
+  // measure station distances from its centre (same fitting as launch sites).
+  // Mirrors the other stat modes: the selection-scoped list replaces the
+  // all-stations "Nearest" list rather than sitting alongside it.
+  var sel = mvSelected && mvSelected.size > 0 ? Array.from(mvSelected) : null;
+  if (!sel) {
+    clearRtkFit();
+    body.innerHTML = rtkNetworksHtml(cached) + rtkNearestHtml(cached) + rtkFooterHtml();
+    return;
+  }
+  var selKey = sel.slice().sort().join(',');
+  body.innerHTML = rtkNetworksHtml(cached)
+    + '<div class="mv-st-nodata">Fitting selection…</div>' + rtkFooterHtml();
+  try {
+    var fit = await fetchFitCircle(sel);
+    if (st.stat.mode !== 'rtk') return;
+    // Drop a stale result: the selection may have changed during the await, and
+    // fit fetches can resolve out of order (a cache hit for an old selection can
+    // land after a newer network call). A concurrent _stRtk owns the current
+    // selection and will render it — only act when the live selection still
+    // matches the set we fitted.
+    var liveKey = Array.from(st.mv.selected).sort().join(',');
+    if (liveKey !== selKey) return;
+    if (!st.mv.selected.size) {
+      clearRtkFit();  // deselected during await
+      body.innerHTML = rtkNetworksHtml(cached) + rtkNearestHtml(cached) + rtkFooterHtml();
+      return;
+    }
+    drawRtkFit(fit);
+    body.innerHTML = rtkNetworksHtml(cached) + rtkSelectionHtml(cached, fit) + rtkFooterHtml();
+  } catch (e) {
+    console.error('[rtk-fit]', e);
+  }
+}
+
 function _stNormal(active) {
-  var count = active.length, area = 0, hasA = false, time = 0, hasT = false, bats = 0, hasB = false;
+  var count = active.length, area = 0, hasA = false, time = 0, hasT = false;
   active.forEach(function(f) {
     var p = f.properties;
     if (p.area_ha != null)        { area += p.area_ha;        hasA = true; }
     if (p.flight_time_min != null){ time += p.flight_time_min; hasT = true; }
-    if (p.battery_count != null)  { bats += p.battery_count;  hasB = true; }
   });
+  var bats = _stBatteryCount(active);
   var r = '<div class="mv-st-row"><span class="mv-st-lbl">Jobs</span><span>' + count + '</span></div>';
   if (hasA) r += '<div class="mv-st-row"><span class="mv-st-lbl">Total area</span><span>' + area.toFixed(1) + ' ha</span></div>';
   if (hasT) r += '<div class="mv-st-row"><span class="mv-st-lbl">Flight time</span><span>' + _fmtMin(time) + '</span></div>';
-  if (hasB) r += '<div class="mv-st-row"><span class="mv-st-lbl">Batteries</span><span>' + bats + '</span></div>';
+  if (bats != null) r += '<div class="mv-st-row"><span class="mv-st-lbl">Batteries</span><span>' + bats + '</span></div>';
   return r;
+}
+
+// Actual batteries required: packs routable jobs onto the same battery charge
+// wherever the flight-order timeline allows, mirroring the battery timeline
+// display, not a naive per-job sum (that overcounts when several short jobs
+// share one charge).
+function _stBatteryCount(active) {
+  var routable = active.filter(function(f) {
+    var p = f.properties;
+    return p.sort_order != null && !p.skipped && p.flight_time_min != null && p.flight_time_min > 0;
+  });
+  if (!routable.length) return null;
+  routable.sort(function(a, b) { return a.properties.sort_order - b.properties.sort_order; });
+  var batCapMin = batteryCapMinFor(routable);
+  return computeBatteryGroups(routable, batCapMin).length;
 }
 
 function _stSubcat(all, active) {
@@ -318,6 +404,57 @@ function _stLost(all, active, isHa) {
     r += _divRow('Most lost');
     sorted.slice(0, 10).forEach(function(f) {
       r += _jobRow(f.properties, lv(f.properties).toFixed(dec) + unitStr);
+    });
+  }
+  return r || '<div class="mv-st-nodata">No data</div>';
+}
+
+// Fixed absolute bands for parcel coverage — 100 % is the meaningful target, so
+// unlike area/altitude these thresholds are not relative to the data's min/max.
+var _COV_BANDS = [
+  { lo: 99, color: '#4ade80', label: '≥ 99%' },
+  { lo: 95, color: '#a3e635', label: '95–99%' },
+  { lo: 90, color: '#fde047', label: '90–95%' },
+  { lo: 80, color: '#fb923c', label: '80–90%' },
+  { lo: 0,  color: '#ef4444', label: '< 80%' },
+];
+
+function _covBand(v) {
+  for (var i = 0; i < _COV_BANDS.length; i++) {
+    if (v >= _COV_BANDS[i].lo) return i;
+  }
+  return _COV_BANDS.length - 1;
+}
+
+function _stCoverage(all, active) {
+  function cv(p) { return p.parcel_coverage_pct; }
+
+  all.forEach(function(f) {
+    var v = cv(f.properties);
+    _statBinMap[f.properties.path] = v == null ? _ND_COL : _COV_BANDS[_covBand(v)].color;
+  });
+
+  var counts = new Array(_COV_BANDS.length).fill(0), nd = 0;
+  active.forEach(function(f) {
+    var v = cv(f.properties);
+    if (v == null) { nd++; return; }
+    counts[_covBand(v)]++;
+  });
+
+  var r = '';
+  for (var i = 0; i < _COV_BANDS.length; i++) {
+    if (counts[i]) r += _binRow(_COV_BANDS[i].color, _COV_BANDS[i].label, counts[i]);
+  }
+  if (nd) r += _binRow(_ND_COL, 'No data', nd);
+
+  // Drill-down: worst-covered first — the jobs that need attention.
+  var sorted = active.filter(function(f) { return cv(f.properties) != null; })
+    .sort(function(a, b) { return cv(a.properties) - cv(b.properties); });
+
+  if (sorted.length) {
+    r += _divRow('Least covered');
+    sorted.slice(0, 10).forEach(function(f) {
+      r += _jobRow(f.properties, cv(f.properties).toFixed(1) + '%');
     });
   }
   return r || '<div class="mv-st-nodata">No data</div>';

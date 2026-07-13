@@ -270,6 +270,13 @@ def export_job(  # noqa: C901
     dem_prov = tile_provenance(d_records)
     bldg_prov = tile_provenance(inp.b_records)
 
+    # Camera coverage vs the original parcel. Union each piece's imaged footprint
+    # (using the KMZ route in advanced mode, else a planned route for simple mode),
+    # then intersect once with the parcel geometry so piece seams aren't double-counted.
+    coverage_stats = _compute_coverage_stats(
+        survey_geom, kmz_results, config, drone_cfg, flight_height_m
+    )
+
     manifest = build_manifest(
         job_name=job_name,
         run_ts=run_ts,
@@ -297,6 +304,7 @@ def export_job(  # noqa: C901
         needs_review=needs_review,
         flight_ready=flight_ready,
         all_review_reasons=all_review_reasons,
+        coverage_stats=coverage_stats,
     )
 
     if not dry_run:
@@ -614,6 +622,63 @@ class _InputResult:
     property_fetch_ts: str | None
 
 
+def _compute_coverage_stats(
+    survey_geom: SurveyGeometry,
+    kmz_results: list,
+    config: Any,
+    drone_cfg: Any,
+    flight_height_m: float,
+) -> dict:
+    """Camera-coverage-vs-parcel stats for a whole job (all pieces).
+
+    In advanced mode each piece's KMZ carries its planned route + per-strip
+    altitude profile, so coverage is altitude-aware (a strip that descends near a
+    building images a narrower swath). In simple mode DJI Pilot generates the
+    lawnmower on-device, so we plan the same route here as the export/estimate
+    paths do and use the flat nominal altitude. Piece footprints are unioned
+    before intersecting the parcel so seams aren't double-counted.
+    """
+    from shapely.ops import unary_union
+
+    from flightmanager.routing import route as _route
+
+    cov_polys = []
+    for i, piece_3067 in enumerate(survey_geom.pieces_3067):
+        kr = kmz_results[i] if i < len(kmz_results) else None
+        if kr is not None and kr.route is not None:
+            r, alt = kr.route, kr.altitude_profile
+        else:
+            planned = _route.plan_route(
+                piece_3067,
+                drone=drone_cfg,
+                height_m=flight_height_m,
+                overlap_front_pct=config.flight.overlap_front_pct,
+                overlap_side_pct=config.flight.overlap_side_pct,
+            )
+            r, alt = planned.route, planned.altitude_profile
+        cp = _route.coverage_polygon(r, alt, drone_cfg, flight_height_m)
+        if cp is not None and not cp.is_empty:
+            cov_polys.append(cp)
+
+    if not cov_polys:
+        return {
+            "coverage_area_ha": 0.0,
+            "parcel_covered_ha": 0.0,
+            "parcel_coverage_pct": 0.0,
+        }
+
+    coverage = unary_union(cov_polys)
+    original = survey_geom.original_3067
+    inside = coverage.intersection(original) if original is not None else coverage
+    orig_area = original.area if original is not None else 0.0
+    pct = (inside.area / orig_area * 100.0) if orig_area > 0 else 0.0
+    return {
+        "coverage_area_ha": round(coverage.area * 1e-4, 4),
+        "parcel_covered_ha": round(inside.area * 1e-4, 4),
+        "parcel_coverage_pct": round(min(100.0, pct), 2),
+    }
+
+
 def _synth_survey_geom(
     poly_4326: Any,
     offset_m: float,
@@ -678,6 +743,9 @@ def _synth_survey_geom(
     return SurveyGeometry(
         survey_3067=survey_3067,
         survey_4326=survey_4326,
+        # Same denominator as original_area_ha (the parcel baseline, or the drawn
+        # polygon when no parcel reference exists) so coverage % is measured against it.
+        original_3067=baseline_3067,
         pieces_3067=[survey_3067],
         pieces_4326=[survey_4326],
         bbox_3067=survey_3067.bounds,

@@ -671,3 +671,70 @@ class TestParamsStorage:
         )
         # legacy survey is the final fallback
         assert card_polygon({"last_preview_geojson": {"survey": _SQUARE}}) == _SQUARE
+
+
+# ---------------------------------------------------------------------------
+# apply_route_order
+# ---------------------------------------------------------------------------
+
+
+class TestApplyRouteOrder:
+    """Shared flight-order assignment used by the HTTP endpoint and the MCP tool."""
+
+    @staticmethod
+    def _make(output_dir: Path, folder: str | None, name: str, sort_order):
+        from flightmanager.storage.job_store import save_params
+
+        job_dir = (output_dir / folder / name) if folder else (output_dir / name)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        params = {"job_name": name}
+        if sort_order is not None:
+            params["sort_order"] = sort_order
+        save_params(job_dir, params)
+        return f"{folder}/{name}" if folder else name
+
+    @staticmethod
+    def _so(output_dir: Path, folder: str | None, name: str):
+        from flightmanager.storage.job_store import load_params
+
+        job_dir = (output_dir / folder / name) if folder else (output_dir / name)
+        return load_params(job_dir).get("sort_order")
+
+    def test_assigns_index_and_clears_unlisted(self, tmp_path):
+        from flightmanager.storage.job_store import apply_route_order
+
+        self._make(tmp_path, "trip", "a", 0)
+        self._make(tmp_path, "trip", "b", 1)
+        self._make(tmp_path, "trip", "c", 2)  # not in the reorder list
+
+        folder, count = apply_route_order(tmp_path, ["trip/b", "trip/a"])
+
+        assert (folder, count) == ("trip", 2)
+        assert self._so(tmp_path, "trip", "b") == 0
+        assert self._so(tmp_path, "trip", "a") == 1
+        assert self._so(tmp_path, "trip", "c") is None  # unlisted sibling cleared
+
+    def test_root_folder(self, tmp_path):
+        from flightmanager.storage.job_store import apply_route_order
+
+        self._make(tmp_path, None, "x", None)
+        self._make(tmp_path, None, "y", None)
+
+        folder, count = apply_route_order(tmp_path, ["y", "x"])
+
+        assert folder is None and count == 2
+        assert self._so(tmp_path, None, "y") == 0
+        assert self._so(tmp_path, None, "x") == 1
+
+    def test_empty_paths_is_noop(self, tmp_path):
+        from flightmanager.storage.job_store import apply_route_order
+
+        assert apply_route_order(tmp_path, []) == (None, 0)
+
+    def test_cross_folder_rejected(self, tmp_path):
+        from flightmanager.storage.job_store import apply_route_order
+
+        a = self._make(tmp_path, "f1", "a", 0)
+        b = self._make(tmp_path, "f2", "b", 0)
+        with pytest.raises(ValueError, match="same folder"):
+            apply_route_order(tmp_path, [a, b])

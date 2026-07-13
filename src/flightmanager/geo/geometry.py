@@ -55,6 +55,11 @@ class SurveyGeometry:
     # Same polygon reprojected to EPSG:4326 for KMZ embedding.
     survey_4326: BaseGeometry
 
+    # Merged parcel polygon (EPSG:3067) after gap-fill, before keep-out — the
+    # geometry `original_area_ha` is measured from. Used as the denominator for
+    # camera-coverage-vs-parcel. For custom/edited-polygon jobs this equals survey_3067.
+    original_3067: BaseGeometry
+
     # For multipart_policy="split": one piece per KMZ.
     # For "largest" / "review": single-element list matching survey_3067.
     pieces_3067: list[BaseGeometry]
@@ -186,6 +191,7 @@ def process_survey(
     return SurveyGeometry(
         survey_3067=survey,
         survey_4326=survey_4326,
+        original_3067=merged,
         pieces_3067=pieces,
         pieces_4326=pieces_4326,
         bbox_3067=(bbox[0], bbox[1], bbox[2], bbox[3]),

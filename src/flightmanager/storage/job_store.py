@@ -351,6 +351,47 @@ def route_rename_name(date_str: str, index: int, total: int, original_name: str)
     return f"{date_str}-{str(index).zfill(digits)}-{base}"
 
 
+def apply_route_order(output_dir: Path, paths: list[str]) -> tuple[str | None, int]:
+    """Assign flight order ``0..n-1`` to *paths* and clear every other sibling.
+
+    *paths* is the ordered flight sequence; each listed job gets its 1-based index
+    (0-based ``sort_order``) and any sibling in the same folder that is **not**
+    listed has its ``sort_order`` cleared to ``None``. All paths must live in one
+    folder (sort_order is per-folder) — a mismatch raises :class:`ValueError`,
+    which callers map to their own error shape.
+
+    Returns ``(folder, ordered_count)``. An empty *paths* is a no-op → ``(None, 0)``.
+    Shared by the HTTP ``reorder_jobs`` endpoint and the MCP ``reorder_route`` tool.
+    """
+    if not paths:
+        return None, 0
+
+    folder0, _, _ = resolve_job_dir(output_dir, paths[0])
+    for p in paths[1:]:
+        f, _, _ = resolve_job_dir(output_dir, p)
+        if f != folder0:
+            raise ValueError("All paths must be in the same folder")
+
+    parent = output_dir / folder0 if folder0 else output_dir
+    ordered = {p: i for i, p in enumerate(paths)}
+    try:
+        siblings = [d for d in parent.iterdir() if d.is_dir()]
+    except (FileNotFoundError, PermissionError):
+        siblings = []
+
+    for job_dir in siblings:
+        data = load_params(job_dir)
+        if data is None:
+            continue
+        job_path = f"{folder0}/{job_dir.name}" if folder0 else job_dir.name
+        new_so = ordered.get(job_path)  # None when the job is not in the list
+        if data.get("sort_order") != new_so:
+            data["sort_order"] = new_so
+            save_params(job_dir, data)
+
+    return folder0, len(paths)
+
+
 def _require_within(base: Path, target: Path) -> None:
     """Belt-and-braces: ensure *target* stays inside *base* after resolution."""
     base_r = base.resolve()
@@ -549,6 +590,9 @@ def _build_job_card(job_dir: Path, folder: str | None, with_polygon: bool) -> di
         "area_ha": g.get("final_area_ha"),
         "original_area_ha": g.get("original_area_ha"),
         "area_lost_pct": g.get("area_lost_pct"),
+        "coverage_area_ha": g.get("coverage_area_ha"),
+        "parcel_covered_ha": g.get("parcel_covered_ha"),
+        "parcel_coverage_pct": g.get("parcel_coverage_pct"),
         "parcel_ids": inputs.get("parcel_ids") or [],
         "property_ids": inputs.get("property_ids") or [],
         # Subcategory: prefer the manifest's resolved value (provenance), fall back to
@@ -609,12 +653,14 @@ def _tier_sort_key(j: dict) -> tuple:
 
 
 def _adjust_sibling_area_lost(groups: list[dict]) -> None:
-    """Fix area_lost_pct for split jobs that share the same parcel/property IDs.
+    """Fix area_lost_pct and parcel_coverage_pct for split jobs sharing parcel IDs.
 
     Each split job retains the full original parcel but only covers a portion of
-    it, making each one look like it lost most of the area.  Group siblings by
+    it, making each one look like it lost most of the area (and imaged only a
+    fraction of the parcel).  Group siblings by
     (frozenset(parcel_ids), frozenset(property_ids)) and recalculate using the
-    combined flight area of the whole group against the shared original area.
+    combined flight area / combined imaged area of the whole group against the
+    shared original area.
     """
     from collections import defaultdict
 
@@ -650,8 +696,24 @@ def _adjust_sibling_area_lost(groups: list[dict]) -> None:
             max(0.0, (original_ha - combined_ha) / original_ha * 100), 2
         )
 
+        # Combined camera coverage: sum each sibling's imaged parcel area against
+        # the shared original. Only recompute when at least one sibling reports it
+        # (older pre-coverage manifests leave it None).
+        covered_vals = [
+            c["parcel_covered_ha"]
+            for c in cards
+            if c.get("parcel_covered_ha") is not None
+        ]
+        combined_cov_pct = (
+            round(min(100.0, sum(covered_vals) / original_ha * 100), 2)
+            if covered_vals
+            else None
+        )
+
         for card in cards:
             card["area_lost_pct"] = combined_lost_pct
+            if combined_cov_pct is not None:
+                card["parcel_coverage_pct"] = combined_cov_pct
 
 
 def scan_jobs(output_dir: Path, with_polygon: bool = False) -> list[dict]:

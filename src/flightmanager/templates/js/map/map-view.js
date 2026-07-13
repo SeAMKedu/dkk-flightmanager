@@ -8,7 +8,8 @@ import { showError } from '../editor/form-controls.js';
 import { loadJobsList } from '../jobs/jobs-panel.js';
 import { openDeleteModal, openMoveModal } from '../panels/modal-utils.js';
 import { clearTakeoffForMapView, _hideVlos } from '../editor/takeoff.js';
-import { getMvStatColor, statModeColorsJobs, clearMgrsLayer, renderStatPanel } from '../forecast/stat-view.js';
+import { getMvStatColor, statModeColorsJobs, statModeDims, clearMgrsLayer, renderStatPanel } from '../forecast/stat-view.js';
+import { ensureRtkData, clearRtkLayer, rtkPopupHtml } from '../forecast/rtk-stations.js';
 import { showBatteryTimeline, destroyBatteryTimeline } from '../forecast/battery-timeline.js';
 import { showForecastBar, destroyForecastBar, setForecastBarShifted } from '../forecast/forecast-bar.js';
 import { hideCesiumView } from '../three-d/cesium-view.js';
@@ -27,6 +28,7 @@ import { autoSortFolder } from '../jobs/drag-reorder.js';
 // purely internal handles below stay module-local.
 var _mvJobGroup = null;
 var _mvHoverPopup = null;
+var _mvHoverPath = null;
 var _mvHoverTimer = null;
 var _mvAllFeatures = [];
 var _mvRouteSeq = 0;
@@ -92,6 +94,7 @@ export function closeMapView() {
   destroyBatteryTimeline();
   destroyForecastBar();
   clearMgrsLayer();
+  clearRtkLayer();
   _mvClearLayers();
   _mvHideDim();
   clearLaunchSites(map);
@@ -190,8 +193,12 @@ function _mvApplyFilter(folderFilter, skipFit) {
     }
   });
   if (bounds.length && !skipFit) {
-    var combined = bounds[0];
-    bounds.forEach(function(b){ combined = combined.extend(b); });
+    // Clone the first layer's bounds — getBounds() returns the layer's live
+    // internal _bounds object, so extending it in place would permanently
+    // inflate that layer's bounds to span the whole folder (breaking any later
+    // fit-to-that-job).
+    var combined = L.latLngBounds(bounds[0].getSouthWest(), bounds[0].getNorthEast());
+    bounds.forEach(function(b){ combined.extend(b); });
     map.fitBounds(combined, {padding: [40, 40]});
   }
   _mvDrawRoute();
@@ -209,8 +216,11 @@ function _mvApplyFilter(folderFilter, skipFit) {
     }
   });
   stale.forEach(function(p){ st.mv.selected.delete(p); });
-  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder, st.mv.layers);
+  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder);
   showForecastBar(st.mv.currentFolder);
+  // Prefetch RTK base stations (folder-keyed, cache-first server-side) so the
+  // hover popups can show the nearest station synchronously.
+  ensureRtkData(st.mv.currentFolder).catch(function(e){ console.error('[rtk]', e); });
   renderStatPanel(st.mv.layers.map(function(item) { return item.feature; }), st.mv.selected);
   if (statModeColorsJobs()) {
     st.mv.layers.forEach(function(item) {
@@ -248,9 +258,12 @@ function _mvMakeLayer(feature) {
 
     if (p.skipped) { layer.setStyle({opacity: 0.35, fillOpacity: 0.07}); }
 
-    layer.on('mouseover', function(e) {
+    layer.on('mouseover', function() {
       clearTimeout(_mvHoverTimer);
-      _mvOpenHoverPopup(e.latlng, p);
+      // Re-entering the same polygon (e.g. after visiting the popup's buttons)
+      // keeps the popup where it is instead of re-opening it.
+      if (_mvHoverPopup && map.hasLayer(_mvHoverPopup) && _mvHoverPath === p.path) return;
+      _mvOpenHoverPopup(layer, p);
     });
     layer.on('mouseout', function() {
       _mvHoverTimer = setTimeout(function() {
@@ -277,7 +290,69 @@ function _mvDash(p) {
   return null;
 }
 
-function _mvOpenHoverPopup(latlng, p) {
+// Stable popup anchor: the on-screen bounding box of the polygon, clipped to
+// the viewport. The popup opens above its top-centre so it floats over the map
+// just clear of the shape - not at the mouse-entry point, which landed wherever
+// the cursor crossed the edge and often covered the polygon or its neighbours.
+function _mvPopupAnchor(layer) {
+  var size = map.getSize();
+  var b = layer.getBounds();
+  var p1 = map.latLngToContainerPoint(b.getNorthWest());
+  var p2 = map.latLngToContainerPoint(b.getSouthEast());
+  var x0 = Math.max(Math.min(p1.x, p2.x), 0);
+  var x1 = Math.min(Math.max(p1.x, p2.x), size.x);
+  return {
+    x: (x0 + x1) / 2,
+    top: Math.max(Math.min(p1.y, p2.y), 0),
+    bottom: Math.min(Math.max(p1.y, p2.y), size.y),
+  };
+}
+
+// After opening, measure the rendered popup and reposition if needed: clamp
+// horizontally, keep it out from under the forecast bar, and when there is no
+// room above the polygon flip it below (or clamp inside the view as a last
+// resort). Flipped placements hide the tip, which would point at nothing.
+function _mvNudgeHoverPopup(anchor) {
+  var el = _mvHoverPopup && _mvHoverPopup.getElement();
+  if (!el) return;
+  var size = map.getSize();
+  var mapRect = map.getContainer().getBoundingClientRect();
+  var r = el.getBoundingClientRect();
+  var w = r.width;
+  var hAbove = anchor.top - (r.top - mapRect.top); // popup extent above the anchor (incl. tip + offset)
+
+  var x = Math.min(Math.max(anchor.x, w / 2 + 8), size.x - w / 2 - 8);
+
+  var topLimit = 8;
+  var bar = document.getElementById('forecast-bar');
+  if (bar && bar.offsetWidth) {
+    var br = bar.getBoundingClientRect();
+    if (x + w / 2 > br.left - mapRect.left && x - w / 2 < br.right - mapRect.left) {
+      topLimit = Math.max(topLimit, br.bottom - mapRect.top + 6);
+    }
+  }
+  var bottomLimit = size.y - 8;
+  var bt = document.getElementById('battery-timeline');
+  if (bt && bt.offsetWidth && bt.style.display !== 'none') {
+    var tr = bt.getBoundingClientRect();
+    if (x + w / 2 > tr.left - mapRect.left && x - w / 2 < tr.right - mapRect.left) {
+      bottomLimit = Math.min(bottomLimit, tr.top - mapRect.top - 6);
+    }
+  }
+
+  var y = anchor.top, flip = false;
+  if (y - hAbove < topLimit) {
+    var yBelow = Math.max(anchor.bottom + 6, topLimit) + hAbove;
+    if (yBelow <= bottomLimit) { y = yBelow; flip = true; }        // below the polygon
+    else { y = topLimit + hAbove; flip = true; }                   // clamp inside the view
+  }
+  if (flip) el.classList.add('mv-popup-flip');
+  if (x !== anchor.x || y !== anchor.top) {
+    _mvHoverPopup.setLatLng(map.containerPointToLatLng([x, y]));
+  }
+}
+
+function _mvOpenHoverPopup(layer, p) {
   if (_mvHoverPopup) { map.closePopup(_mvHoverPopup); _mvHoverPopup = null; }
   var statusChip = p.flight_ready === true ? '<span style="color:#4ade80">✓ Ready</span>'
     : p.needs_review === true ? '<span style="color:#fb923c">⚠ Review</span>'
@@ -307,20 +382,30 @@ function _mvOpenHoverPopup(latlng, p) {
     ? '<span style="display:inline-flex;align-items:center;justify-content:center;background:#f59e0b;color:#000;font-size:9px;font-weight:700;width:16px;height:16px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.25);box-shadow:0 1px 2px rgba(0,0,0,.5);vertical-align:middle;line-height:1;flex-shrink:0">' + (p.sort_order + 1) + '</span>'
     : '';
   var skipLabel = p.skipped ? '⊘ Unskip' : '⊘ Skip';
+  // RTK line: stations within range of the takeoff (or polygon centre), or the
+  // nearest one. Empty string until the folder's station data has loaded.
+  var rtkRef = null;
+  if (p.takeoff_point_4326) rtkRef = [p.takeoff_point_4326[1], p.takeoff_point_4326[0]];
+  else { try { var cc = layer.getBounds().getCenter(); rtkRef = [cc.lat, cc.lng]; } catch {} }
+  var rtkHtml = rtkPopupHtml(st.mv.currentFolder, rtkRef);
   var html = '<div class="mv-tt-inner">'
     + '<div class="mv-tt-name">' + (p.skipped ? '⊘ ' : '') + escHtml(p.name)
     + (p.folder ? ' <span class="mv-tt-folder">(' + escHtml(p.folder) + ')</span>' : '') + '</div>'
     + '<div class="mv-tt-meta">' + (routeIndex ? routeIndex + ' · ' : '') + statusChip + (p.skipped ? ' · <span style="color:#94a3b8">skipped</span>' : '') + '</div>'
     + (flightInfo ? '<div class="mv-tt-flight">' + flightInfo + '</div>' : '')
     + (photoInfo ? '<div class="mv-tt-flight">' + photoInfo + '</div>' : '')
+    + rtkHtml
     + '<div class="mv-tt-actions">'
     + '<button onclick="mvToggleSkip(\'' + escHtml(p.path) + '\',' + !!p.skipped + ')">' + skipLabel + '</button>'
     + '<button class="mv-tt-del" onclick="mvDeleteJob(\'' + escHtml(p.path) + '\',\'' + escHtml(p.name) + '\')">✕ Delete</button>'
     + '</div></div>';
+  var anchor = _mvPopupAnchor(layer);
   _mvHoverPopup = L.popup({
     closeButton: false, minWidth: 160, className: 'mv-popup',
-    autoClose: false, closeOnClick: true, offset: [0, -4]
-  }).setLatLng(latlng).setContent(html).openOn(map);
+    autoClose: false, closeOnClick: true, autoPan: false, offset: [0, -6]
+  }).setLatLng(map.containerPointToLatLng([anchor.x, anchor.top])).setContent(html).openOn(map);
+  _mvHoverPath = p.path;
+  _mvNudgeHoverPopup(anchor);
   setTimeout(function() {
     var el = _mvHoverPopup && _mvHoverPopup.getElement();
     if (!el) return;
@@ -367,7 +452,7 @@ export function mvDeleteJob(path, name) {
 }
 
 function _mvUpdateDim() {
-  if (statModeColorsJobs() && st._mvMode) { _mvShowDim(); } else { _mvHideDim(); }
+  if (statModeDims() && st._mvMode) { _mvShowDim(); } else { _mvHideDim(); }
 }
 
 function _mvShowDim() {
@@ -415,6 +500,32 @@ export function mvSelectPaths(paths) {
   });
 }
 
+// Zoom/pan to fit the combined bounds of the given job paths' polygons (plus
+// their takeoff points). Used by launch-site dot clicks so the whole site's
+// jobs land in view together, mirroring the single-job zoom from stat-panel
+// and battery-timeline clicks. Callers can cap maxZoom (e.g. launch sites stay
+// below their own detail-view threshold so the fit doesn't flip the dot into
+// per-job takeoff circles).
+export function mvFitPaths(paths, maxZoom) {
+  // Accumulate into a fresh LatLngBounds — never extend a layer's getBounds()
+  // in place (it is the layer's live internal _bounds; mutating it would
+  // permanently inflate that job's bounds).
+  var combined = null;
+  (paths || []).forEach(function(p) {
+    var item = st.mv.layers.find(function(i){ return i.path === p; });
+    if (!item) return;
+    try {
+      var b = item.layer.getBounds();
+      if (!b.isValid()) return;
+      if (!combined) combined = L.latLngBounds(b.getSouthWest(), b.getNorthEast());
+      else combined.extend(b);
+      var tp = item.feature && item.feature.properties.takeoff_point_4326;
+      if (tp) combined.extend([tp[1], tp[0]]);
+    } catch {}
+  });
+  if (combined) map.fitBounds(combined, {padding: [60, 60], maxZoom: maxZoom != null ? maxZoom : 17});
+}
+
 // Replace the map-view selection set wholesale, without touching layer styling.
 // Used by route rename (which changes job paths): callers set the new paths here
 // then reload the map; _mvApplyFilter re-applies the selection visuals on rebuild.
@@ -450,7 +561,7 @@ function _mvUpdateSelBar() {
     openBtn.style.display = n === 1 ? '' : 'none';
     if (n === 1) openBtn.dataset.path = Array.from(st.mv.selected)[0];
   }
-  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder, st.mv.layers);
+  showBatteryTimeline(_mvAllFeatures, st.mv.selected, st.mv.currentFolder);
   renderStatPanel(st.mv.layers.map(function(item) { return item.feature; }), st.mv.selected);
 }
 

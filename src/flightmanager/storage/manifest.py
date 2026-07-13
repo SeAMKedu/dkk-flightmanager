@@ -20,7 +20,7 @@ from flightmanager.geo.geometry import SurveyGeometry
 # storage-shape changes. Jobs whose manifest records an older value are flagged as
 # "needs refresh" (see job_store.refresh_status). Distinct from `tool_version` (the
 # package/git version, which bumps every release).
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
 
 # CC-BY attribution templates keyed by dataset.
 # The ``{date}`` placeholder is filled with the tile's fetch date (YYYY-MM-DD).
@@ -79,6 +79,7 @@ def build_manifest(
     needs_review: bool,
     flight_ready: bool,
     all_review_reasons: list[str],
+    coverage_stats: dict | None = None,
 ) -> dict:
     """Assemble and return the full provenance manifest dict for a completed job."""
     return {
@@ -117,6 +118,12 @@ def build_manifest(
             "original_area_ha": round(survey_geom.original_area_ha, 4),
             "final_area_ha": round(survey_geom.final_area_ha, 4),
             "area_lost_pct": round(survey_geom.area_lost_pct, 2),
+            # Camera-coverage-vs-parcel: how much of the original parcel the strip
+            # footprints actually image. parcel_covered_ha is the summable numerator
+            # used to recombine split siblings in job_store.
+            "coverage_area_ha": (coverage_stats or {}).get("coverage_area_ha"),
+            "parcel_covered_ha": (coverage_stats or {}).get("parcel_covered_ha"),
+            "parcel_coverage_pct": (coverage_stats or {}).get("parcel_coverage_pct"),
             "bbox_3067": {
                 "xmin": survey_geom.bbox_3067[0],
                 "ymin": survey_geom.bbox_3067[1],
