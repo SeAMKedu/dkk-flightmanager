@@ -24,6 +24,7 @@ from flightmanager.storage.job_store import (
     JobRenameError,
     is_folder_dir,
     load_params,
+    make_thumbnail_svg,
     params_from_manifest,
     read_job_card,
     refresh_status,
@@ -839,6 +840,13 @@ async def clone_job(path: str):
     return {"path": clone_path, "name": clone_name, "folder": folder}
 
 
+def _write_thumbnail(job_dir: Path, geom: dict | None) -> None:
+    """(Re)write ``thumbnail.svg`` for *job_dir* from a survey geometry."""
+    svg = make_thumbnail_svg(geom)
+    if svg:
+        (job_dir / "thumbnail.svg").write_text(svg, encoding="utf-8")
+
+
 @router.post("/api/jobs/{path:path}/split")
 async def split_job(path: str, req: SplitRequest):
     """Split a job into two sibling jobs.
@@ -871,12 +879,14 @@ async def split_job(path: str, req: SplitRequest):
     now = datetime.now(timezone.utc).isoformat()
 
     # Update existing job in place (polygon_a). Clear the stored outline so
-    # save_params re-derives it from the new polygon.
+    # save_params re-derives it from the new polygon, and regenerate the
+    # thumbnail — otherwise the original job keeps its pre-split (whole-area) card.
     params["custom_polygon_4326"] = req.polygon_a
     params["survey_outline"] = None
     params.pop("last_preview_geojson", None)
     params["saved_at"] = now
     save_params(job_dir, params)
+    _write_thumbnail(job_dir, req.polygon_a)
 
     # Create new sibling job (polygon_b, copy all other params)
     new_params = dict(params)
@@ -898,6 +908,7 @@ async def split_job(path: str, req: SplitRequest):
     new_dir = parent_dir / new_name
     new_dir.mkdir(parents=True, exist_ok=True)
     save_params(new_dir, new_params)
+    _write_thumbnail(new_dir, req.polygon_b)
 
     new_path = f"{folder}/{new_name}" if folder else new_name
     return {"modified_path": path, "new_path": new_path, "new_name": new_name}
