@@ -1251,7 +1251,7 @@ def report_cmd(
     import flightmanager.web._server_state as _st
     from flightmanager.reporting import report
     from flightmanager.storage.job_store import scan_jobs
-    from flightmanager.web.routers.management import _load_job_entry
+    from flightmanager.web.routers.insights import _load_job_entry
 
     cfg = _load_cfg(config_path)
     _st.config = cfg

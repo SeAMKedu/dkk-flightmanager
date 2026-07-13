@@ -351,6 +351,47 @@ def route_rename_name(date_str: str, index: int, total: int, original_name: str)
     return f"{date_str}-{str(index).zfill(digits)}-{base}"
 
 
+def apply_route_order(output_dir: Path, paths: list[str]) -> tuple[str | None, int]:
+    """Assign flight order ``0..n-1`` to *paths* and clear every other sibling.
+
+    *paths* is the ordered flight sequence; each listed job gets its 1-based index
+    (0-based ``sort_order``) and any sibling in the same folder that is **not**
+    listed has its ``sort_order`` cleared to ``None``. All paths must live in one
+    folder (sort_order is per-folder) — a mismatch raises :class:`ValueError`,
+    which callers map to their own error shape.
+
+    Returns ``(folder, ordered_count)``. An empty *paths* is a no-op → ``(None, 0)``.
+    Shared by the HTTP ``reorder_jobs`` endpoint and the MCP ``reorder_route`` tool.
+    """
+    if not paths:
+        return None, 0
+
+    folder0, _, _ = resolve_job_dir(output_dir, paths[0])
+    for p in paths[1:]:
+        f, _, _ = resolve_job_dir(output_dir, p)
+        if f != folder0:
+            raise ValueError("All paths must be in the same folder")
+
+    parent = output_dir / folder0 if folder0 else output_dir
+    ordered = {p: i for i, p in enumerate(paths)}
+    try:
+        siblings = [d for d in parent.iterdir() if d.is_dir()]
+    except (FileNotFoundError, PermissionError):
+        siblings = []
+
+    for job_dir in siblings:
+        data = load_params(job_dir)
+        if data is None:
+            continue
+        job_path = f"{folder0}/{job_dir.name}" if folder0 else job_dir.name
+        new_so = ordered.get(job_path)  # None when the job is not in the list
+        if data.get("sort_order") != new_so:
+            data["sort_order"] = new_so
+            save_params(job_dir, data)
+
+    return folder0, len(paths)
+
+
 def _require_within(base: Path, target: Path) -> None:
     """Belt-and-braces: ensure *target* stays inside *base* after resolution."""
     base_r = base.resolve()
