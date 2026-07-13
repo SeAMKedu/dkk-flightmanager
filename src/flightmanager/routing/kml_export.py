@@ -143,7 +143,9 @@ def build_jobs_kml(
         out.append("</Folder>")
     else:
         for p in jobs:
-            out.append(f"<Folder><name>{_escape_xml(p.get('job_name') or 'job')}</name>")
+            out.append(
+                f"<Folder><name>{_escape_xml(p.get('job_name') or 'job')}</name>"
+            )
             out.extend(_polygon_placemarks(p))
             marker = _takeoff_placemark(p)
             if marker:

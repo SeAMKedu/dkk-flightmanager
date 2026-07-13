@@ -886,7 +886,11 @@ def scan_stale(folder: str | None = None) -> str:
                     }
                 )
     return json.dumps(
-        {"pipeline_version": PIPELINE_VERSION, "stale_count": len(stale), "stale": stale},
+        {
+            "pipeline_version": PIPELINE_VERSION,
+            "stale_count": len(stale),
+            "stale": stale,
+        },
         ensure_ascii=False,
         indent=2,
     )
@@ -1066,7 +1070,11 @@ def clone_job(path: str) -> str:
     """
     import shutil
 
-    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+    from flightmanager.storage.job_store import (
+        load_params,
+        resolve_job_dir,
+        save_params,
+    )
 
     folder, name, src_dir = resolve_job_dir(_output_dir(), path)
     if not src_dir.is_dir():
@@ -1105,7 +1113,11 @@ def set_job_color(path: str, color: str | None) -> str:
 
     Returns ok on success.
     """
-    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+    from flightmanager.storage.job_store import (
+        load_params,
+        resolve_job_dir,
+        save_params,
+    )
 
     _, _, job_dir = resolve_job_dir(_output_dir(), path)
     params = load_params(job_dir) if job_dir.is_dir() else None
@@ -1126,7 +1138,11 @@ def set_job_skipped(path: str, skipped: bool) -> str:
 
     Returns ok on success.
     """
-    from flightmanager.storage.job_store import load_params, resolve_job_dir, save_params
+    from flightmanager.storage.job_store import (
+        load_params,
+        resolve_job_dir,
+        save_params,
+    )
 
     _, _, job_dir = resolve_job_dir(_output_dir(), path)
     params = load_params(job_dir) if job_dir.is_dir() else None
@@ -1251,7 +1267,12 @@ def generate_report(
     except OSError as e:
         return json.dumps({"error": f"Could not write PDF: {e}"})
     return json.dumps(
-        {"ok": True, "path": str(dest), "size_kb": len(pdf) // 1024, "jobs": len(entries)}
+        {
+            "ok": True,
+            "path": str(dest),
+            "size_kb": len(pdf) // 1024,
+            "jobs": len(entries),
+        }
     )
 
 
