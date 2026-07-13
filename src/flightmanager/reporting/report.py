@@ -489,16 +489,18 @@ def _card_dsm(
         iw, ih = col_w, col_w * ar
         if ih > 46:
             ih, iw = 46.0, 46.0 / ar
-        # Header: label left, elevation range right-aligned to the image edge.
+        # Header: label left, elevation range right-aligned to the full column
+        # edge (not the image edge — a narrow letterboxed DSM would otherwise pull
+        # the range left until it overlaps the "Terrain (DSM)" label).
         elev = f"{_fmt(stats.get('elevation_min_m') or _mf(manifest, 'dsm.elevation_min_m'), ' m')} - {_fmt(stats.get('elevation_max_m') or _mf(manifest, 'dsm.elevation_max_m'), ' m')}"
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*C_INK)
         pdf.set_xy(rx, ry)
-        pdf.cell(iw * 0.5, 5.5, "Terrain (DSM)")
+        pdf.cell(col_w * 0.5, 5.5, "Terrain (DSM)")
         pdf.set_font("Helvetica", "", 8)
         pdf.set_text_color(*C_MUTED)
         pdf.set_xy(rx, ry)
-        pdf.cell(iw, 5.5, _t(elev), align="R")
+        pdf.cell(col_w, 5.5, _t(elev), align="R")
         dsm_y = ry + 6.5
         pdf.image(img, x=rx, y=dsm_y, w=iw, h=ih)
         # Outline the flight area on the DSM (white). dsm_bounds = (W, S, E, N).
