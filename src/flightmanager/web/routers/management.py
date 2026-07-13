@@ -1172,6 +1172,35 @@ def _delete_merged_sources(output_dir: Path, job_paths: list[str]) -> None:
                     shutil.rmtree(parent)
 
 
+def _merged_sort_order(
+    all_params: list[tuple[Path, dict]],
+    dest_parent: Path,
+    new_name: str,
+    *,
+    same_folder: bool,
+    delete_sources: bool,
+) -> int | None:
+    """Pick the flight-order slot for a merged job among its sources' siblings.
+
+    Returns ``None`` (leave the merged job unrouted) when the sources don't all
+    share the destination folder — sort_order is per-folder, so a cross-folder
+    merge has no meaningful slot — or when no source carried a ``sort_order``.
+    Otherwise: if the sources are deleted they vacate their slots, so the merged
+    job takes the group's first one (``min``); if they stay, it is inserted right
+    after the last of them (shifting later siblings).
+    """
+    if not same_folder:
+        return None
+    src_sort_orders = [
+        p.get("sort_order") for _, p in all_params if p.get("sort_order") is not None
+    ]
+    if not src_sort_orders:
+        return None
+    if delete_sources:
+        return min(src_sort_orders)
+    return _open_sort_order_slot(dest_parent, max(src_sort_orders), exclude={new_name})
+
+
 def _open_sort_order_slot(folder_dir: Path, after: int, exclude: set[str]) -> int:
     """Free the flight-order slot right after ``after`` in ``folder_dir``.
 
@@ -1243,24 +1272,17 @@ async def merge_jobs(req: MergeRequest):
         )
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # Position the merged job in the flight order, but only when the sources all
-    # live in the destination folder (sort_order is per-folder, so cross-folder
-    # merges have no meaningful slot and stay unrouted).
-    if common_folder is not None and folder == common_folder:
-        src_sort_orders = [
-            p.get("sort_order")
-            for _, p in all_params
-            if p.get("sort_order") is not None
-        ]
-        if src_sort_orders:
-            if req.delete_sources:
-                # Sources vacate their slots — take the group's first one.
-                merged_params["sort_order"] = min(src_sort_orders)
-            else:
-                # Sources stay — insert right after the last of them.
-                merged_params["sort_order"] = _open_sort_order_slot(
-                    dest_parent, max(src_sort_orders), exclude={new_name}
-                )
+    # Position the merged job in the flight order (only meaningful when the
+    # sources all live in the destination folder — see _merged_sort_order).
+    slot = _merged_sort_order(
+        all_params,
+        dest_parent,
+        new_name,
+        same_folder=common_folder is not None and folder == common_folder,
+        delete_sources=req.delete_sources,
+    )
+    if slot is not None:
+        merged_params["sort_order"] = slot
     save_params(dest_dir, merged_params)
 
     if req.delete_sources:
