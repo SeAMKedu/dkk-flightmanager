@@ -396,6 +396,52 @@ def footprint_spacings(
     return fp_w * (1 - overlap_side_pct / 100), fp_h * (1 - overlap_front_pct / 100)
 
 
+def coverage_polygon(
+    route: RouteResult,
+    altitude_profile: list[float],
+    drone,
+    height_m: float,
+):
+    """Return the ground area actually imaged by the strips as a Shapely polygon (EPSG:3067).
+
+    Each strip's camera swath is an oriented rectangle: full footprint width
+    (``fp_w``, across-track) buffered around the strip line, extended half a
+    footprint height (``fp_h/2``, along-track) past each endpoint so the first/last
+    photo frames are counted. Footprint size scales linearly with altitude, so in
+    advanced (variable-altitude) mode each strip uses its own altitude from
+    *altitude_profile* — a strip that descends near a building images a narrower
+    swath, which is where between-strip coverage gaps open up.
+    """
+    from shapely.geometry import LineString
+    from shapely.ops import unary_union
+
+    p_m = drone.pixel_pitch_um * 1e-6
+    f_m = drone.focal_length_mm * 1e-3
+
+    rects = []
+    for i, (x1, y1, x2, y2) in enumerate(route.strips_3067):
+        alt = altitude_profile[i] if i < len(altitude_profile) else height_m
+        if alt is None or alt <= 0:
+            alt = height_m
+        fp_w = alt * drone.image_width_px * p_m / f_m  # across-track (swath width)
+        fp_h = alt * drone.image_height_px * p_m / f_m  # along-track (frame length)
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length <= 0:
+            continue
+        ux, uy = (x2 - x1) / length, (y2 - y1) / length  # unit direction
+        ext = fp_h / 2.0
+        seg = LineString(
+            [(x1 - ux * ext, y1 - uy * ext), (x2 + ux * ext, y2 + uy * ext)]
+        )
+        # Flat end caps (cap_style=2): the fp_h/2 extension already accounts for
+        # the frame length, so we don't want rounded/square caps adding more.
+        rects.append(seg.buffer(fp_w / 2.0, cap_style=2))
+
+    if not rects:
+        return None
+    return unary_union(rects)
+
+
 def plan_route(
     polygon_3067,
     *,

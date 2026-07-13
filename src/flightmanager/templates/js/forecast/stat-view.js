@@ -71,6 +71,7 @@ export function renderStatPanel(allFeatures, mvSelected) {
     case 'area':        body.innerHTML = _stBinned(allFeatures, active, _getArea, _AREA_PAL, 'ha',  1, 'Largest', 'Smallest'); break;
     case 'lost_pct':    body.innerHTML = _stLost(allFeatures, active, false); break;
     case 'lost_ha':     body.innerHTML = _stLost(allFeatures, active, true); break;
+    case 'coverage':    body.innerHTML = _stCoverage(allFeatures, active); break;
     case 'flight_time': body.innerHTML = _stBinned(allFeatures, active, _getFT,   _TIME_PAL, 'min', 0, 'Longest', 'Shortest'); break;
   }
 }
@@ -403,6 +404,57 @@ function _stLost(all, active, isHa) {
     r += _divRow('Most lost');
     sorted.slice(0, 10).forEach(function(f) {
       r += _jobRow(f.properties, lv(f.properties).toFixed(dec) + unitStr);
+    });
+  }
+  return r || '<div class="mv-st-nodata">No data</div>';
+}
+
+// Fixed absolute bands for parcel coverage — 100 % is the meaningful target, so
+// unlike area/altitude these thresholds are not relative to the data's min/max.
+var _COV_BANDS = [
+  { lo: 99, color: '#4ade80', label: '≥ 99%' },
+  { lo: 95, color: '#a3e635', label: '95–99%' },
+  { lo: 90, color: '#fde047', label: '90–95%' },
+  { lo: 80, color: '#fb923c', label: '80–90%' },
+  { lo: 0,  color: '#ef4444', label: '< 80%' },
+];
+
+function _covBand(v) {
+  for (var i = 0; i < _COV_BANDS.length; i++) {
+    if (v >= _COV_BANDS[i].lo) return i;
+  }
+  return _COV_BANDS.length - 1;
+}
+
+function _stCoverage(all, active) {
+  function cv(p) { return p.parcel_coverage_pct; }
+
+  all.forEach(function(f) {
+    var v = cv(f.properties);
+    _statBinMap[f.properties.path] = v == null ? _ND_COL : _COV_BANDS[_covBand(v)].color;
+  });
+
+  var counts = new Array(_COV_BANDS.length).fill(0), nd = 0;
+  active.forEach(function(f) {
+    var v = cv(f.properties);
+    if (v == null) { nd++; return; }
+    counts[_covBand(v)]++;
+  });
+
+  var r = '';
+  for (var i = 0; i < _COV_BANDS.length; i++) {
+    if (counts[i]) r += _binRow(_COV_BANDS[i].color, _COV_BANDS[i].label, counts[i]);
+  }
+  if (nd) r += _binRow(_ND_COL, 'No data', nd);
+
+  // Drill-down: worst-covered first — the jobs that need attention.
+  var sorted = active.filter(function(f) { return cv(f.properties) != null; })
+    .sort(function(a, b) { return cv(a.properties) - cv(b.properties); });
+
+  if (sorted.length) {
+    r += _divRow('Least covered');
+    sorted.slice(0, 10).forEach(function(f) {
+      r += _jobRow(f.properties, cv(f.properties).toFixed(1) + '%');
     });
   }
   return r || '<div class="mv-st-nodata">No data</div>';

@@ -153,6 +153,8 @@ async def jobs_geojson(folder: str | None = None):
                         "area_ha": card.get("area_ha"),
                         "original_area_ha": card.get("original_area_ha"),
                         "area_lost_pct": card.get("area_lost_pct"),
+                        "parcel_coverage_pct": card.get("parcel_coverage_pct"),
+                        "coverage_area_ha": card.get("coverage_area_ha"),
                         "subcategory": card.get("subcategory"),
                         "height_m": card.get("height_m"),
                         "waypoint_mode": card.get("waypoint_mode", False),
