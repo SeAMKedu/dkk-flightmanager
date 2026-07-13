@@ -256,26 +256,34 @@ export function closeExportRouteModal() {
 export async function submitExportRoute() {
   var dest = document.getElementById('export-route-dest').value.trim();
   var err  = document.getElementById('export-route-error');
+  var btn  = document.getElementById('export-route-submit');
+  if (btn.disabled) return;  // guard against double-submit while a run is in flight
   if (!dest) { err.textContent = 'Please enter a destination path.'; err.style.display = 'block'; return; }
   err.style.display = 'none';
 
-  var result = await _loadSelectedJobs();
-  if (!result) { err.textContent = 'No jobs selected.'; err.style.display = 'block'; return; }
-
-  var btn = document.getElementById('export-route-submit');
+  // Disable immediately so the button can't be re-pressed while we work.
   btn.disabled = true;
   btn.textContent = 'Exporting…';
 
+  var result = await _loadSelectedJobs();
+  if (!result) {
+    err.textContent = 'No jobs selected.'; err.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Export';
+    return;
+  }
+
   try {
     var data = await apiPost('/api/export-route', {dest_dir: dest, paths: result.paths});
+    // Keep the button disabled and show success — the modal auto-closes shortly.
     btn.textContent = '✓ ' + data.copied + ' file' + (data.copied !== 1 ? 's' : '') + ' copied';
-    setTimeout(closeExportRouteModal, 1500);
+    setTimeout(function() {
+      closeExportRouteModal();
+      btn.disabled = false; btn.textContent = 'Export';  // reset for next open
+    }, 1500);
   } catch(e) {
     err.textContent = e.detail || ('Export failed: ' + e.message);
     err.style.display = 'block';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Export';
+    btn.disabled = false; btn.textContent = 'Export';
   }
 }
 
