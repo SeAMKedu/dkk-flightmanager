@@ -157,7 +157,7 @@ function _createViewer() {
   _viewer.scene.globe.depthTestAgainstTerrain = false;
   _viewer.scene.highDynamicRange = false;
   _viewer.clock.onTick.addEventListener(_onTick);
-   
+
 }
 
 // ── Scene rendering ───────────────────────────────────────────────────────────
@@ -534,8 +534,11 @@ function _renderScene() {
 
   // ── 5. Keepout volumes around buildings ─────────────────────────────────────
   //   A1/A3:      fixed 150 m radius × 150 m tall cylinder (aviation separation rule).
-  //   A2 advanced: cylinder ground→minH + frustum minH→maxH (widens per the 1:1 rule).
-  //   A2 simple:   single cylinder sized by the flat flight altitude.
+  //   A2 simple:  30 m minimum-separation cylinder (0→30 m, r=30 m), then a 1:1
+  //               cone (radius = altitude) from there up to the 120 m open-category
+  //               ceiling — the full A2 keep-out envelope, shown even at a flat
+  //               flight altitude (a plain cylinder hid the 1:1 envelope).
+  //   A2 advanced: straight to minH near the roof, then the 1:1 cone minH→maxH.
   var _stats = st.previewData && st.previewData.stats;
   var _advMode = _stats && _stats.advanced_mode;
   var _sub = (_stats && _stats.subcategory) || 'A3';
@@ -543,6 +546,7 @@ function _renderScene() {
   if (st.previewData.buildings && st.previewData.buildings.length) {
     var redFill = Cesium.Color.fromCssColorString('#dc2626');
     var _A1A3_RADIUS_M = 150, _A1A3_HEIGHT_M = 150;
+    var _A2_MIN_M = 30, _A2_MAX_ALT_M = 120;   // A2: 30 m min separation, then 1:1 to the 120 m ceiling
 
     var _addKeepoutCyl = function(ctr, length, baseAlt, bottomR, topR) {
       _addEntity('keepout', {
@@ -566,9 +570,10 @@ function _renderScene() {
       var bldgH = b.height_m || 7;
 
       if (_sub !== 'A2') {
-        // A1/A3 — fixed 150 m separation cylinder, regardless of altitude
+        // A1/A3 — fixed horizontal separation, altitude-independent → straight cylinder
         _addKeepoutCyl(ctr, _A1A3_HEIGHT_M, 0, _A1A3_RADIUS_M, _A1A3_RADIUS_M);
       } else if (_advMode) {
+        // A2 advanced — straight to minH near the roof, then the 1:1 cone minH→maxH
         var minH = (_stats.home_buffer_m    || 30);
         var maxH = (_stats.home_buffer_max_m || minH);
         var rMin = Math.max(0.5, minH - bldgH);
@@ -576,9 +581,11 @@ function _renderScene() {
         _addKeepoutCyl(ctr, minH, 0, rMin, rMin);                       // ground → minH
         if (maxH > minH) _addKeepoutCyl(ctr, maxH - minH, minH, rMin, rMax);  // frustum minH → maxH
       } else {
-        // A2 simple flat-altitude — cylinder sized by the flight altitude
-        var rSimple = Math.max(0.5, _flightAlt);
-        _addKeepoutCyl(ctr, _flightAlt, 0, rSimple, rSimple);
+        // A2 simple — 30 m minimum-separation cylinder, then the 1:1 cone
+        // (radius = altitude) from 30 m up to the 120 m open-category ceiling.
+        _addKeepoutCyl(ctr, _A2_MIN_M, 0, _A2_MIN_M, _A2_MIN_M);        // 0→30 m, r=30 m
+        _addKeepoutCyl(ctr, _A2_MAX_ALT_M - _A2_MIN_M, _A2_MIN_M,
+                       _A2_MIN_M, _A2_MAX_ALT_M);                       // frustum 30→120 m, r 30→120 m
       }
     });
   }

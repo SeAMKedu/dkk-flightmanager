@@ -20,7 +20,7 @@ from flightmanager.geo.geometry import SurveyGeometry
 # storage-shape changes. Jobs whose manifest records an older value are flagged as
 # "needs refresh" (see job_store.refresh_status). Distinct from `tool_version` (the
 # package/git version, which bumps every release).
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 
 # CC-BY attribution templates keyed by dataset.
 # The ``{date}`` placeholder is filled with the tile's fetch date (YYYY-MM-DD).

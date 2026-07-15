@@ -122,8 +122,8 @@ def _prepare_config(  # noqa: C901
 ):
     cfg = copy.deepcopy(_config())
 
-    if drone and drone in [d.name for d in cfg.drones]:
-        cfg.default_drone = drone
+    if drone:
+        cfg.set_active_drone(drone)  # ValueError surfaces as a tool error
 
     if height_m is not None:
         active = cfg.active_drone()
@@ -134,8 +134,7 @@ def _prepare_config(  # noqa: C901
         sub = subcategory.upper()
         if sub in ("A2", "A3"):
             cfg.home_safety.operating_subcategory = sub
-            if sub == "A2" and height_m is not None:
-                cfg.home_safety.home_buffer_m = height_m
+            cfg.home_safety.home_buffer_m = cfg.resolve_home_buffer_m()
 
     if offset_m is not None:
         cfg.polygon.survey_offset_m = offset_m

@@ -140,6 +140,12 @@ class FlightConfig(BaseModel):
         )
 
 
+# EU A2: minimum 30 m horizontal separation from uninvolved people.  The
+# low-speed-mode exemption (down to 5 m) is deliberately not implemented -- we
+# always hold 30 m.  Floor applied by AppConfig.resolve_home_buffer_m().
+A2_MIN_SEPARATION_M = 30.0
+
+
 class HomeSafetyConfig(BaseModel):
     operating_subcategory: Literal["A2", "A3"] = "A2"
     # A2: buffer ≈ flight height AGL (EU reg: ≥ flight height from people).
@@ -496,6 +502,44 @@ class AppConfig(BaseModel):
     def active_drone(self) -> DroneConfig:
         """Return the drone profile selected by default_drone."""
         return next(d for d in self.drones if d.name == self.default_drone)
+
+    def set_active_drone(self, name: str) -> None:
+        """Select the active drone profile by name.
+
+        Raises ValueError if *name* is not a configured profile.  Callers must
+        never silently fall back to the default drone: a different profile means
+        a different camera, so the job would be planned with the wrong GSD,
+        height and strip spacing.
+        """
+        names = [d.name for d in self.drones]
+        if name not in names:
+            raise ValueError(f"unknown drone '{name}'. Available: {', '.join(names)}")
+        self.default_drone = name
+
+    def resolve_home_buffer_m(self) -> float:
+        """Effective building keep-out buffer (m) for the active subcategory.
+
+        A2 is governed by the 1:1 rule, so the horizontal keep-out equals the
+        flight height, floored at the A2 minimum (:data:`A2_MIN_SEPARATION_M`).
+        In terrain-follow (advanced) mode the drone descends to
+        ``adv_min_height_m`` near buildings, so that is the binding height
+        rather than the nominal height used for GSD -- the altitude algorithm
+        enforces the 1:1 rule above it in-flight.
+
+        A3 keeps its configured fixed separation unchanged.
+
+        Callers must set ``flight.target_gsd_cm`` (and ``flight.advanced_mode``)
+        before calling: the non-advanced height is derived from the GSD, which
+        is how an explicit ``--height`` reaches this method.
+        """
+        if self.home_safety.operating_subcategory != "A2":
+            return self.home_safety.home_buffer_m
+        height_m = (
+            self.flight.adv_min_height_m
+            if self.flight.advanced_mode
+            else self.active_drone().height_from_gsd(self.flight.target_gsd_cm)
+        )
+        return max(A2_MIN_SEPARATION_M, height_m)
 
 
 def load_config(path: Path | str = "config.toml") -> AppConfig:
