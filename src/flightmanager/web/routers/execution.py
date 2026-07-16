@@ -36,10 +36,14 @@ class PreviewRequest(BaseModel):
     property_ids: list[str] = []
     drone: str | None = None
     height_m: float | None = None
-    subcategory: str = "A3"
-    offset_m: float = 0.0
-    simplify: str = "auto"
-    keepout: bool = True
+    # None = "not supplied, keep the configured value".  These must NOT carry
+    # concrete defaults: they are assigned unconditionally below, so a default
+    # here would silently override config.toml for any caller that omits them.
+    # The UI always sends all four (form-controls.js getParams).
+    subcategory: str | None = None
+    offset_m: float | None = None
+    simplify: str | None = None
+    keepout: bool | None = None
     preview_radius_m: float | None = None
     custom_polygon: dict | None = None  # GeoJSON Polygon geometry, or null
     route_angle_deg: float | None = None
@@ -601,12 +605,14 @@ async def route_estimate(req: RouteEstimateRequest):
     from flightmanager.geo.geometry import reproject_to_3067
 
     cfg = _st.config
-    drone = (
-        next((d for d in cfg.drones if d.name == req.drone), None)
-        if req.drone
-        else None
-    )
-    if drone is None:
+    if req.drone:
+        drone = next((d for d in cfg.drones if d.name == req.drone), None)
+        if drone is None:
+            names = ", ".join(d.name for d in cfg.drones)
+            raise HTTPException(
+                400, detail=f"unknown drone '{req.drone}'. Available: {names}"
+            )
+    else:
         drone = cfg.active_drone()
 
     H = (
@@ -790,12 +796,31 @@ def _apply_template_settings(cfg, ts: dict) -> None:  # noqa: C901
     if ts.get("adv_min_dip_m") is not None:
         cfg.flight.adv_min_dip_m = float(ts["adv_min_dip_m"])
 
-    # Inverted-cone keepout: in adaptive flight the drone descends to H_min
-    # near buildings, so the A2 exclusion buffer only needs to equal H_min —
-    # not the (potentially much larger) nominal height used for GSD.  The
-    # altitude algorithm enforces the 1:1 rule at higher altitudes in-flight.
-    if cfg.flight.advanced_mode and cfg.home_safety.operating_subcategory == "A2":
-        cfg.home_safety.home_buffer_m = cfg.flight.adv_min_height_m
+
+def _set_drone_or_400(cfg, drone: str) -> None:
+    """Select *drone* on cfg, or 400 with the available profiles."""
+    try:
+        cfg.set_active_drone(drone)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e)) from None
+
+
+def _apply_simplify(cfg, simplify: str) -> None:
+    """Apply a simplify spec -- ``"auto"`` or a numeric tolerance in metres.
+
+    An unparseable value falls back to auto (API surfaces coerce rather than
+    reject; the CLI validates and errors instead).
+    """
+    if simplify == "auto":
+        cfg.polygon.simplify_mode = "auto"
+        return
+    try:
+        tol = float(simplify)
+    except (ValueError, TypeError):
+        cfg.polygon.simplify_mode = "auto"
+        return
+    cfg.polygon.simplify_mode = "fixed"
+    cfg.polygon.simplify_tolerance_m = max(0.0, tol)
 
 
 def _prepare_config(req: PreviewRequest, base_config=None):
@@ -803,33 +828,27 @@ def _prepare_config(req: PreviewRequest, base_config=None):
 
     cfg = copy.deepcopy(base_config if base_config is not None else _st.config)
 
-    if req.drone and req.drone in [d.name for d in cfg.drones]:
-        cfg.default_drone = req.drone
+    if req.drone:
+        _set_drone_or_400(cfg, req.drone)
 
     if req.height_m is not None:
         active = cfg.active_drone()
         cfg.flight.target_gsd_cm = active.gsd_from_height(req.height_m)
         cfg.flight.max_height_agl_m = max(cfg.flight.max_height_agl_m, req.height_m + 1)
 
-    sub = req.subcategory.upper()
-    if sub in ("A2", "A3"):
-        cfg.home_safety.operating_subcategory = sub
-        if sub == "A2" and req.height_m is not None:
-            cfg.home_safety.home_buffer_m = req.height_m
+    if req.subcategory:
+        sub = req.subcategory.upper()
+        if sub in ("A2", "A3"):
+            cfg.home_safety.operating_subcategory = sub
 
-    cfg.polygon.survey_offset_m = req.offset_m
+    if req.offset_m is not None:
+        cfg.polygon.survey_offset_m = req.offset_m
 
-    if req.simplify == "auto":
-        cfg.polygon.simplify_mode = "auto"
-    else:
-        try:
-            tol = float(req.simplify)
-            cfg.polygon.simplify_mode = "fixed"
-            cfg.polygon.simplify_tolerance_m = max(0.0, tol)
-        except (ValueError, TypeError):
-            cfg.polygon.simplify_mode = "auto"
+    if req.simplify is not None:
+        _apply_simplify(cfg, req.simplify)
 
-    cfg.home_safety.offset_enabled = req.keepout
+    if req.keepout is not None:
+        cfg.home_safety.offset_enabled = req.keepout
 
     if req.preview_radius_m is not None:
         cfg.home_safety.preview_radius_m = req.preview_radius_m
@@ -838,6 +857,10 @@ def _prepare_config(req: PreviewRequest, base_config=None):
         cfg.flight.auto_flight_speed_ms = req.speed_ms
 
     _apply_template_settings(cfg, req.template_settings or {})
+
+    # After the GSD and advanced-mode fields are final, so A2 resolves against
+    # the height the drone actually flies near buildings.
+    cfg.home_safety.home_buffer_m = cfg.resolve_home_buffer_m()
 
     return cfg
 

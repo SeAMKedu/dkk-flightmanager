@@ -63,6 +63,15 @@ def _parse_area_inputs(
     return parcel_ids, property_ids, bbox_3067
 
 
+def _set_drone_or_exit(cfg, drone: str) -> None:
+    """Select *drone* on cfg, or exit(1) with the available profiles."""
+    try:
+        cfg.set_active_drone(drone)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+
+
 def _apply_run_overrides(  # noqa: C901
     cfg,
     *,
@@ -82,14 +91,7 @@ def _apply_run_overrides(  # noqa: C901
         cfg.cache.offline = True
 
     if drone is not None:
-        names = [d.name for d in cfg.drones]
-        if drone not in names:
-            typer.echo(
-                f"Error: unknown drone '{drone}'. Available: {', '.join(names)}",
-                err=True,
-            )
-            raise typer.Exit(1)
-        cfg.default_drone = drone
+        _set_drone_or_exit(cfg, drone)
         typer.echo(f"Drone override: {drone} ({cfg.active_drone().label})")
 
     if height is not None:
@@ -105,10 +107,8 @@ def _apply_run_overrides(  # noqa: C901
             typer.echo("Error: --subcategory must be A2 or A3.", err=True)
             raise typer.Exit(1)
         cfg.home_safety.operating_subcategory = sub
-        if sub == "A2" and buffer is None:
-            cfg.home_safety.home_buffer_m = cfg.active_drone().height_from_gsd(
-                cfg.flight.target_gsd_cm
-            )
+        if buffer is None:
+            cfg.home_safety.home_buffer_m = cfg.resolve_home_buffer_m()
         typer.echo(
             f"Subcategory override: {sub}  "
             f"(buffer {cfg.home_safety.home_buffer_m:.0f} m)"
@@ -820,7 +820,7 @@ def batch_cmd(
 
     cfg = copy.deepcopy(cfg)
     if drone:
-        cfg.default_drone = drone
+        _set_drone_or_exit(cfg, drone)
     if height is not None:
         active = cfg.active_drone()
         cfg.flight.target_gsd_cm = active.gsd_from_height(height)

@@ -396,6 +396,13 @@ def analyse_survey(  # noqa: C901
     )
     keepout_4326 = reproject_to_4326(keepout_3067) if keepout_3067 else None
 
+    # Building-only keep-out (no power-line buffer) so map consumers can draw the
+    # building circles as a distinct layer over the power-line corridor.
+    _bldg_keepout_3067 = build_keepout(inp.buildings, config.home_safety, None, 0.0)
+    _bldg_keepout_4326 = (
+        reproject_to_4326(_bldg_keepout_3067) if _bldg_keepout_3067 else None
+    )
+
     # Power line keepout buffer for map display (overhead only)
     _pl_keepout_4326 = None
     if _overhead_geoms and _pl_buf > 0:
@@ -548,6 +555,9 @@ def analyse_survey(  # noqa: C901
         ],
         "buildings": buildings_data,
         "keepout_zone": dict(mapping(keepout_4326)) if keepout_4326 else None,
+        "buildings_keepout": dict(mapping(_bldg_keepout_4326))
+        if _bldg_keepout_4326
+        else None,
         "power_lines": power_lines_data,
         "powerlines_keepout": dict(mapping(_pl_keepout_4326))
         if _pl_keepout_4326

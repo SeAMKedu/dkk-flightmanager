@@ -41,6 +41,9 @@ C_SURVEY = (59, 130, 246)
 C_STRIP = (245, 158, 11)
 C_TRANSIT = (251, 191, 36)
 C_KEEPOUT = (220, 38, 38)
+C_PLINE = (217, 119, 6)  # power-line centreline (web #d97706)
+C_PLKO_FILL = (253, 230, 138)  # power-line corridor fill (web #fde68a)
+C_PLKO_LINE = (180, 83, 9)  # power-line corridor outline (web #b45309)
 C_ZONE = (239, 68, 68)
 C_ZONE_LINE = (153, 27, 27)
 C_TAKEOFF = (15, 23, 42)
@@ -64,6 +67,25 @@ def _rings(geom: dict | None):
         for poly in coords:
             if poly:
                 yield poly[0]
+
+
+def _all_rings(geom: dict | None):
+    """Yield every ring (exterior *and* interior holes) of a Polygon/MultiPolygon.
+
+    Used for unfilled outline overlays (keep-out, survey): a keep-out union of
+    building circles + a power-line corridor is one polygon whose interior gaps
+    are holes. Dropping them left the corridor drawn as a single edge and hid
+    keep-out regions that only exist as hole boundaries. Not for filled fills,
+    where each hole would paint solid.
+    """
+    if not geom:
+        return
+    t, coords = geom.get("type"), geom.get("coordinates") or []
+    if t == "Polygon":
+        yield from (r for r in coords if r)
+    elif t == "MultiPolygon":
+        for poly in coords:
+            yield from (r for r in poly if r)
 
 
 def _lines(geom: dict | None):
@@ -179,7 +201,9 @@ def _draw_map(  # noqa: C901
         pdf.set_line_width(lw)
         if dash:
             pdf.set_dash_pattern(dash=dash, gap=dash)
-        for ring in _rings(geom):
+        # Outline all rings incl. holes so a keep-out corridor between building
+        # circles renders as a full corridor, not a single incomplete edge.
+        for ring in _all_rings(geom):
             pts = [T(c[0], c[1]) for c in ring]
             if len(pts) >= 2:
                 if fill and fillc:
@@ -205,8 +229,33 @@ def _draw_map(  # noqa: C901
 
     # All vector overlays are clipped to the map rect — a keepout/circle/strip that
     # extends past the framed bbox must not spill across the page.
-    # Order: launch circles (bottom) -> keepout -> survey -> transits -> strips -> takeoffs.
+    # Order: power-line corridor (bottom) -> UAS zones -> launch circles -> keepout
+    # -> survey -> transits -> strips -> takeoffs. Keep-out (building/UAS) draws over
+    # the power-line corridor so both stay visible where they overlap.
     with pdf.rect_clip(x, y, w, h):
+        # Overhead power lines (like the web map): translucent yellow corridor +
+        # dashed outline with the amber centreline. Drawn first (bottom layer) so
+        # the keep-out circles and flight area read clearly on top.
+        plko = overlays.get("powerlines_keepout")
+        if plko:
+            with pdf.local_context(fill_opacity=0.30):
+                pdf.set_fill_color(*C_PLKO_FILL)
+                pdf.set_draw_color(*C_PLKO_LINE)
+                pdf.set_line_width(0.4)
+                pdf.set_dash_pattern(dash=0.8, gap=0.6)
+                for ring in _rings(plko):
+                    pts = [T(c[0], c[1]) for c in ring]
+                    if len(pts) >= 2:
+                        pdf.polygon(pts, style="DF")
+                pdf.set_dash_pattern()
+        for pl in overlays.get("power_lines", []):
+            for ln in _lines(pl):
+                pts = [T(c[0], c[1]) for c in ln]
+                if len(pts) >= 2:
+                    pdf.set_draw_color(*C_PLINE)
+                    pdf.set_line_width(0.7)
+                    pdf.polyline(pts)
+
         # UAS zones (filled red, 0.75 opaque) - but skip any zone that fully
         # encompasses the map view (e.g. a large airfield zone the whole area sits
         # inside): filling the entire map adds nothing. Smaller zones with an edge
@@ -367,7 +416,18 @@ def _mf(manifest: dict, dotted: str, default=None):
 def _job_overlays(rd: dict) -> dict:
     return {
         "survey": rd.get("survey"),
-        "keepout": rd.get("keepout_zone"),
+        # Building-only keep-out (full circles), drawn as a distinct red layer
+        # over the power-line corridor. Falls back to the merged zone for jobs
+        # recomputed before ``buildings_keepout`` existed.
+        "keepout": rd.get("buildings_keepout") or rd.get("keepout_zone"),
+        # Power lines rendered like the web map: yellow corridor fill + amber
+        # centreline, under the keep-out layers.
+        "powerlines_keepout": rd.get("powerlines_keepout"),
+        "power_lines": [
+            pl["geojson"]
+            for pl in (rd.get("power_lines") or [])
+            if pl.get("geojson") and pl.get("is_overhead")
+        ],
         "strips": rd.get("strips_geojson"),
         "transits": rd.get("transits_geojson"),
         "takeoffs": (
